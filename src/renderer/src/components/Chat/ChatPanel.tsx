@@ -18,6 +18,13 @@ export function ChatPanel({ hasProject, messages, loading, busy, error, send }: 
   const disabled = !hasProject || busy
   const canSend = !disabled && draft.trim().length > 0
 
+  // A replaced message set (project switch) finishes loading: start pinned at the bottom again.
+  const [prevLoading, setPrevLoading] = useState(loading)
+  if (prevLoading !== loading) {
+    setPrevLoading(loading)
+    if (!loading) setPinned(true)
+  }
+
   const setPin = (value: boolean) => {
     pinnedRef.current = value
     setPinned(value)
@@ -30,8 +37,9 @@ export function ChatPanel({ hasProject, messages, loading, busy, error, send }: 
 
   // Follow new messages and streamed deltas while pinned to the bottom.
   useLayoutEffect(() => {
-    if (pinnedRef.current) scrollToBottom()
-  }, [messages, busy, scrollToBottom])
+    pinnedRef.current = pinned
+    if (pinned) scrollToBottom()
+  }, [messages, busy, pinned, scrollToBottom])
 
   // Grow the textarea with its content; CSS max-height makes it scroll beyond that.
   useLayoutEffect(() => {
@@ -82,7 +90,7 @@ export function ChatPanel({ hasProject, messages, loading, busy, error, send }: 
           aria-label="Messages"
           onScroll={onScroll}
         >
-          {loading && <p className="chat__empty">Loading messages…</p>}
+          {loading && hasProject && <p className="chat__empty">Loading messages…</p>}
           {!hasProject && !loading && (
             <p className="chat__empty">Add or select a project to start chatting with Claude.</p>
           )}
@@ -109,7 +117,7 @@ export function ChatPanel({ hasProject, messages, loading, busy, error, send }: 
             </div>
           )}
         </div>
-        {!pinned && busy && (
+        {!pinned && messages.length > 0 && (
           <button type="button" className="chat__jump" onClick={jump}>
             Jump to latest
           </button>

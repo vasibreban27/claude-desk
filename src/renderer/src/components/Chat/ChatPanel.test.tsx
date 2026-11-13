@@ -111,4 +111,29 @@ describe('ChatPanel', () => {
     view.rerender(<ChatPanel {...all} messages={[msg('1', 'assistant', 'a'), msg('2', 'user', 'x')]} />)
     expect(log.scrollTop).toBe(1000)
   })
+
+  it('keeps the jump button after the turn finishes while scrolled up (F1)', () => {
+    const { view, all } = setup({ busy: true, messages: [msg('1', 'assistant', 'a')] })
+    const log = screen.getByRole('log')
+    mockMetrics(log, { scrollTop: 0, scrollHeight: 1000, clientHeight: 400 })
+    fireEvent.scroll(log)
+    view.rerender(<ChatPanel {...all} busy={false} />)
+    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeInTheDocument()
+  })
+
+  it('returns to the bottom when a new message set finishes loading (F2)', () => {
+    const { view, all } = setup({ messages: [msg('1', 'assistant', 'a')] })
+    const log = screen.getByRole('log')
+    mockMetrics(log, { scrollTop: 0, scrollHeight: 1000, clientHeight: 400 })
+    fireEvent.scroll(log)
+    view.rerender(<ChatPanel {...all} messages={[]} loading />)
+    view.rerender(<ChatPanel {...all} messages={[msg('2', 'assistant', 'b')]} loading={false} />)
+    expect(log.scrollTop).toBe(1000)
+    expect(screen.queryByRole('button', { name: 'Jump to latest' })).toBeNull()
+  })
+
+  it('does not show the loading line without a project (F3)', () => {
+    setup({ hasProject: false, loading: true })
+    expect(screen.queryByText('Loading messages…')).toBeNull()
+  })
 })
