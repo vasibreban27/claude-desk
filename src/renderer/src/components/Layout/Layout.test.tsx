@@ -1,10 +1,11 @@
+/// <reference types="node" />
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { App } from '../../App'
 import { Layout } from './Layout'
-import css from '../../styles/layout.css?raw'
+import { readFileSync } from 'node:fs'
 
 afterEach(cleanup)
 
@@ -32,6 +33,7 @@ describe('Layout', () => {
   })
 
   it('never hides a panel or scrolls horizontally on narrow windows', () => {
+    const css = readFileSync('src/renderer/src/styles/layout.css', 'utf8')
     expect(css).not.toMatch(/display:\s*none/)
     expect(css).not.toMatch(/@media/)
     expect(css).toMatch(/grid-template-columns:\s*minmax\(0,/)
