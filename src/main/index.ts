@@ -1,6 +1,8 @@
 import { join } from 'node:path'
 import { PRELOAD_FILE_NAME } from '../shared/build-output'
 import { app, BrowserWindow, type BrowserWindowConstructorOptions } from 'electron'
+import { registerIpc } from './ipc/register'
+import { openJsonProjectStore } from './projects/store'
 
 export function getWindowOptions(preloadPath: string): BrowserWindowConstructorOptions {
   return {
@@ -31,9 +33,13 @@ function createWindow(): void {
   })
 }
 
+let disposeIpc: (() => void) | undefined
+
 app
   .whenReady()
-  .then(() => {
+  .then(async () => {
+    const store = await openJsonProjectStore(join(app.getPath('userData'), 'data'))
+    disposeIpc = registerIpc(store)
     createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -46,4 +52,8 @@ app
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('will-quit', () => {
+  disposeIpc?.()
 })

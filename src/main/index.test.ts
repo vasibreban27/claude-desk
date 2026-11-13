@@ -4,6 +4,8 @@ vi.mock('electron', () => ({
   app: { whenReady: () => new Promise(() => undefined), on: vi.fn(), quit: vi.fn() },
   BrowserWindow: class {}
 }))
+vi.mock('./ipc/register', () => ({ registerIpc: vi.fn(() => () => undefined) }))
+vi.mock('./projects/store', () => ({ openJsonProjectStore: vi.fn() }))
 
 import { getWindowOptions } from './index'
 

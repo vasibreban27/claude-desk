@@ -1,0 +1,150 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Project } from '../../shared/ipc'
+import { createHandlers, type HandlerDeps } from './handlers'
+
+const ID = '3f2b8c1e-5d4a-4b6f-9a7e-1c2d3e4f5a6b'
+const OTHER = '9f2b8c1e-5d4a-4b6f-9a7e-1c2d3e4f5a6b'
+const project: Project = {
+  id: ID,
+  path: '/repo',
+  name: 'repo',
+  branch: 'main',
+  dirty: false,
+  addedAt: '2026-01-01T00:00:00.000Z'
+}
+
+function setup(over: Partial<HandlerDeps> = {}) {
+  const deps: HandlerDeps = {
+    store: {
+      list: vi.fn(async () => [project]),
+      get: vi.fn(async (id: string) => (id === ID ? project : undefined)),
+      add: vi.fn(async () => ({ ok: true as const, project })),
+      update: vi.fn(async (_id, s) => ({ ...project, ...s }))
+    },
+    readGitStatus: vi.fn(async () => ({ ok: true as const, branch: 'main', dirty: true })),
+    pickFolder: vi.fn(async () => '/repo'),
+    chat: {
+      getHistory: vi.fn(() => []),
+      send: vi.fn(() => ({ ok: true as const, turnId: 't1' }))
+    },
+    ...over
+  }
+  return { deps, h: createHandlers(deps) }
+}
+
+afterEach(() => vi.restoreAllMocks())
+
+describe('projects:pick-and-add', () => {
+  it('returns cancelled when the picker is cancelled', async () => {
+    const { h } = setup({ pickFolder: async () => undefined })
+    expect(await h.pickAndAdd()).toEqual({ ok: false, error: 'cancelled' })
+  })
+
+  it('adds a git repo with branch and dirty', async () => {
+    const { h, deps } = setup()
+    expect(await h.pickAndAdd()).toEqual({ ok: true, project })
+    expect(deps.store.add).toHaveBeenCalledWith({ path: '/repo', branch: 'main', dirty: true })
+  })
+
+  it('returns not-a-git-repo for a non-repo without storing it', async () => {
+    const { h, deps } = setup({ readGitStatus: async () => ({ ok: false, error: 'not-a-git-repo' }) })
+    expect(await h.pickAndAdd()).toEqual({ ok: false, error: 'not-a-git-repo' })
+    expect(deps.store.add).not.toHaveBeenCalled()
+  })
+
+  it('returns duplicate', async () => {
+    const { deps } = setup()
+    deps.store.add = vi.fn(async () => ({ ok: false as const, error: 'duplicate' as const }))
+    expect(await createHandlers(deps).pickAndAdd()).toEqual({ ok: false, error: 'duplicate' })
+  })
+
+  it('maps thrown errors to unreadable', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { h } = setup({
+      pickFolder: async () => {
+        throw new Error('boom')
+      }
+    })
+    expect(await h.pickAndAdd()).toEqual({ ok: false, error: 'unreadable' })
+  })
+})
+
+describe('projects:list and projects:refresh', () => {
+  it('lists projects', async () => {
+    const { h } = setup()
+    expect(await h.listProjects()).toEqual([project])
+  })
+
+  it('refresh returns not-found for an unknown id', async () => {
+    const { h } = setup()
+    expect(await h.refresh({ id: OTHER })).toEqual({ ok: false, error: 'not-found' })
+  })
+
+  it('refresh returns not-found for an invalid payload', async () => {
+    const { h } = setup()
+    expect(await h.refresh({ id: 'nope' })).toEqual({ ok: false, error: 'not-found' })
+    expect(await h.refresh(undefined)).toEqual({ ok: false, error: 'not-found' })
+  })
+
+  it('refresh updates status', async () => {
+    const { h } = setup()
+    expect(await h.refresh({ id: ID })).toEqual({
+      ok: true,
+      project: { ...project, branch: 'main', dirty: true }
+    })
+  })
+
+  it('refresh returns unreadable when git fails', async () => {
+    const { h } = setup({ readGitStatus: async () => ({ ok: false, error: 'unreadable' }) })
+    expect(await h.refresh({ id: ID })).toEqual({ ok: false, error: 'unreadable' })
+  })
+})
+
+describe('chat', () => {
+  it('history validates the payload and returns messages', async () => {
+    const { h, deps } = setup()
+    expect(await h.chatHistory({ projectId: 'bad' })).toEqual([])
+    expect(await h.chatHistory({ projectId: ID })).toEqual([])
+    expect(deps.chat.getHistory).toHaveBeenCalledWith(ID)
+  })
+
+  it('send rejects invalid payloads with invalid', async () => {
+    const { h, deps } = setup()
+    expect(await h.chatSend({ projectId: ID, text: '' })).toEqual({ ok: false, error: 'invalid' })
+    expect(await h.chatSend({ projectId: ID, text: 'x'.repeat(20001) })).toEqual({
+      ok: false,
+      error: 'invalid'
+    })
+    expect(await h.chatSend(null)).toEqual({ ok: false, error: 'invalid' })
+    expect(deps.chat.send).not.toHaveBeenCalled()
+  })
+
+  it('send routes events before sending and keeps the route when accepted', async () => {
+    const { h } = setup()
+    const undo = vi.fn()
+    const route = vi.fn(() => undo)
+    expect(await h.chatSend({ projectId: ID, text: 'hi' }, route)).toEqual({ ok: true, turnId: 't1' })
+    expect(route).toHaveBeenCalledWith(ID)
+    expect(undo).not.toHaveBeenCalled()
+  })
+
+  it('send undoes the route when rejected (busy)', async () => {
+    const { h } = setup({ chat: { getHistory: () => [], send: () => ({ ok: false, error: 'busy' }) } })
+    const undo = vi.fn()
+    expect(await h.chatSend({ projectId: ID, text: 'hi' }, () => undo)).toEqual({ ok: false, error: 'busy' })
+    expect(undo).toHaveBeenCalled()
+  })
+
+  it('send never throws', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { h } = setup({
+      chat: {
+        getHistory: () => [],
+        send: () => {
+          throw new Error('x')
+        }
+      }
+    })
+    expect(await h.chatSend({ projectId: ID, text: 'hi' })).toEqual({ ok: false, error: 'invalid' })
+  })
+})

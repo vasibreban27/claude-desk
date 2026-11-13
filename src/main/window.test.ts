@@ -7,7 +7,7 @@ const loadFile = vi.fn(() => Promise.resolve())
 const loadURL = vi.fn(() => Promise.resolve())
 
 vi.mock('electron', () => ({
-  app: { whenReady: () => Promise.resolve(), on: vi.fn(), quit: vi.fn() },
+  app: { whenReady: () => Promise.resolve(), on: vi.fn(), quit: vi.fn(), getPath: () => '/userdata' },
   BrowserWindow: class {
     static getAllWindows(): unknown[] {
       return []
@@ -20,6 +20,9 @@ vi.mock('electron', () => ({
     loadURL = loadURL
   }
 }))
+
+vi.mock('./ipc/register', () => ({ registerIpc: vi.fn(() => () => undefined) }))
+vi.mock('./projects/store', () => ({ openJsonProjectStore: vi.fn(async () => ({})) }))
 
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
