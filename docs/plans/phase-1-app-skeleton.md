@@ -105,7 +105,7 @@ Verification runs after each wave.
 ### Wave 1: foundation
 
 ### T1: Scaffold, zod, shared IPC types and schemas, CLAUDE.md commands
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: IPC contract (all channels; T1 defines it in `src/shared/ipc.ts`)
 - Owns: `package.json`, lockfile, `electron.vite.config.ts`, `tsconfig*.json`, ESLint config, `vitest.config.ts`, `.gitignore`, `.env.example`, `src/main/index.ts`, `src/preload/index.ts`, `src/renderer/index.html`, `src/renderer/src/main.tsx`, `src/renderer/src/App.tsx` (stub only), `src/shared/**`, `CLAUDE.md` (the "Commands" section only)
