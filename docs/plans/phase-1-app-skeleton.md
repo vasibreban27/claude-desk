@@ -128,7 +128,7 @@ Verification runs after each wave.
 ### Wave 2: services and layout (parallel, no shared files)
 
 ### T2: Git status service and project store
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: `Project`, `projects:*` semantics
 - Owns: `src/main/git/**`, `src/main/projects/**`
@@ -145,7 +145,7 @@ Verification runs after each wave.
   - Given a corrupt JSON file When the store opens Then it starts empty and keeps a `.bak` copy of the bad file rather than crashing.
 
 ### T3: SDK verification spike and chat session service
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: `chat:send`, `chat:history`, `chat:event` semantics
 - Owns: `docs/notes/sdk-spike.md`, `src/main/chat/**`, `src/main/config.ts`
@@ -160,7 +160,7 @@ Verification runs after each wave.
   - Given two projects When each has a conversation Then `chat:history` returns only that project's messages, and history is empty on a new service instance (in-memory only).
 
 ### T4: Three-panel layout
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Contract: none
 - Owns: `src/renderer/src/App.tsx`, `src/renderer/src/components/Layout/**`, `src/renderer/src/styles/**`
