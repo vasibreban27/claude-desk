@@ -31,11 +31,12 @@ Electron desktop control panel for agentic workflows. Vision, phases and open qu
 
 ## Stack and layout
 Electron + React + TypeScript (strict). Agent SDK and SQLite (`better-sqlite3`) in the main process.
-- `src/main/` Electron main process: SDK sessions, SQLite, git, IPC handlers
+- `src/main/` Electron main process: `chat/` (SDK session service), `git/`, `projects/` (JSON store behind `ProjectStore`), `ipc/` (handlers), `config.ts`; SQLite arrives in a later phase
 - `src/preload/` preload scripts, the only bridge between main and renderer
 - `src/renderer/` React UI
-- `src/shared/` types shared by all three (IPC channel names, payload types)
-The scaffold and bundler are chosen in the Phase 1 plan; update this section and the commands below once they exist.
+- `src/shared/` types shared by all three (IPC channel names, payload types, zod schemas)
+- `tests/` integration tests (unit tests sit next to their source)
+Scaffold and bundler: electron-vite.
 
 ## Commands
 Workers and `verify` run these, so keep them accurate.
