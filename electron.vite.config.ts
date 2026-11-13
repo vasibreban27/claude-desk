@@ -10,6 +10,8 @@ export default defineConfig({
   preload: {
     resolve: { alias: { '@shared': resolve('src/shared') } },
     build: {
+      // A sandboxed preload can only require('electron'): bundle zod and other deps instead of externalizing them.
+      externalizeDeps: false,
       rollupOptions: {
         output: { format: 'cjs', entryFileNames: PRELOAD_FILE_NAME }
       }
