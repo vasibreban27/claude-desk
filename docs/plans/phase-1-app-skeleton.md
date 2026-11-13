@@ -204,7 +204,7 @@ Verification runs after each wave.
 ### Wave 4: end-to-end check and docs
 
 ### T7: Main-side integration test and manual check note
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: all channels in the IPC contract
 - Owns: `tests/integration/**`, `CLAUDE.md` (the "Stack and layout" section only), `docs/notes/phase-1-manual-check.md`
