@@ -52,10 +52,21 @@ body {
 }
 
 .layout__separator {
+  position: relative;
   flex: none;
   width: 1px;
   background: var(--color-border);
   transition: background-color 0.15s;
+}
+
+/* Transparent, wider hit area; the visible line stays 1px. */
+.layout__separator::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--space-1));
+  right: calc(-1 * var(--space-1));
 }
 
 .layout__separator:hover,
