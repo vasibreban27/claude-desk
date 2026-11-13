@@ -134,7 +134,7 @@ describe('chat panel', () => {
     act(() => emit({ projectId: P1.id, turnId: 't1', type: 'text-delta', text: 'Hi ' }))
     act(() => emit({ projectId: P1.id, turnId: 't1', type: 'text-delta', text: 'there' }))
     expect(screen.getByText('Hi there')).toBeInTheDocument()
-    expect(screen.getAllByText(/Claude:/)).toHaveLength(1)
+    expect(screen.getAllByRole('article', { name: 'Claude' })).toHaveLength(1)
     expect(screen.getByLabelText('Message')).toBeDisabled()
 
     act(() => emit({ projectId: P1.id, turnId: 't1', type: 'done' }))
