@@ -86,7 +86,7 @@ Rejected: CSS Modules and Tailwind (rewrite of all markup for no gain here); `ma
 ### Wave 1
 
 ### T1: Dependencies, design tokens, base styles, test setup
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Contract: none
 - Owns: `package.json`, `package-lock.json`, `vitest.config.ts`, `src/renderer/src/test/setup.ts`, `src/renderer/src/styles/tokens.css`, `src/renderer/src/styles/base.css`, `src/renderer/src/styles/tokens.test.ts`, `src/renderer/src/main.tsx`
