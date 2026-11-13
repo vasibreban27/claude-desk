@@ -1,0 +1,39 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: system-ui, sans-serif;
+  overflow-x: hidden;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1.5fr);
+  height: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.layout__panel {
+  min-width: 0;
+  overflow: auto;
+  padding: 12px;
+  border-right: 1px solid #8884;
+}
+
+.layout__panel:last-child {
+  border-right: none;
+}
+
+.layout__title {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.layout__placeholder {
+  opacity: 0.7;
+}

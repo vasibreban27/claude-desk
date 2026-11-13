@@ -1,3 +1,6 @@
+import { Layout } from './components/Layout'
+import './styles/layout.css'
+
 export function App() {
-  return <main>claude-desk</main>
+  return <Layout projects={null} chat={null} />
 }
