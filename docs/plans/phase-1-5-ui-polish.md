@@ -144,7 +144,7 @@ Rejected: CSS Modules and Tailwind (rewrite of all markup for no gain here); `ma
 ### Wave 3
 
 ### T5: Project sidebar polish, empty states, theme toggle mount
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Contract: none
 - Owns: `src/renderer/src/components/Projects/**`
@@ -158,7 +158,7 @@ Rejected: CSS Modules and Tailwind (rewrite of all markup for no gain here); `ma
   - Given the existing projects tests in `App.test.tsx` When run Then they pass unchanged (this task must not break their text, roles or `aria-pressed`); new component tests live in `Projects/ProjectsPanel.test.tsx`.
 
 ### T6: Chat panel layout, messages, indicator, banners
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Contract: none
 - Owns: `src/renderer/src/components/Chat/**`, `src/renderer/src/App.test.tsx`
