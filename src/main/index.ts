@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { PRELOAD_FILE_NAME } from '../shared/build-output'
 import { app, BrowserWindow, type BrowserWindowConstructorOptions } from 'electron'
 
 export function getWindowOptions(preloadPath: string): BrowserWindowConstructorOptions {
@@ -18,7 +19,7 @@ export function getWindowOptions(preloadPath: string): BrowserWindowConstructorO
 }
 
 function createWindow(): void {
-  const win = new BrowserWindow(getWindowOptions(join(import.meta.dirname, '../preload/index.mjs')))
+  const win = new BrowserWindow(getWindowOptions(join(import.meta.dirname, '../preload', PRELOAD_FILE_NAME)))
   win.once('ready-to-show', () => win.show())
 
   const devUrl = process.env['ELECTRON_RENDERER_URL']

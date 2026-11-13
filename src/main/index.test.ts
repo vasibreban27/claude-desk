@@ -15,3 +15,15 @@ describe('getWindowOptions', () => {
     expect(opts.webPreferences?.preload).toBe('/preload.js')
   })
 })
+
+describe('preload build output', () => {
+  it('is emitted as CJS under the file name the main process loads', async () => {
+    const { PRELOAD_FILE_NAME } = await import('../shared/build-output')
+    const cfg = (await import('../../electron.vite.config')).default
+    const output = cfg.preload?.build?.rollupOptions?.output
+    const out = Array.isArray(output) ? output[0] : output
+    expect(out?.format).toBe('cjs')
+    expect(out?.entryFileNames).toBe(PRELOAD_FILE_NAME)
+    expect(PRELOAD_FILE_NAME).toMatch(/\.c?js$/)
+  })
+})
