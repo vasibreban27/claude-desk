@@ -101,7 +101,7 @@ Rejected: CSS Modules and Tailwind (rewrite of all markup for no gain here); `ma
 ### Wave 2
 
 ### T2: Safe markdown renderer
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Contract: none
 - Owns: `src/renderer/src/components/Markdown/**`
@@ -116,7 +116,7 @@ Rejected: CSS Modules and Tailwind (rewrite of all markup for no gain here); `ma
   - Given the module When linted Then there is no `dangerouslySetInnerHTML` and no `rehype-raw` import in `src/renderer`.
 
 ### T3: Theme hook and toggle
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Contract: none
 - Owns: `src/renderer/src/hooks/useTheme.ts`, `src/renderer/src/hooks/useTheme.test.ts`, `src/renderer/src/components/ThemeToggle/**`
@@ -128,7 +128,7 @@ Rejected: CSS Modules and Tailwind (rewrite of all markup for no gain here); `ma
   - Given `<ThemeToggle/>` When rendered Then it is a labelled control group (for example a radio group named "Theme") with three options, keyboard operable, reflecting the current mode.
 
 ### T4: Resizable three-panel layout and workspace empty state
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Contract: none
 - Owns: `src/renderer/src/components/Layout/**`, `src/renderer/src/styles/layout.css`
