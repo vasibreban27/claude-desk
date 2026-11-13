@@ -38,7 +38,15 @@ Electron + React + TypeScript (strict). Agent SDK and SQLite (`better-sqlite3`) 
 The scaffold and bundler are chosen in the Phase 1 plan; update this section and the commands below once they exist.
 
 ## Commands
-Fill in after scaffolding: install, dev, build, typecheck, lint, test (and single-test form). Workers and `verify` run these, so keep them accurate.
+Workers and `verify` run these, so keep them accurate.
+- Install: `npm install`
+- Dev (Electron with HMR): `npm run dev`
+- Build: `npm run build` (electron-vite, output in `out/`)
+- Typecheck: `npm run typecheck` (`tsc --noEmit` for `tsconfig.node.json` and `tsconfig.web.json`)
+- Lint: `npm run lint`
+- Test: `npm test` (Vitest, single run)
+- Single test file: `npm test -- src/shared/ipc.test.ts`; by name: `npm test -- -t "<test name>"`
+- TypeScript is pinned to 6.0.x because `typescript-eslint` does not yet support 7.
 
 ## Conventions
 - TypeScript strict, no `any`. Validate data at every boundary (IPC payloads, JSON, DB rows, process output) and type it after.
