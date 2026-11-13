@@ -174,7 +174,7 @@ Verification runs after each wave.
 ### Wave 3: IPC and wiring (parallel, both against the IPC contract)
 
 ### T5: IPC handlers and preload bridge
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: all channels in the IPC contract
 - Owns: `src/main/ipc/**`, `src/main/index.ts`, `src/preload/index.ts`
@@ -188,7 +188,7 @@ Verification runs after each wave.
   - Given handlers are tested with the folder dialog, store, git service and chat service mocked When run Then all contract success and error paths pass.
 
 ### T6: Renderer wiring: projects panel and chat panel
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Contract: all channels in the IPC contract (via `window.api`)
 - Owns: `src/renderer/src/components/Projects/**`, `src/renderer/src/components/Chat/**`, `src/renderer/src/hooks/**`, `src/renderer/src/App.tsx`
