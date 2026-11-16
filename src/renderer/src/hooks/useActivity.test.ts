@@ -114,6 +114,6 @@ describe('useActivity', () => {
     const { activityHistory } = setup()
     const { result } = renderHook(() => useActivity(null))
     expect(activityHistory).not.toHaveBeenCalled()
-    expect(result.current).toEqual({ projectId: null, events: [], loading: false, error: null })
+    expect(result.current).toEqual({ projectId: null, events: [], loading: false, error: null, historyLoaded: false, historyFinishedRunId: null })
   })
 })

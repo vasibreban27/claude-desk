@@ -287,6 +287,19 @@ describe('workspace', () => {
     expect(api.usageSummary).toHaveBeenCalledTimes(1)
   })
 
+  it('refetches usage exactly once for a run-finished that arrives before history resolves', async () => {
+    let resolveHistory: (events: ActivityEvent[]) => void = () => {}
+    api.activityHistory.mockReturnValue(new Promise<ActivityEvent[]>((r) => (resolveHistory = r)))
+    await selectAlpha()
+    await waitFor(() => expect(api.usageSummary).toHaveBeenCalled())
+    const before = api.usageSummary.mock.calls.length
+    act(() => emitActivity(finishedEvent(1)))
+    await act(async () => resolveHistory([]))
+    await waitFor(() => expect(api.usageSummary.mock.calls.length).toBe(before + 1))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(api.usageSummary.mock.calls.length).toBe(before + 1)
+  })
+
   it('links every tab to the single tabpanel, which is focusable', async () => {
     await selectAlpha()
     const panel = screen.getByRole('tabpanel')

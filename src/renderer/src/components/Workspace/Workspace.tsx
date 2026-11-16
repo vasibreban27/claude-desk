@@ -41,14 +41,20 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
   const activity = useActivity(projectId)
 
   // A run that finishes while the project is open changes the usage totals: refetch once per run id.
-  // A finished run already in the loaded history is the baseline and does not trigger a refetch.
-  const activityReady = activity.projectId === projectId && !activity.loading
-  if (activityReady) {
-    const finishedRunId = activity.events.find((ev) => ev.type === 'run-finished')?.runId ?? null
+  // The baseline is the finished run in the loaded history only; a live run-finished that arrived
+  // while history was loading differs from it and therefore counts as new.
+  if (activity.projectId === projectId && activity.historyLoaded) {
+    const liveFinishedRunId = activity.events.find((ev) => ev.type === 'run-finished')?.runId ?? null
     if (refresh.baselineFor !== projectId) {
-      setRefresh({ baselineFor: projectId, seenRunId: finishedRunId, signal: refresh.signal })
-    } else if (finishedRunId !== null && finishedRunId !== refresh.seenRunId) {
-      setRefresh({ ...refresh, seenRunId: finishedRunId, signal: refresh.signal + 1 })
+      const seen = activity.historyFinishedRunId
+      const isNew = liveFinishedRunId !== null && liveFinishedRunId !== seen
+      setRefresh({
+        baselineFor: projectId,
+        seenRunId: isNew ? liveFinishedRunId : seen,
+        signal: refresh.signal + (isNew ? 1 : 0)
+      })
+    } else if (liveFinishedRunId !== null && liveFinishedRunId !== refresh.seenRunId) {
+      setRefresh({ ...refresh, seenRunId: liveFinishedRunId, signal: refresh.signal + 1 })
     }
   }
   const usage = useUsage(projectId, refresh.signal)

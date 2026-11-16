@@ -7,6 +7,10 @@ export interface UseActivity {
   events: ActivityEvent[]
   loading: boolean
   error: string | null
+  /** True once the history request settled (success or failure) for this project. */
+  historyLoaded: boolean
+  /** Run id of the finished run found in the loaded history only (never from live events). */
+  historyFinishedRunId: string | null
 }
 
 interface ActivityState {
@@ -14,13 +18,17 @@ interface ActivityState {
   events: ActivityEvent[]
   loading: boolean
   error: string | null
+  historyLoaded: boolean
+  historyFinishedRunId: string | null
 }
 
 const empty = (projectId: string | null): ActivityState => ({
   projectId,
   events: [],
   loading: projectId !== null,
-  error: null
+  error: null,
+  historyLoaded: false,
+  historyFinishedRunId: null
 })
 
 /**
@@ -56,14 +64,18 @@ export function useActivity(projectId: string | null): UseActivity {
         if (cancelled) return
         setState((s) => {
           if (s.projectId !== projectId) return s
-          const merged = s.events.reduce(addEvent, history.filter((e) => e.projectId === projectId))
-          return { ...s, events: merged, loading: false }
+          const own = history.filter((e) => e.projectId === projectId)
+          const merged = s.events.reduce(addEvent, own)
+          const historyFinishedRunId = own.find((e) => e.type === 'run-finished')?.runId ?? null
+          return { ...s, events: merged, loading: false, historyLoaded: true, historyFinishedRunId }
         })
       })
       .catch(() => {
         if (cancelled) return
         setState((s) =>
-          s.projectId === projectId ? { ...s, loading: false, error: 'Could not load the activity.' } : s
+          s.projectId === projectId
+            ? { ...s, loading: false, historyLoaded: true, error: 'Could not load the activity.' }
+            : s
         )
       })
     return () => {
@@ -72,5 +84,12 @@ export function useActivity(projectId: string | null): UseActivity {
     }
   }, [projectId])
 
-  return { projectId: state.projectId, events: state.events, loading: state.loading, error: state.error }
+  return {
+    projectId: state.projectId,
+    events: state.events,
+    loading: state.loading,
+    error: state.error,
+    historyLoaded: state.historyLoaded,
+    historyFinishedRunId: state.historyFinishedRunId
+  }
 }
