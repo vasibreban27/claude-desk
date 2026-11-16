@@ -149,13 +149,39 @@ describe('guardPreToolUse path scoping (S10)', () => {
 })
 
 describe('guardPreToolUse glob and link hardening (F1, S30)', () => {
-  it.each(['{..,x}/*', '{a,..}/.ssh/*', '{.,.}./out/*', 'src/{a,b}/*.ts', '*.{ts,js}'])(
-    'denies brace pattern %s',
+  it.each(['**/*.{ts,tsx}', 'src/{a,b}/*.ts', '*.{ts,js}', '{src,tests}/**/*.ts', 'src/{a,{b,c}}/*.ts', 'src/{,x}/*.ts'])(
+    'allows brace pattern %s',
     (pattern) => {
-      expect(isDenied(g('Glob', { pattern }))).toBe(true)
-      expect(isDenied(g('Grep', { pattern: 'a', glob: pattern }))).toBe(true)
+      expect(g('Glob', { pattern })).toEqual({})
+      expect(g('Grep', { pattern: 'a', glob: pattern })).toEqual({})
     }
   )
+
+  it.each([
+    '{..,x}/*',
+    '{a,..}/.ssh/*',
+    '{.,.}./out/*',
+    '{/etc,x}/*',
+    '{~,x}/*',
+    '{a,{..,b}}/x',
+    '{a,b',
+    'a,b}',
+    '}{a,b}',
+    '{\\\\host\\s,x}/*',
+    '{a,b}'.repeat(7)
+  ])('denies brace pattern %s', (pattern) => {
+    expect(isDenied(g('Glob', { pattern }))).toBe(true)
+    expect(isDenied(g('Grep', { pattern: 'a', glob: pattern }))).toBe(true)
+  })
+
+  it('denies an expansion longer than the cap', () => {
+    expect(isDenied(g('Glob', { pattern: '{a,b}' + 'x'.repeat(600) }))).toBe(true)
+  })
+
+  it('gives a hint in the deny reason', () => {
+    const out = g('Glob', { pattern: '{..,x}/*' })
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain('relative')
+  })
 
   it('denies an absolute brace pattern', () => {
     const abs = cwd.replace(/\\/g, '/') + '/{.,.}./out/*'
@@ -170,6 +196,8 @@ describe('guardPreToolUse glob and link hardening (F1, S30)', () => {
       return // symlinks unavailable
     }
     expect(isDenied(g('Glob', { pattern: 'docs-link/**' }))).toBe(true)
+    expect(isDenied(g('Glob', { pattern: '{docs-link,x}/**' }))).toBe(true)
+    expect(isDenied(g('Grep', { pattern: 'a', glob: '{src,docs-link}/*.{ts,txt}' }))).toBe(true)
     expect(isDenied(g('Glob', { pattern: 'docs-link/*.txt', path: cwd }))).toBe(true)
     expect(isDenied(g('Grep', { pattern: 'a', glob: 'docs-link/**/*.txt' }))).toBe(true)
     expect(isDenied(g('Grep', { pattern: 'a', glob: '*.txt', path: 'docs-link' }))).toBe(true)
@@ -195,6 +223,13 @@ describe('guardPreToolUse never touches the filesystem for UNC and other drives 
       expect(isDenied(g('Grep', { pattern: 'a', path: p }))).toBe(true)
       expect(isDenied(g('Glob', { pattern: '**', path: p }))).toBe(true)
       expect(isDenied(g('Glob', { pattern: p + '\\*' }))).toBe(true)
+    }
+    expect(fsCalls.n).toBe(0)
+  })
+
+  it('denies UNC-style brace expansions without touching the filesystem', () => {
+    for (const p of ['{\\\\host\\s,x}/*', '{src,\\\\host\\s}/*', '{//h/s,x}/*']) {
+      expect(isDenied(g('Glob', { pattern: p }))).toBe(true)
     }
     expect(fsCalls.n).toBe(0)
   })

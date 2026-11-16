@@ -95,17 +95,76 @@ function literalPrefix(pattern: string): string {
   return cut === -1 ? '' : head.slice(0, cut + 1)
 }
 
-function patternInside(cwd: string, base: string, pattern: string): boolean {
+const MAX_EXPANSIONS = 64
+const MAX_EXPANSION_LENGTH = 512
+
+/**
+ * Expands `{a,b}` alternatives (nesting and empty alternatives supported, no ranges). Returns null when the
+ * braces are unbalanced or the result exceeds the caps, so callers deny the pattern.
+ */
+export function expandBraces(pattern: string): string[] | null {
+  if (pattern.length > MAX_EXPANSION_LENGTH) return null
+  const results: string[] = []
+  const stack: string[] = [pattern]
+  while (stack.length > 0) {
+    const current = stack.pop() as string
+    if (current.length > MAX_EXPANSION_LENGTH) return null
+    const open = current.indexOf('{')
+    if (open === -1) {
+      if (current.includes('}')) return null
+      results.push(current)
+      if (results.length > MAX_EXPANSIONS) return null
+      continue
+    }
+    if (current.slice(0, open).includes('}')) return null
+    let depth = 0
+    let close = -1
+    const alts: string[] = []
+    let start = open + 1
+    for (let i = open; i < current.length; i++) {
+      const ch = current[i]
+      if (ch === '{') depth++
+      else if (ch === '}') {
+        depth--
+        if (depth === 0) {
+          close = i
+          alts.push(current.slice(start, i))
+          break
+        }
+      } else if (ch === ',' && depth === 1) {
+        alts.push(current.slice(start, i))
+        start = i + 1
+      }
+    }
+    if (close === -1) return null
+    const before = current.slice(0, open)
+    const after = current.slice(close + 1)
+    for (const alt of alts) stack.push(before + alt + after)
+    if (stack.length + results.length > MAX_EXPANSIONS * 2) return null
+  }
+  return results
+}
+
+/** Lexical checks for one expanded pattern; never touches the filesystem. */
+function expansionLexicallyOk(pattern: string): boolean {
   if (pattern.includes('\0') || pattern.startsWith('~')) return false
-  // Brace expansion can assemble `..` segments out of pieces; not supported in Phase 2.
-  if (/[{}]/.test(pattern)) return false
   if (pattern.split(/[\\/]+/).includes('..')) return false
   if (/^[a-zA-Z]:(?![\\/])/.test(pattern)) return false
   if (UNC_LIKE.test(pattern)) return false
-  const prefix = literalPrefix(pattern)
-  if (path.isAbsolute(pattern)) return pathInside(cwd, prefix.length > 0 ? prefix : path.sep)
-  // Relative: the literal prefix must stay inside cwd after resolving links and junctions.
-  return pathInside(cwd, base, prefix)
+  return true
+}
+
+function patternInside(cwd: string, base: string, pattern: string): boolean {
+  const expansions = expandBraces(pattern)
+  if (expansions === null) return false
+  // Lexical pass over every expansion first, so a denial never costs a filesystem access.
+  if (!expansions.every(expansionLexicallyOk)) return false
+  return expansions.every((expanded) => {
+    const prefix = literalPrefix(expanded)
+    if (path.isAbsolute(expanded)) return pathInside(cwd, prefix.length > 0 ? prefix : path.sep)
+    // Relative: the literal prefix must stay inside cwd after resolving links and junctions.
+    return pathInside(cwd, base, prefix)
+  })
 }
 
 function checkPathTool(name: string, input: Record<string, unknown>, cwd: string): string | null {
@@ -114,7 +173,7 @@ function checkPathTool(name: string, input: Record<string, unknown>, cwd: string
     return 'Malformed tool request.'
   }
   const args = toolInput as Record<string, unknown>
-  const outside = `Tool "${name}" may only access files inside the project folder.`
+  const outside = `Tool "${name}" may only access files inside the project folder. Use relative paths and globs without "..", absolute or "~" paths, and with at most 64 brace alternatives.`
   const pathKeys = name === 'Read' ? ['file_path'] : ['path']
   const patternKeys = name === 'Read' ? [] : name === 'Glob' ? ['pattern'] : ['glob']
 
