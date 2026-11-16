@@ -27,6 +27,20 @@ describe('ThemeToggle', () => {
     expect(document.documentElement.hasAttribute('data-theme')).toBe(false)
   })
 
+  it('gives every option its own icon and a theme-specific preview style', () => {
+    const { container } = render(<ThemeToggle />)
+    for (const mode of ['system', 'light', 'dark']) {
+      const label = container.querySelector(`.theme-toggle__label--${mode}`)
+      expect(label).not.toBeNull()
+      const icon = label?.querySelector('svg.theme-toggle__icon')
+      expect(icon).not.toBeNull()
+      expect(icon).toHaveAttribute('aria-hidden', 'true')
+    }
+    // The accessible name stays the plain label, the icon adds nothing to it.
+    expect(screen.getByRole('radio', { name: 'Light' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Dark' })).toBeInTheDocument()
+  })
+
   it('reflects a stored mode on mount', () => {
     window.localStorage.setItem('claude-desk:theme', 'light')
     render(<ThemeToggle />)
