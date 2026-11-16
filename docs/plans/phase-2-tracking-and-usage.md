@@ -160,7 +160,7 @@ Tasks that touch the contract say `Contract: <channel>`.
 ### Wave 2
 
 ### T3: Database layer and RunStore
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: `usage:summary` (result shape)
 - Owns: `src/main/db/**` (including tests)
@@ -199,6 +199,7 @@ Tasks that touch the contract say `Contract: <channel>`.
   - Given events from `main` and from a subagent When rendered Then each row shows time, agent, tool and summary, and subagent rows are visibly distinguished (label plus indent or badge, not color alone).
   - Given a `tool-started` and its `tool-finished` When rendered Then they show as one row with duration; a `denied` finish shows a "Denied" badge; an unfinished tool shows "running".
   - Given `run-finished` When rendered Then a footer row shows status and estimated cost ("~$0.0123"); given no events Then the empty state "No activity yet. Start a chat run." is shown.
+  - Given a `tool-started` with no `tool-finished` (for example the tool failed, wave 1 follow-up F2) When `run-finished` arrives Then that row stops showing "running" and shows "ended" instead.
   - Given the feed grows When it is scrolled up Then it does not jump; when at the bottom Then it follows (reuse the existing `stickToBottom` helper from the chat if it fits, else a local equivalent).
 
 ### T6: Usage view (renderer)
@@ -278,4 +279,13 @@ Wave 1 (reviewer and security audit both PASS; minor findings, not fixed):
 - S1 `src/main/chat/activity.ts` (lines 39-53, 83-84, 207-212): only `summary` is capped; `tool`, `toolUseId`, `agentId`, `agent` and the model-written `subagent_type` pass through at any length (memory and IPC bloat). Cap identifiers at ~100 chars; validate `subagent_type` or fall back to `"subagent"`.
 - T1 caveats: `@types/better-sqlite3` ^9.6.0 not checked against `better-sqlite3` v13's API (T3 confirms by typechecking); `npm run dev` with HMR not run against the new dependency; not verified on macOS or Linux.
 - To confirm in T4 (security audit): the guard runs for subagent tool calls and is registered with `onFailure: "block"`; a `Skill` cannot run shell commands before the `PreToolUse` hook sees them; hook field names (`agent_id`, `agent_type`, `duration_ms`, `last_assistant_message`) match the installed SDK; the denied-tool event comes from `mapDeniedToolUse`.
+- F2 resolved on the renderer side: T5 closes open tools at `run-finished` (criterion added). The `PostToolUseFailure` mapping in `activity.ts` is still open.
+
+Wave 2 (reviewer and security audit both PASS; minor findings, not fixed):
+- F1 `src/main/db/runStore.ts` (summary statements, ~line 170): the window has no upper bound (`day >= ?` only); a run with a future `startedAt` counts in every window. Add `AND day <= ?` with `localDay(now())` or accept.
+- F2 `src/main/db/runStore.ts` (~line 108): when `usage.costUsd` is null but per-model costs exist, `runs.cost_usd` is NULL and counts as $0; optionally fall back to the sum of model costs (matters for runs that error after `modelUsage` was captured).
+- F3 `src/main/db/db.test.ts:158-196`: window-boundary tests never cover the day just outside the window (`daysAgo(days)`), so an off-by-one in `days - 1` is not caught; no test covers `approximate` aggregating across mixed runs of the same agent.
+- F4 `src/main/db/runStore.ts` (~line 85): `day` is fixed at record time in the timezone then in effect; no test under a non-UTC timezone. Acceptable behavior, test gap only.
+- S (note) `RunStore.summary` does not validate `days` itself; NaN gives an empty summary. It relies on the IPC zod schema (T7).
+- To confirm in T7: where the database file lives (`userData/data`), and that the database is closed at quit so the WAL is checkpointed.
 - Known, outside this plan: `src/main/git/status.test.ts` times out under parallel load (deferred by the user).
