@@ -245,7 +245,7 @@ Tasks that touch the contract say `Contract: <channel>`.
 ### Wave 5
 
 ### T9: Smoke - launch check and end-to-end test
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: all three channels
 - Owns: `tests/phase-2-flow.test.ts`, `docs/notes/phase-2-manual-check.md`
@@ -303,4 +303,11 @@ Wave 4 (reviewer and security audit both PASS; minor findings, not fixed):
 - F3 `src/renderer/src/components/Workspace/Workspace.tsx:90`: `aria-controls` on the inactive tab points to a panel that is not rendered, and the tabpanel has no `tabIndex={0}`. Render one panel with a fixed id (or set `aria-controls` only on the selected tab) and add `tabIndex={0}`.
 - F4 `src/renderer/src/App.test.tsx`: the refresh test does not assert that a repeated `run-finished` with the same run id leaves the usage call count unchanged ("once per run id").
 - `tests/integration/main-flow.test.ts` (Phase 1) also times out under parallel load (about 3s alone, 5s limit) and the `afterEach` cleanup then fails with EPERM; same class as the `status.test.ts` timeout. Both pass alone.
+Wave 5 (reviewer PASS; security audit skipped, no sensitive surface; minor findings, not fixed):
+- F1 `tests/phase-2-flow.test.ts:105,173`: `expect` calls inside the fake runner generator are swallowed by `ChatService` and surface as an `error` event; the test would fail only at the final `done` assertion with a misleading message. Capture values in variables and assert in the test body.
+- F2 `tests/phase-2-flow.test.ts`: no failure-path case (runner throws, `is_error` result, store failure) at integration level; covered by unit tests only.
+- F3 `tests/phase-2-flow.test.ts:31`: `rmSync` without `maxRetries`; Windows file locks on the WAL file can make `afterEach` fail with EPERM (seen in `main-flow.test.ts`).
+- F4 `docs/notes/phase-2-manual-check.md:5`: the built app is never launched; the note does not say to run `npm run build`.
+- F5 `docs/notes/phase-2-manual-check.md:11-12`: checks (c) and (d) have no concrete prompt or throwaway skill, hard to repeat.
+- Smoke: automated launch of the built Electron app is not covered (only `tests/preload-bundle.test.ts` checks the preload bundle); the launch is a manual check.
 - Known, outside this plan: `src/main/git/status.test.ts` times out under parallel load (deferred by the user).
