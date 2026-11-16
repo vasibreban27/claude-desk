@@ -41,7 +41,7 @@ describe('phase 2 flow (SDK mocked, real hooks, service, SQLite file and handler
 
   afterEach(() => {
     db.close()
-    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   })
 
   it(

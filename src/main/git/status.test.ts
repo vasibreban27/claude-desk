@@ -9,7 +9,7 @@ import { readGitStatus } from './status'
 vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 })
 
 const root = mkdtempSync(join(tmpdir(), 'desk-git-'))
-afterAll(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
+afterAll(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync(
