@@ -142,8 +142,10 @@ export const sdkRunner: ChatRunner = async function* (args) {
     prompt: args.prompt,
     options: {
       cwd: args.cwd,
-      // Plugins load independently of settingSources; no user/project/local settings are needed.
-      settingSources: [],
+      // Only 'project': loads <cwd>/.claude/settings.json, CLAUDE.md, skills and agents. The toolkit
+      // plugin comes from `plugins`; user-level settings are deliberately not loaded. Revisit in Phase 6
+      // for untrusted repos. In-process hooks (the guard) are unaffected and a deny still beats allow rules.
+      settingSources: ['project'],
       plugins: [{ type: 'local', path: args.pluginPath }],
       includePartialMessages: true,
       allowedTools: [...ALLOWED_TOOLS],
