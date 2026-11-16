@@ -28,7 +28,7 @@ describe('main-side flow (SDK mocked, real git and store)', () => {
     writeFileSync(join(repo, 'b.txt'), 'untracked')
   })
 
-  afterEach(() => rmSync(root, { recursive: true, force: true }))
+  afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
 
   it('adds a project, lists it, streams a chat turn and returns history', async () => {
     const store = await openJsonProjectStore(join(root, 'data'))

@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { readGitStatus } from './status'
 
 const root = mkdtempSync(join(tmpdir(), 'desk-git-'))
-afterAll(() => rmSync(root, { recursive: true, force: true }))
+afterAll(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }))
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync(
