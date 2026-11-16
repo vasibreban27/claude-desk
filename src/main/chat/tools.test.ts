@@ -12,6 +12,20 @@ vi.mock('node:fs', async (importOriginal) => {
       fsCalls.n++
       return actual.existsSync(...a)
     },
+    lstatSync: Object.assign(
+      (...a: Parameters<typeof actual.lstatSync>) => {
+        fsCalls.n++
+        return actual.lstatSync(...a)
+      },
+      actual.lstatSync
+    ),
+    readlinkSync: Object.assign(
+      (...a: Parameters<typeof actual.readlinkSync>) => {
+        fsCalls.n++
+        return actual.readlinkSync(...a)
+      },
+      actual.readlinkSync
+    ),
     realpathSync: Object.assign(
       (...a: Parameters<typeof actual.realpathSync>) => {
         fsCalls.n++
@@ -175,7 +189,7 @@ describe('guardPreToolUse glob and link hardening (F1, S30)', () => {
     'a,b}',
     '}{a,b}',
     '{\\\\host\\s,x}/*',
-    '{a,b}'.repeat(7)
+    '{a,b}'.repeat(8)
   ])('denies brace pattern %s', (pattern) => {
     expect(isDenied(g('Glob', { pattern }))).toBe(true)
     expect(isDenied(g('Grep', { pattern: 'a', glob: pattern }))).toBe(true)
@@ -185,7 +199,7 @@ describe('guardPreToolUse glob and link hardening (F1, S30)', () => {
     expect(isDenied(g('Glob', { pattern: '{a,b}' + 'x'.repeat(600) }))).toBe(true)
   })
 
-  it('allows exactly 64 expansions and brace-free patterns longer than the brace cap', () => {
+  it('allows exactly 128 expansions, denies 256, and brace-free patterns longer than the brace cap', () => {
     expect(g('Glob', { pattern: '{a,b}'.repeat(6) })).toEqual({})
     expect(g('Glob', { pattern: '**/' + 'x'.repeat(600) })).toEqual({})
     expect(g('Grep', { pattern: 'a', glob: '**/' + 'x'.repeat(600) })).toEqual({})
@@ -202,7 +216,7 @@ describe('guardPreToolUse glob and link hardening (F1, S30)', () => {
   it('mentions the limits in the deny reason', () => {
     const reason = g('Glob', { pattern: '{..,x}/*' }).hookSpecificOutput?.permissionDecisionReason
     expect(reason).toContain('512')
-    expect(reason).toContain('64')
+    expect(reason).toContain('128')
   })
 
   it('gives a hint in the deny reason', () => {
@@ -290,13 +304,26 @@ describe('guardPreToolUse bounds the filesystem work of brace expansion (S51)', 
     fsCalls.n = 0
   })
 
-  it('a deep pattern with 64 expansions and ~230 missing segments makes few fs calls', () => {
+  it('denies a deep pattern (more than 64 segments) lexically, with no fs calls', () => {
     const deep = '{a,b}/{c,d}/{e,f}/{g,h}/{i,j}/{k,l}/' + 'a/'.repeat(115) + '*'
     expect(deep.length).toBeLessThanOrEqual(512)
-    expect(g('Glob', { pattern: deep })).toEqual({})
+    const out = g('Glob', { pattern: deep })
+    expect(isDenied(out)).toBe(true)
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain('64 path segments')
+    expect(fsCalls.n).toBe(0)
+    expect(isDenied(g('Grep', { pattern: 'x', glob: deep }))).toBe(true)
+    expect(fsCalls.n).toBe(0)
+  })
+
+  it('the worst allowed pattern (64 segments, 64 expansions) is cheap and bounded', () => {
+    const worst = '{a,b}/{c,d}/{e,f}/{g,h}/{i,j}/{k,l}/' + 'a/'.repeat(57) + '*'
+    const t0 = performance.now()
+    expect(g('Glob', { pattern: worst })).toEqual({})
+    const ms = performance.now() - t0
     expect(fsCalls.n).toBeLessThan(200)
+    expect(ms).toBeLessThan(500) // generous: guards against pathological regressions only
     fsCalls.n = 0
-    expect(g('Grep', { pattern: 'x', glob: deep })).toEqual({})
+    expect(g('Grep', { pattern: 'x', glob: worst })).toEqual({})
     expect(fsCalls.n).toBeLessThan(200)
   })
 
@@ -307,13 +334,34 @@ describe('guardPreToolUse bounds the filesystem work of brace expansion (S51)', 
   })
 
   it('denies with a clear reason when the probe budget is exceeded', () => {
-    const names = Array.from({ length: 8 }, (_, i) => `w${i}`)
-    for (const a of names) for (const b of names) mkdirSync(path.join(cwd, a, b), { recursive: true })
-    const set = `{${names.join(',')}}`
-    const out = g('Glob', { pattern: `${set}/${set}/x/*` })
+    const names = Array.from({ length: 64 }, (_, i) => `q${i}`)
+    for (const n of names) mkdirSync(path.join(cwd, 'fan', n, 'a', 'b', 'c'), { recursive: true })
+    const out = g('Glob', { pattern: `fan/{${names.join(',')}}/a/b/c/*` })
     expect(isDenied(out)).toBe(true)
     expect(out.hookSpecificOutput?.permissionDecisionReason).toContain('too complex')
     expect(fsCalls.n).toBeLessThanOrEqual(300)
+  })
+
+  it('allows a legitimate fan-out glob over existing directories (F30)', () => {
+    const ps = Array.from({ length: 10 }, (_, i) => `p${i + 1}`)
+    for (const p of ps) for (const x of ['a', 'b', 'c', 'd', 'e']) mkdirSync(path.join(cwd, p, 'src', x), { recursive: true })
+    const pattern = `{${ps.join(',')}}/src/{a,b,c,d,e}/**/*.{ts,tsx}`
+    expect(g('Glob', { pattern })).toEqual({})
+    expect(g('Grep', { pattern: 'x', glob: pattern })).toEqual({})
+  })
+
+  it('memoizes probes: a repeated shared prefix costs each component once', () => {
+    expect(g('Glob', { pattern: '{p1,p2}/src/{a,b,c}/**' })).toEqual({})
+    // real cwd (1) + p1,p2 (2) + src x2 (2) + a,b,c x2 (6)
+    expect(fsCalls.n).toBeLessThanOrEqual(11)
+  })
+
+  it('reports a clearly outside absolute target as outside even when the budget would be exhausted (F32)', () => {
+    const names = Array.from({ length: 64 }, (_, i) => `q${i}`)
+    const abs = outside.split(path.sep).join('/')
+    const out = g('Glob', { pattern: `{fan/{${names.join(',')}}/a/b/c/*,${abs}/*}` })
+    expect(isDenied(out)).toBe(true)
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain('inside the project folder')
   })
 
   it('still allows existing in-project prefixes and denies a link prefix mid-pattern', () => {
@@ -327,5 +375,78 @@ describe('guardPreToolUse bounds the filesystem work of brace expansion (S51)', 
     expect(isDenied(g('Glob', { pattern: '{src,deep-link}/**' }))).toBe(true)
     expect(isDenied(g('Glob', { pattern: 'src/../deep-link/*' }))).toBe(true)
     expect(isDenied(g('Glob', { pattern: '{a,deep-link}/x/y/*' }))).toBe(true)
+  })
+})
+
+describe('guardPreToolUse bounds path arguments (S60, S61)', () => {
+  beforeEach(() => {
+    fsCalls.n = 0
+  })
+
+  const segs = (n: number) => 'a/'.repeat(n).slice(0, -1)
+
+  it.each([5000, 50000])('denies %i repeated segments with no fs calls', (n) => {
+    const long = segs(n)
+    for (const out of [
+      g('Read', { file_path: long }),
+      g('Grep', { pattern: 'x', path: long }),
+      g('Glob', { pattern: '*', path: long }),
+      g('Read', { file_path: path.join(cwd, long) })
+    ]) {
+      expect(isDenied(out)).toBe(true)
+      expect(out.hookSpecificOutput?.permissionDecisionReason).toContain('64 path segments')
+    }
+    expect(fsCalls.n).toBe(0)
+  })
+
+  it('denies values longer than 4096 characters with no fs calls', () => {
+    expect(isDenied(g('Read', { file_path: 'x'.repeat(4097) }))).toBe(true)
+    expect(fsCalls.n).toBe(0)
+  })
+
+  it('allows exactly 64 segments and denies 65 (boundary)', () => {
+    mkdirSync(path.join(cwd, 'deep64'), { recursive: true })
+    const ok = 'deep64/' + segs(63)
+    expect(g('Read', { file_path: ok })).toEqual({})
+    expect(fsCalls.n).toBeLessThan(10)
+    fsCalls.n = 0
+    expect(isDenied(g('Read', { file_path: 'deep64/' + segs(64) }))).toBe(true)
+    expect(fsCalls.n).toBe(0)
+  })
+
+  it('allows a legitimate existing 64-segment in-project path within the budget', () => {
+    const parts = Array.from({ length: 63 }, (_, i) => `d${i}`)
+    const dir = path.join(cwd, 'legit', ...parts)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, 'f.txt'), 'x')
+    const rel = ['legit', ...parts].join('/') + '/f.txt'
+    expect(rel.split('/').length).toBe(65)
+    const rel64 = ['legit', ...parts.slice(0, 62)].join('/') + '/f.txt'
+    mkdirSync(path.join(cwd, 'legit', ...parts.slice(0, 62)), { recursive: true })
+    writeFileSync(path.join(cwd, 'legit', ...parts.slice(0, 62), 'f.txt'), 'x')
+    const t0 = performance.now()
+    expect(g('Read', { file_path: rel64 })).toEqual({})
+    const ms = performance.now() - t0
+    expect(fsCalls.n).toBeLessThanOrEqual(70)
+    expect(ms).toBeLessThan(500)
+  })
+
+  it('denies a Read/Grep/Glob path through a junction pointing outside', () => {
+    const link = path.join(cwd, 'out-link')
+    try {
+      symlinkSync(outside, link, 'junction')
+    } catch {
+      return // symlinks unavailable
+    }
+    expect(isDenied(g('Read', { file_path: 'out-link/data.txt' }))).toBe(true)
+    expect(isDenied(g('Read', { file_path: 'out-link' }))).toBe(true)
+    expect(isDenied(g('Grep', { pattern: 'x', path: 'out-link' }))).toBe(true)
+    expect(isDenied(g('Glob', { pattern: '*', path: 'out-link/sub' }))).toBe(true)
+    expect(isDenied(g('Read', { file_path: path.join(cwd, 'out-link', 'data.txt') }))).toBe(true)
+  })
+
+  it('allows a missing path and still denies a prefix sibling', () => {
+    expect(g('Read', { file_path: 'nope/missing.txt' })).toEqual({})
+    expect(isDenied(g('Read', { file_path: path.join(outside, 'data.txt') }))).toBe(true)
   })
 })

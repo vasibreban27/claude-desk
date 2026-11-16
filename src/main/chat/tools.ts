@@ -1,5 +1,5 @@
 /** Tool allowlist and the deny-by-default PreToolUse guard for chat runs (Phase 2: read-only). */
-import { existsSync, realpathSync } from 'node:fs'
+import { lstatSync, readlinkSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 
 export const ALLOWED_TOOLS = ['Read', 'Grep', 'Glob', 'Agent', 'Task', 'Skill'] as const
@@ -44,21 +44,6 @@ export function isToolAllowed(name: string): boolean {
   return ALLOWED_SET.has(name)
 }
 
-/** realpath of the nearest existing ancestor plus the not-yet-existing remainder. */
-function realResolve(p: string): string {
-  let current = path.resolve(p)
-  const rest: string[] = []
-  for (;;) {
-    if (existsSync(current)) {
-      return path.join(realpathSync(current), ...rest.reverse())
-    }
-    const parent = path.dirname(current)
-    if (parent === current) return path.resolve(p)
-    rest.push(path.basename(current))
-    current = parent
-  }
-}
-
 /** Trailing-separator-safe containment (path.relative is case-insensitive on win32). */
 function isInside(root: string, target: string): boolean {
   const rel = path.relative(root, target)
@@ -81,16 +66,6 @@ function lexicallyOutside(cwd: string, raw: string, resolved: string): boolean {
   return !sameRoot(path.parse(path.resolve(cwd)).root, path.parse(resolved).root)
 }
 
-/** True when the joined path (absolute or relative to cwd) resolves, through symlinks, inside cwd. */
-function pathInside(cwd: string, ...parts: string[]): boolean {
-  if ((parts[0] ?? '').startsWith('~')) return false
-  if (parts.some((p) => p.includes('\0'))) return false
-  const resolved = path.resolve(cwd, ...parts)
-  if (lexicallyOutside(cwd, parts[0] ?? '', resolved)) return false
-  const root = realResolve(cwd)
-  return isInside(root, realResolve(resolved))
-}
-
 const MAGIC = /[*?[\]{}()!]/
 
 /** The literal directory prefix: text before the segment that holds the first magic character. */
@@ -102,7 +77,7 @@ function literalPrefix(pattern: string): string {
   return cut === -1 ? '' : head.slice(0, cut + 1)
 }
 
-const MAX_EXPANSIONS = 64
+const MAX_EXPANSIONS = 128
 const MAX_EXPANSION_LENGTH = 512
 
 /**
@@ -178,63 +153,118 @@ function expansionLexicallyOk(pattern: string): boolean {
   return true
 }
 
-/** Per guard call state: the real cwd is resolved once and filesystem probes are capped. */
+/** Hard lexical caps for path arguments and glob expansions, checked before any filesystem access. */
+const MAX_PATH_LENGTH = 4096
+const MAX_PATH_SEGMENTS = 64
+
+const segmentCount = (p: string): number => p.split(/[\\/]+/).filter((s) => s.length > 0).length
+
+/** Per guard call state: the real cwd is resolved once and filesystem probes are memoized and capped. */
 interface ProbeCtx {
   cwd: string
   realCwd: string | null
   probes: number
+  /** Per path: the real path of an existing component, or null when it does not exist (or dangles inside). */
+  cache: Map<string, string | null>
 }
 
 const MAX_PROBES = 256
 
 class ProbeBudgetError extends Error {}
 
-function probeExists(ctx: ProbeCtx, p: string): boolean {
+const cacheKey = (p: string): string => (process.platform === 'win32' ? p.toLowerCase() : p)
+
+function spend(ctx: ProbeCtx): void {
   if (++ctx.probes > MAX_PROBES) throw new ProbeBudgetError()
-  return existsSync(p)
 }
 
-function probeReal(ctx: ProbeCtx, p: string): string {
-  if (++ctx.probes > MAX_PROBES) throw new ProbeBudgetError()
-  return realpathSync(p)
+function isMissingError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return code === 'ENOENT' || code === 'ENOTDIR'
 }
 
-/** Like realResolve, but counted against the probe budget. */
-function realResolveCounted(ctx: ProbeCtx, p: string): string {
-  let current = path.resolve(p)
-  const rest: string[] = []
-  for (;;) {
-    if (probeExists(ctx, current)) return path.join(probeReal(ctx, current), ...rest.reverse())
-    const parent = path.dirname(current)
-    if (parent === current) return path.resolve(p)
-    rest.push(path.basename(current))
-    current = parent
+function resolveRealCwd(ctx: ProbeCtx): string {
+  if (ctx.realCwd !== null) return ctx.realCwd
+  spend(ctx)
+  try {
+    ctx.realCwd = realpathSync(path.resolve(ctx.cwd))
+  } catch (error) {
+    if (!isMissingError(error)) throw error
+    ctx.realCwd = path.resolve(ctx.cwd)
   }
+  return ctx.realCwd
 }
 
 /**
- * True when `resolved` stays inside the real cwd. A target that is lexically inside cwd is walked from the
- * real cwd downward and stops at the first missing component (the rest cannot leave cwd), so the work is
- * bounded by the number of existing components rather than the pattern length.
+ * Resolves one component below an already-real directory with a single lstat (links cost one more
+ * realpath). Returns its real path, or null when it is missing. A dangling link is allowed only while its
+ * literal target stays inside the real cwd. Results are memoized; only cache misses spend the budget.
+ */
+function probeComponent(ctx: ProbeCtx, realCwd: string, next: string): string | null {
+  const key = cacheKey(next)
+  const hit = ctx.cache.get(key)
+  if (hit !== undefined) return hit
+  spend(ctx)
+  let stats: ReturnType<typeof lstatSync>
+  try {
+    stats = lstatSync(next)
+  } catch (error) {
+    if (!isMissingError(error)) throw error
+    ctx.cache.set(key, null)
+    return null
+  }
+  let result: string | null = next
+  if (stats.isSymbolicLink()) {
+    spend(ctx)
+    try {
+      result = realpathSync(next)
+    } catch (error) {
+      if (!isMissingError(error)) throw error
+      spend(ctx)
+      const target = path.resolve(path.dirname(next), readlinkSync(next))
+      // Dangling: harmless only if its literal target is inside the project; otherwise report it as outside.
+      result = isInside(realCwd, target) ? null : target
+    }
+  }
+  ctx.cache.set(key, result)
+  return result
+}
+
+/**
+ * True when `resolved` stays inside the real cwd. The target is walked from the real cwd downward and stops
+ * at the first missing component (the rest cannot leave cwd), so the work is bounded by the existing
+ * components. Targets lexically inside neither the cwd nor its real path are outside without any probe.
  */
 function targetInside(ctx: ProbeCtx, raw: string, resolved: string): boolean {
-  if (raw.startsWith('~') || raw.includes('\0')) return false
-  if (lexicallyOutside(ctx.cwd, raw, resolved)) return false
-  ctx.realCwd ??= realResolveCounted(ctx, ctx.cwd)
-  const realCwd = ctx.realCwd
+  const base = targetBase(ctx, raw, resolved)
+  return base !== null && walkDown(ctx, base, resolved)
+}
+
+/** Lexical phase: the directory the target is relative to, or null when it is already clearly outside. */
+function targetBase(ctx: ProbeCtx, raw: string, resolved: string): string | null {
+  if (raw.startsWith('~') || raw.includes(String.fromCharCode(0))) return null
+  if (lexicallyOutside(ctx.cwd, raw, resolved)) return null
   const lexicalCwd = path.resolve(ctx.cwd)
-  if (!isInside(lexicalCwd, resolved)) return isInside(realCwd, realResolveCounted(ctx, resolved))
+  if (isInside(lexicalCwd, resolved)) return lexicalCwd
+  // Compare against the real cwd too (cwd reached through a link or a short name), still without walking.
+  const realCwd = resolveRealCwd(ctx)
+  return isInside(realCwd, resolved) ? realCwd : null
+}
+
+function walkDown(ctx: ProbeCtx, base: string, resolved: string): boolean {
+  const realCwd = resolveRealCwd(ctx)
   let current = realCwd
-  for (const segment of path.relative(lexicalCwd, resolved).split(path.sep)) {
+  for (const segment of path.relative(base, resolved).split(path.sep)) {
     if (segment === '') continue
-    const next = path.join(current, segment)
-    if (!probeExists(ctx, next)) return true
-    current = probeReal(ctx, next)
-    if (!isInside(realCwd, current)) return false
+    const real = probeComponent(ctx, realCwd, path.join(current, segment))
+    if (real === null) return true
+    if (!isInside(realCwd, real)) return false
+    current = real
   }
   return true
 }
 
+const TOO_DEEP = `Path or glob is too long to check safely: use at most ${MAX_PATH_SEGMENTS} path segments and ${MAX_PATH_LENGTH} characters.`
 const TOO_COMPLEX = 'Glob pattern is too complex to check safely: use fewer brace alternatives and a shorter literal path prefix.'
 
 /** null when the pattern is acceptable, otherwise the deny reason (`outside` or a complexity reason). */
@@ -243,6 +273,7 @@ function patternDenial(ctx: ProbeCtx, base: string, pattern: string, outside: st
   if (expansions === null) return outside
   // Lexical pass over every expansion first, so a denial never costs a filesystem access.
   if (!expansions.every(expansionLexicallyOk)) return outside
+  if (expansions.some((e) => segmentCount(e) > MAX_PATH_SEGMENTS)) return TOO_DEEP
   const targets = new Map<string, string>()
   for (const expanded of expansions) {
     const prefix = literalPrefix(expanded)
@@ -265,14 +296,24 @@ function patternDenial(ctx: ProbeCtx, base: string, pattern: string, outside: st
   return null
 }
 
+/** Path argument check on the shared ProbeCtx: null when allowed, else the deny reason. */
+function argDenial(ctx: ProbeCtx, value: string, outside: string): string | null {
+  try {
+    return targetInside(ctx, value, path.resolve(ctx.cwd, value)) ? null : outside
+  } catch (error) {
+    if (error instanceof ProbeBudgetError) return TOO_COMPLEX
+    throw error
+  }
+}
+
 function checkPathTool(name: string, input: Record<string, unknown>, cwd: string): string | null {
   const toolInput = input['tool_input']
   if (typeof toolInput !== 'object' || toolInput === null || Array.isArray(toolInput)) {
     return 'Malformed tool request.'
   }
   const args = toolInput as Record<string, unknown>
-  const outside = `Tool "${name}" may only access files inside the project folder. Use relative paths and globs without "..", absolute or "~" paths, with at most 64 brace alternatives, no "[" inside braces, and brace patterns of at most ${MAX_EXPANSION_LENGTH} characters.`
-  const ctx: ProbeCtx = { cwd, realCwd: null, probes: 0 }
+  const outside = `Tool "${name}" may only access files inside the project folder. Use relative paths and globs without "..", absolute or "~" paths, with at most ${MAX_EXPANSIONS} brace expansions, no "[" inside braces, and brace patterns of at most ${MAX_EXPANSION_LENGTH} characters.`
+  const ctx: ProbeCtx = { cwd, realCwd: null, probes: 0, cache: new Map() }
   const pathKeys = name === 'Read' ? ['file_path'] : ['path']
   const patternKeys = name === 'Read' ? [] : name === 'Glob' ? ['pattern'] : ['glob']
 
@@ -284,7 +325,9 @@ function checkPathTool(name: string, input: Record<string, unknown>, cwd: string
     if (v === undefined || v === null) continue
     if (typeof v !== 'string') return 'Malformed tool request.'
     if (v.length === 0) continue
-    if (!pathInside(cwd, v)) return outside
+    if (v.length > MAX_PATH_LENGTH || segmentCount(v) > MAX_PATH_SEGMENTS) return TOO_DEEP
+    const denial = argDenial(ctx, v, outside)
+    if (denial !== null) return denial
   }
   const rawBase = args['path']
   const baseDir = typeof rawBase === 'string' && rawBase.length > 0 ? rawBase : '.'
