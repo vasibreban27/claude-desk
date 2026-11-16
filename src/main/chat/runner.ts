@@ -142,10 +142,11 @@ export const sdkRunner: ChatRunner = async function* (args) {
     prompt: args.prompt,
     options: {
       cwd: args.cwd,
-      // Only 'project': loads <cwd>/.claude/settings.json, CLAUDE.md, skills and agents. The toolkit
-      // plugin comes from `plugins`; user-level settings are deliberately not loaded. Revisit in Phase 6
-      // for untrusted repos. In-process hooks (the guard) are unaffected and a deny still beats allow rules.
-      settingSources: ['project'],
+      // Deliberately []: project, user and local settings are never loaded. A cloned untrusted repo's
+      // .claude/settings.json could run command hooks, apiKeyHelper, env and skill shell injections as the
+      // user with no trust prompt and outside our PreToolUse guard (S50). The toolkit comes from `plugins`.
+      // Revisiting this is a Phase 3/6 decision that needs a per-project trust setting.
+      settingSources: [],
       plugins: [{ type: 'local', path: args.pluginPath }],
       includePartialMessages: true,
       allowedTools: [...ALLOWED_TOOLS],

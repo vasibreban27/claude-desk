@@ -70,7 +70,7 @@ describe('sdkRunner options', () => {
     expect(options.hooks?.PostToolUse?.[0]?.onFailure).toBe('continue')
     expect(options.hooks?.SubagentStop?.[0]?.onFailure).toBe('continue')
     expect(options.hooks?.PostToolUseFailure?.[0]?.onFailure).toBe('continue')
-    expect(options.settingSources).toEqual(['project'])
+    expect(options.settingSources).toEqual([])
   })
 
   it('aborts immediately when the caller signal is already aborted', async () => {
