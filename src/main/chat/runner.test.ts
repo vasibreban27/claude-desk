@@ -20,7 +20,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   }
 }))
 
-import { buildHooks, sdkRunner, type RunnerItem } from './runner'
+import { buildHooks, createSdkRunner, sdkRunner, type RunnerItem } from './runner'
 
 const run = (args: Partial<Parameters<typeof sdkRunner>[0]> = {}) =>
   sdkRunner({ prompt: 'p', cwd: '/w', pluginPath: '/plug', ...args })
@@ -71,6 +71,26 @@ describe('sdkRunner options', () => {
     expect(options.hooks?.SubagentStop?.[0]?.onFailure).toBe('continue')
     expect(options.hooks?.PostToolUseFailure?.[0]?.onFailure).toBe('continue')
     expect(options.settingSources).toEqual([])
+  })
+
+  it('passes the framed project CLAUDE.md as an appended claude_code preset only when it exists', async () => {
+    state.script = async function* () {}
+    const withCtx = createSdkRunner({ loadProjectContext: async () => 'Run npm test.' })
+    await collect(withCtx({ prompt: 'p', cwd: '/w', pluginPath: '/plug' }))
+    const a = (state.captured as unknown as Captured).options
+    expect(a.settingSources).toEqual([])
+    expect(a.systemPrompt).toMatchObject({ type: 'preset', preset: 'claude_code' })
+    const append = (a.systemPrompt as { append: string }).append
+    expect(append).toContain("Project instructions (from the project's CLAUDE.md")
+    expect(append.endsWith('Run npm test.')).toBe(true)
+
+    const without = createSdkRunner({ loadProjectContext: async () => null })
+    await collect(without({ prompt: 'p', cwd: '/w', pluginPath: '/plug' }))
+    expect('systemPrompt' in (state.captured as unknown as Captured).options).toBe(false)
+
+    const failing = createSdkRunner({ loadProjectContext: async () => Promise.reject(new Error('x')) })
+    await collect(failing({ prompt: 'p', cwd: '/w', pluginPath: '/plug' }))
+    expect('systemPrompt' in (state.captured as unknown as Captured).options).toBe(false)
   })
 
   it('aborts immediately when the caller signal is already aborted', async () => {

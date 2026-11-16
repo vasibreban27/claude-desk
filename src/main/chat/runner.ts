@@ -8,6 +8,7 @@ import {
   type AgentUsage,
   type RunUsage
 } from './activity'
+import { frameProjectContext, loadProjectContext } from './projectContext'
 import { ALLOWED_TOOLS, guardPreToolUse, isDenied } from './tools'
 
 /** What the chat service needs from the SDK; the renderer never sees raw SDK objects. */
@@ -132,8 +133,23 @@ function createQueue<T>() {
   }
 }
 
-/** Real runner: Agent SDK `query()` using the existing Claude Code login. */
-export const sdkRunner: ChatRunner = async function* (args) {
+export interface SdkRunnerDeps {
+  loadProjectContext: (cwd: string) => Promise<string | null>
+}
+
+/**
+ * Real runner: Agent SDK `query()` using the existing Claude Code login. The project's CLAUDE.md is read
+ * by the main process (settingSources stays []) and appended to Claude Code's default system prompt only
+ * when it exists; without it no `systemPrompt` option is set.
+ */
+export function createSdkRunner(deps: SdkRunnerDeps = { loadProjectContext }): ChatRunner {
+  return (args) => runSdk(args, deps)
+}
+
+export const sdkRunner: ChatRunner = createSdkRunner()
+
+async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<RunnerItem> {
+  const context = await deps.loadProjectContext(args.cwd).catch(() => null)
   const abortController = new AbortController()
   if (args.signal?.aborted) abortController.abort()
   else args.signal?.addEventListener('abort', () => abortController.abort(), { once: true })
@@ -147,6 +163,15 @@ export const sdkRunner: ChatRunner = async function* (args) {
       // user with no trust prompt and outside our PreToolUse guard (S50). The toolkit comes from `plugins`.
       // Revisiting this is a Phase 3/6 decision that needs a per-project trust setting.
       settingSources: [],
+      ...(context
+        ? {
+            systemPrompt: {
+              type: 'preset' as const,
+              preset: 'claude_code' as const,
+              append: frameProjectContext(context)
+            }
+          }
+        : {}),
       plugins: [{ type: 'local', path: args.pluginPath }],
       includePartialMessages: true,
       allowedTools: [...ALLOWED_TOOLS],
