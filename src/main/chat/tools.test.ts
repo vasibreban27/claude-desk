@@ -51,8 +51,15 @@ describe('guardPreToolUse', () => {
     expect(g('Skill', { skill: 'x', args: 'y' })).toEqual({})
   })
 
-  it.each(['Agent', 'Task'])('%s: allows only description, prompt, subagent_type and model (S31)', (tool) => {
+  it.each(['Agent', 'Task'])('%s: allows only string description, prompt, subagent_type, model, name and resume (S31)', (tool) => {
     expect(g(tool, { description: 'd', prompt: 'p', subagent_type: 'Explore', model: 'haiku' })).toEqual({})
+    expect(g(tool, { description: 'd', prompt: 'p', name: 'helper', resume: 'agent-1' })).toEqual({})
+    expect(isDenied(g(tool, { prompt: 'p', name: 1 }))).toBe(true)
+    expect(isDenied(g(tool, { prompt: 'p', resume: { id: 'x' } }))).toBe(true)
+    expect(isDenied(g(tool, { prompt: 'p', model: null }))).toBe(true)
+    for (const key of ['isolation', 'mode', 'team_name', 'cwd', 'run_in_background']) {
+      expect(isDenied(g(tool, { prompt: 'p', [key]: 'x' }))).toBe(true)
+    }
     expect(isDenied(g(tool, { description: 'd', prompt: 'p', isolation: 'worktree' }))).toBe(true)
     expect(isDenied(g(tool, { description: 'd', prompt: 'p', surprise: 1 }))).toBe(true)
     expect(isDenied(g(tool, { prompt: 'p', run_in_background: true }))).toBe(true)

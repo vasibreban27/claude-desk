@@ -13,7 +13,14 @@ const AGENT_TOOLS: ReadonlySet<string> = new Set(['Agent', 'Task'])
  * Conservative allowlist of Agent/Task input keys. Revisit when the SDK adds new Agent input fields:
  * anything not listed here is denied until it has been reviewed.
  */
-const AGENT_INPUT_KEYS: ReadonlySet<string> = new Set(['description', 'prompt', 'subagent_type', 'model'])
+const AGENT_INPUT_KEYS: ReadonlySet<string> = new Set([
+  'description',
+  'prompt',
+  'subagent_type',
+  'model',
+  'name',
+  'resume'
+])
 
 export interface GuardOutput {
   hookSpecificOutput?: {
@@ -206,6 +213,9 @@ function checkAgentTool(name: string, input: Record<string, unknown>): string | 
   for (const key of Object.keys(toolInput)) {
     if (!AGENT_INPUT_KEYS.has(key)) {
       return `Tool "${name}" input "${key}" is not allowed in chat.`
+    }
+    if (typeof (toolInput as Record<string, unknown>)[key] !== 'string') {
+      return `Tool "${name}" input "${key}" must be a string.`
     }
   }
   return null
