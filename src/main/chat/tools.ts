@@ -179,6 +179,12 @@ interface ProbeCtx {
   cache: Map<string, string | null>
 }
 
+/**
+ * S61: links are resolved with `realpathSync.native` (one OS call for the whole chain). The JS `realpathSync`
+ * follows every hop in userland: a 60-hop junction chain cost ~130 ms per probe against ~3 ms native.
+ * Checked on win32: junction chains, case and 8.3 short names resolve consistently; `realCwd` uses the same
+ * function, so containment compares like with like (this also fixes F42: 8.3 and long forms now agree).
+ */
 const MAX_PROBES = 256
 
 class ProbeBudgetError extends Error {}
@@ -198,7 +204,7 @@ function resolveRealCwd(ctx: ProbeCtx): string {
   if (ctx.realCwd !== null) return ctx.realCwd
   spend(ctx)
   try {
-    ctx.realCwd = realpathSync(path.resolve(ctx.cwd))
+    ctx.realCwd = realpathSync.native(path.resolve(ctx.cwd))
   } catch (error) {
     if (!isMissingError(error)) throw error
     ctx.realCwd = path.resolve(ctx.cwd)
@@ -228,7 +234,7 @@ function probeComponent(ctx: ProbeCtx, realCwd: string, next: string): string | 
   if (stats.isSymbolicLink()) {
     spend(ctx)
     try {
-      result = realpathSync(next)
+      result = realpathSync.native(next)
     } catch (error) {
       if (!isMissingError(error)) throw error
       spend(ctx)

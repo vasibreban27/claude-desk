@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-const fsCalls = vi.hoisted(() => ({ n: 0 }))
+const fsCalls = vi.hoisted(() => ({ n: 0, jsRealpath: 0 }))
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
@@ -29,9 +29,15 @@ vi.mock('node:fs', async (importOriginal) => {
     realpathSync: Object.assign(
       (...a: Parameters<typeof actual.realpathSync>) => {
         fsCalls.n++
+        fsCalls.jsRealpath++
         return actual.realpathSync(...a)
       },
-      actual.realpathSync
+      {
+        native: (...a: Parameters<typeof actual.realpathSync.native>) => {
+          fsCalls.n++
+          return actual.realpathSync.native(...a)
+        }
+      }
     )
   }
 })
@@ -495,5 +501,32 @@ describe('guardPreToolUse denies win32 trailing dot and space segments lexically
     expect(isDenied(g('Grep', { pattern: 'x', path: 'jfirst.' }))).toBe(true)
     expect(isDenied(g('Read', { file_path: 'jfirst./data.txt' }))).toBe(true)
     expect(fsCalls.n).toBe(0)
+  })
+})
+
+describe('guardPreToolUse bounds the cost of link chains (S61)', () => {
+  it('resolves a long chain of in-project junctions with a bounded number of calls', (ctx) => {
+    const target = path.join(cwd, 'chain-real')
+    mkdirSync(target, { recursive: true })
+    let prev = target
+    try {
+      for (let i = 0; i < 60; i++) {
+        const link = path.join(cwd, `chain-${i}`)
+        symlinkSync(prev, link, 'junction')
+        prev = link
+      }
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) ctx.skip()
+      throw error
+    }
+    fsCalls.n = 0
+    fsCalls.jsRealpath = 0
+    const head = path.basename(prev)
+    expect(g('Read', { file_path: `${head}/f.txt` })).toEqual({})
+    expect(g('Glob', { pattern: `{${head},src}/{a,b,c}/**` })).toEqual({})
+    // One native call per link regardless of chain length (previously one per hop).
+    expect(fsCalls.n).toBeLessThan(25)
+    // The JS realpath walks every hop in userland (~130 ms per probe for 60 hops); only the native one is allowed.
+    expect(fsCalls.jsRealpath).toBe(0)
   })
 })
