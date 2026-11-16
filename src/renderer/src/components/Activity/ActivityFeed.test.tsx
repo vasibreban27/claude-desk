@@ -97,6 +97,12 @@ describe('ActivityFeed', () => {
     expect(within(tool).queryByText('running')).toBeNull()
     expect(footer).toHaveTextContent('Run failed')
     expect(footer).toHaveTextContent('cost unknown')
+    expect(footer).not.toHaveTextContent('(estimated)')
+  })
+
+  it('appends (estimated) only for a known cost', () => {
+    renderFeed([ev({ type: 'run-finished', status: 'success', costUsd: 0.5, durationMs: 1 })])
+    expect(row(0)).toHaveTextContent('~$0.5000 (estimated)')
   })
 
   it('does not jump when scrolled up, and offers a way back', () => {

@@ -248,24 +248,51 @@ describe('workspace', () => {
     expect(await screen.findByText('Run started')).toBeInTheDocument()
   })
 
-  it('refetches usage when a run finishes for the selected project', async () => {
+  const finishedEvent = (seq: number, runId = 'r1'): ActivityEvent => ({
+    projectId: P1.id,
+    runId,
+    seq,
+    at: '2026-01-01T10:00:05.000+00:00',
+    agent: 'main',
+    agentId: null,
+    type: 'run-finished',
+    status: 'success',
+    costUsd: 0.01,
+    durationMs: 5000
+  })
+
+  it('refetches usage once per live run-finished, not on repeats or re-renders', async () => {
     await selectAlpha()
+    await screen.findByText(/No activity yet/)
     await waitFor(() => expect(api.usageSummary).toHaveBeenCalled())
     const before = api.usageSummary.mock.calls.length
-    act(() =>
-      emitActivity({
-        projectId: P1.id,
-        runId: 'r1',
-        seq: 1,
-        at: '2026-01-01T10:00:05.000+00:00',
-        agent: 'main',
-        agentId: null,
-        type: 'run-finished',
-        status: 'success',
-        costUsd: 0.01,
-        durationMs: 5000
-      })
-    )
-    await waitFor(() => expect(api.usageSummary.mock.calls.length).toBeGreaterThan(before))
+    act(() => emitActivity(finishedEvent(1)))
+    await waitFor(() => expect(api.usageSummary.mock.calls.length).toBe(before + 1))
+    act(() => emitActivity(finishedEvent(1)))
+    act(() => emitActivity(finishedEvent(2)))
+    fireEvent.click(screen.getByRole('tab', { name: 'Usage' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(api.usageSummary.mock.calls.length).toBe(before + 1)
+    act(() => emitActivity(finishedEvent(1, 'r2')))
+    await waitFor(() => expect(api.usageSummary.mock.calls.length).toBe(before + 2))
+  })
+
+  it('does not refetch usage for a finished run loaded from history', async () => {
+    api.activityHistory.mockResolvedValue([finishedEvent(1)])
+    await selectAlpha()
+    await screen.findByText('Run finished')
+    await waitFor(() => expect(api.usageSummary).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 20))
+    expect(api.usageSummary).toHaveBeenCalledTimes(1)
+  })
+
+  it('links every tab to the single tabpanel, which is focusable', async () => {
+    await selectAlpha()
+    const panel = screen.getByRole('tabpanel')
+    expect(panel).toHaveAttribute('tabindex', '0')
+    for (const name of ['Activity', 'Usage']) {
+      expect(screen.getByRole('tab', { name })).toHaveAttribute('aria-controls', panel.id)
+    }
   })
 })

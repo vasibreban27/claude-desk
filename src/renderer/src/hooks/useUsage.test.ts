@@ -73,4 +73,39 @@ describe('useUsage', () => {
     await waitFor(() => expect(result.current.error).not.toBeNull())
     expect(result.current.summary?.totals.runs).toBe(3)
   })
+
+  const PID2 = '22222222-2222-4222-8222-222222222222'
+
+  it('hides the previous project summary while the new project loads', async () => {
+    let resolveSecond: (s: UsageSummary) => void = () => {}
+    const fn = vi
+      .fn()
+      .mockResolvedValueOnce(summary(3))
+      .mockImplementationOnce(() => new Promise<UsageSummary>((r) => (resolveSecond = r)))
+    mockApi(fn)
+    const { result, rerender } = renderHook(({ p }) => useUsage(p), { initialProps: { p: PID } })
+    await waitFor(() => expect(result.current.summary?.totals.runs).toBe(3))
+    rerender({ p: PID2 })
+    expect(result.current.summary).toBeNull()
+    expect(result.current.loading).toBe(true)
+    await act(async () => resolveSecond(summary(7)))
+    expect(result.current.summary?.totals.runs).toBe(7)
+    expect(result.current.loading).toBe(false)
+  })
+
+  it('shows only the error, not the old summary, when the new project fails to load', async () => {
+    const fn = vi
+      .fn()
+      .mockResolvedValueOnce(summary(3))
+      .mockRejectedValueOnce(new Error('x'))
+      .mockResolvedValue(summary(3))
+    mockApi(fn)
+    const { result, rerender } = renderHook(({ p }) => useUsage(p), { initialProps: { p: PID } })
+    await waitFor(() => expect(result.current.summary?.totals.runs).toBe(3))
+    rerender({ p: PID2 })
+    await waitFor(() => expect(result.current.error).not.toBeNull())
+    expect(result.current.summary).toBeNull()
+    rerender({ p: PID })
+    expect(result.current.error).toBeNull()
+  })
 })

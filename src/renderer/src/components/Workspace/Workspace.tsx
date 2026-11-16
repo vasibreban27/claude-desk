@@ -31,18 +31,25 @@ export interface WorkspaceProps {
 
 export function Workspace({ projectId, projectNames }: WorkspaceProps) {
   const [tab, setTab] = useState<WorkspaceTab>(readStoredTab)
-  const [refresh, setRefresh] = useState<{ seenRunId: string | null; signal: number }>({
-    seenRunId: null,
-    signal: 0
-  })
+  const [refresh, setRefresh] = useState<{
+    baselineFor: string | null
+    seenRunId: string | null
+    signal: number
+  }>({ baselineFor: null, seenRunId: null, signal: 0 })
   const tabRefs = useRef<Record<WorkspaceTab, HTMLButtonElement | null>>({ activity: null, usage: null })
 
   const activity = useActivity(projectId)
 
-  // A finished run (live or from history) changes the usage totals: refetch once per finished run.
-  const finishedRunId = activity.events.find((ev) => ev.type === 'run-finished')?.runId ?? null
-  if (finishedRunId !== null && finishedRunId !== refresh.seenRunId) {
-    setRefresh({ seenRunId: finishedRunId, signal: refresh.signal + 1 })
+  // A run that finishes while the project is open changes the usage totals: refetch once per run id.
+  // A finished run already in the loaded history is the baseline and does not trigger a refetch.
+  const activityReady = activity.projectId === projectId && !activity.loading
+  if (activityReady) {
+    const finishedRunId = activity.events.find((ev) => ev.type === 'run-finished')?.runId ?? null
+    if (refresh.baselineFor !== projectId) {
+      setRefresh({ baselineFor: projectId, seenRunId: finishedRunId, signal: refresh.signal })
+    } else if (finishedRunId !== null && finishedRunId !== refresh.seenRunId) {
+      setRefresh({ ...refresh, seenRunId: finishedRunId, signal: refresh.signal + 1 })
+    }
   }
   const usage = useUsage(projectId, refresh.signal)
 
@@ -81,7 +88,7 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
             role="tab"
             id={`workspace-tab-${t.id}`}
             aria-selected={tab === t.id}
-            aria-controls={`workspace-panel-${t.id}`}
+            aria-controls="workspace-panel"
             tabIndex={tab === t.id ? 0 : -1}
             className="workspace__tab"
             onClick={() => select(t.id)}
@@ -93,12 +100,13 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
       </div>
       <div
         role="tabpanel"
-        id={`workspace-panel-${tab}`}
+        id="workspace-panel"
         aria-labelledby={`workspace-tab-${tab}`}
+        tabIndex={0}
         className="workspace__panel"
       >
         {tab === 'activity' ? (
-          <ActivityFeed {...activity} hasProject />
+          <ActivityFeed events={activity.events} loading={activity.loading} error={activity.error} hasProject />
         ) : (
           <UsagePanel {...usage} projectNames={projectNames} />
         )}

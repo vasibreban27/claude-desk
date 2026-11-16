@@ -58,6 +58,11 @@ export function UsagePanel({
         </p>
       )}
       {loading && !summary && <p className="usage__status">Loading usage…</p>}
+      {loading && summary && (
+        <p role="status" className="usage__status">
+          Refreshing…
+        </p>
+      )}
       {empty && <p className="usage__status">No runs in this period.</p>}
       {summary && !empty && (
         <>

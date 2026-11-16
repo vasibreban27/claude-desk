@@ -83,10 +83,37 @@ describe('useActivity', () => {
     expect(result.current.loading).toBe(false)
   })
 
+  it('clears a history error when a live event arrives for the project', async () => {
+    const { emit } = setup(new Error('boom'))
+    const { result } = renderHook(() => useActivity(P1))
+    await waitFor(() => expect(result.current.error).not.toBeNull())
+    emit(ev(9, P2))
+    expect(result.current.error).not.toBeNull()
+    emit(ev(0))
+    expect(result.current.error).toBeNull()
+    expect(result.current.events.map((e) => e.seq)).toEqual([0])
+  })
+
+  it('ignores a stale history result after switching project mid-flight', async () => {
+    let resolveFirst: (h: ActivityEvent[]) => void = () => {}
+    const activityHistory = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<ActivityEvent[]>((r) => (resolveFirst = r)))
+      .mockResolvedValueOnce([ev(0, P2, 'r2')])
+    window.api = { activityHistory, onActivityEvent: vi.fn(() => () => {}) } as unknown as DeskApi
+    const { result, rerender } = renderHook(({ p }) => useActivity(p), { initialProps: { p: P1 } })
+    rerender({ p: P2 })
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.events.map((e) => e.projectId)).toEqual([P2])
+    await act(async () => resolveFirst([ev(0, P1), ev(1, P1)]))
+    expect(result.current.events.map((e) => e.projectId)).toEqual([P2])
+    expect(result.current.events).toHaveLength(1)
+  })
+
   it('does nothing without a project', () => {
     const { activityHistory } = setup()
     const { result } = renderHook(() => useActivity(null))
     expect(activityHistory).not.toHaveBeenCalled()
-    expect(result.current).toEqual({ events: [], loading: false, error: null })
+    expect(result.current).toEqual({ projectId: null, events: [], loading: false, error: null })
   })
 })

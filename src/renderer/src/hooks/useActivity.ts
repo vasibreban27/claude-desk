@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import type { ActivityEvent } from '@shared/ipc'
 
 export interface UseActivity {
+  /** Project the returned state belongs to (lags `projectId` for one render after a switch). */
+  projectId: string | null
   events: ActivityEvent[]
   loading: boolean
   error: string | null
@@ -46,7 +48,7 @@ export function useActivity(projectId: string | null): UseActivity {
     // Subscribe before loading history so no event is missed; overlaps are deduplicated.
     const unsubscribe = api.onActivityEvent((event) => {
       if (event.projectId !== projectId) return
-      setState((s) => (s.projectId === projectId ? { ...s, events: addEvent(s.events, event) } : s))
+      setState((s) => (s.projectId === projectId ? { ...s, events: addEvent(s.events, event), error: null } : s))
     })
     api
       .activityHistory({ projectId })
@@ -70,5 +72,5 @@ export function useActivity(projectId: string | null): UseActivity {
     }
   }, [projectId])
 
-  return { events: state.events, loading: state.loading, error: state.error }
+  return { projectId: state.projectId, events: state.events, loading: state.loading, error: state.error }
 }

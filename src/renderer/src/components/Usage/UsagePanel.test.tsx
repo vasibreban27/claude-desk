@@ -73,6 +73,12 @@ describe('UsagePanel', () => {
     expect(screen.getByText(/Loading usage/)).toBeInTheDocument()
   })
 
+  it('shows a Refreshing indicator while loading with data', () => {
+    render(<UsagePanel {...props({ loading: true })} />)
+    expect(screen.getByText(/Refreshing/)).toBeInTheDocument()
+    expect(screen.queryByText(/Loading usage/)).toBeNull()
+  })
+
   it('changes range and scope through the controls', () => {
     const p = props()
     render(<UsagePanel {...p} />)

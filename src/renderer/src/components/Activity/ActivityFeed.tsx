@@ -4,7 +4,7 @@ import { isNearBottom } from '../Chat/stickToBottom'
 import { buildRows, formatCost, formatDuration, formatTime, type ActivityRow } from './rows'
 import './activity.css'
 
-export interface ActivityFeedProps extends UseActivity {
+export interface ActivityFeedProps extends Omit<UseActivity, 'projectId'> {
   hasProject: boolean
 }
 
@@ -25,7 +25,10 @@ function Row({ row }: { row: ActivityRow }) {
       <li className={`activity__row activity__row--footer${ok ? '' : ' activity__row--error'}`}>
         <time dateTime={row.at}>{formatTime(row.at)}</time>
         <span className="activity__status">{ok ? 'Run finished' : 'Run failed'}</span>
-        <span>{formatCost(row.costUsd)} (estimated)</span>
+        <span>
+          {formatCost(row.costUsd)}
+          {row.costUsd !== null && ' (estimated)'}
+        </span>
         {row.durationMs !== null && <span>{formatDuration(row.durationMs)}</span>}
       </li>
     )
