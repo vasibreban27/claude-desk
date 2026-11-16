@@ -1,11 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
+  ACTIVITY_BUFFER_MAX,
   CHAT_TEXT_MAX,
   IPC,
+  activityHistoryRequestSchema,
   chatHistoryRequestSchema,
   chatSendRequestSchema,
-  projectsRefreshRequestSchema
+  projectsRefreshRequestSchema,
+  usageSummaryRequestSchema
 } from './ipc'
 
 const uuid = '2f1b6c3e-8d5a-4c1e-9b7a-3e6f1d2c4a5b'
@@ -19,7 +22,10 @@ describe('IPC channels', () => {
         'projects:refresh',
         'chat:history',
         'chat:send',
-        'chat:event'
+        'chat:event',
+        'activity:event',
+        'activity:history',
+        'usage:summary'
       ].sort()
     )
   })
@@ -60,5 +66,32 @@ describe('shared module hygiene', () => {
   it('has no any and no node or electron imports', () => {
     expect(src).not.toMatch(/:\s*any\b|\bas any\b|<any>/)
     expect(src).not.toMatch(/from ['"](node:|electron|fs|path)/)
+  })
+})
+
+describe('phase 2 contract', () => {
+  it('names the activity and usage channels', () => {
+    expect(IPC.activityEvent).toBe('activity:event')
+    expect(IPC.activityHistory).toBe('activity:history')
+    expect(IPC.usageSummary).toBe('usage:summary')
+    expect(ACTIVITY_BUFFER_MAX).toBe(500)
+  })
+
+  it('validates activityHistoryRequestSchema', () => {
+    expect(activityHistoryRequestSchema.safeParse({ projectId: uuid }).success).toBe(true)
+    expect(activityHistoryRequestSchema.safeParse({ projectId: 'x' }).success).toBe(false)
+  })
+
+  it('validates usageSummaryRequestSchema', () => {
+    const ok = (v: unknown): boolean => usageSummaryRequestSchema.safeParse(v).success
+    expect(ok({ projectId: uuid, days: 30 })).toBe(true)
+    expect(ok({ projectId: null, days: 1 })).toBe(true)
+    expect(ok({ projectId: null, days: 365 })).toBe(true)
+    expect(ok({ projectId: null, days: 0 })).toBe(false)
+    expect(ok({ projectId: null, days: 366 })).toBe(false)
+    expect(ok({ projectId: null, days: 1.5 })).toBe(false)
+    expect(ok({ projectId: 'nope', days: 7 })).toBe(false)
+    expect(ok({ days: 7 })).toBe(false)
+    expect(ok(null)).toBe(false)
   })
 })

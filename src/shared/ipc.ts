@@ -3,6 +3,8 @@ import { z } from 'zod'
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
 
 export const CHAT_TEXT_MAX = 20000
+/** Max events kept (and returned) per project for the latest run. */
+export const ACTIVITY_BUFFER_MAX = 500
 
 export const IPC = {
   projectsList: 'projects:list',
@@ -10,7 +12,10 @@ export const IPC = {
   projectsRefresh: 'projects:refresh',
   chatHistory: 'chat:history',
   chatSend: 'chat:send',
-  chatEvent: 'chat:event'
+  chatEvent: 'chat:event',
+  activityEvent: 'activity:event',
+  activityHistory: 'activity:history',
+  usageSummary: 'usage:summary'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -50,6 +55,17 @@ export const chatSendRequestSchema = z.object({
 })
 export type ChatSendRequest = z.infer<typeof chatSendRequestSchema>
 
+export const activityHistoryRequestSchema = z.object({ projectId: z.uuid() })
+export type ActivityHistoryRequest = z.infer<typeof activityHistoryRequestSchema>
+
+export const usageSummaryRequestSchema = z.object({
+  /** null = all projects. */
+  projectId: z.uuid().nullable(),
+  /** Window = last `days` local calendar days including today. */
+  days: z.number().int().min(1).max(365)
+})
+export type UsageSummaryRequest = z.infer<typeof usageSummaryRequestSchema>
+
 // --- Results ----------------------------------------------------------------
 
 export type ProjectsListResult = Project[]
@@ -69,12 +85,92 @@ export type ChatHistoryResult = ChatMessage[]
 export type ChatSendError = 'not-found' | 'busy' | 'invalid'
 export type ChatSendResult = { ok: true; turnId: string } | { ok: false; error: ChatSendError }
 
+export type ActivityHistoryResult = ActivityEvent[]
+
+export interface UsageTotals {
+  runs: number
+  costUsd: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+}
+
+export interface UsageByDay {
+  /** Local date, YYYY-MM-DD. */
+  day: string
+  runs: number
+  costUsd: number
+  inputTokens: number
+  outputTokens: number
+}
+
+export interface UsageByAgent {
+  agent: string
+  steps: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  approximate: boolean
+}
+
+export interface UsageByProject {
+  projectId: string
+  runs: number
+  costUsd: number
+}
+
+/** Costs are client-side estimates, never billing figures. */
+export interface UsageSummary {
+  days: number
+  estimated: true
+  totals: UsageTotals
+  byDay: UsageByDay[]
+  byAgent: UsageByAgent[]
+  /** Empty when the request named a project. */
+  byProject: UsageByProject[]
+}
+
+export type UsageSummaryResult = UsageSummary
+
 // --- Events (main -> renderer) ----------------------------------------------
 
 export type ChatEvent =
   | { projectId: string; turnId: string; type: 'text-delta'; text: string }
   | { projectId: string; turnId: string; type: 'done' }
   | { projectId: string; turnId: string; type: 'error'; message: string }
+
+export type ActivityEventBody =
+  | { type: 'run-started' }
+  | { type: 'tool-started'; toolUseId: string; tool: string; summary: string }
+  | {
+      type: 'tool-finished'
+      toolUseId: string
+      tool: string
+      durationMs: number | null
+      denied: boolean
+    }
+  | { type: 'agent-finished'; summary: string }
+  | {
+      type: 'run-finished'
+      status: 'success' | 'error'
+      costUsd: number | null
+      durationMs: number | null
+    }
+
+export type ActivityEvent = {
+  projectId: string
+  runId: string
+  /** Per run, starts at 0. */
+  seq: number
+  /** ISO-8601 with offset. */
+  at: string
+  /** "main" or the subagent type. */
+  agent: string
+  /** SDK agent_id; null for main. */
+  agentId: string | null
+} & ActivityEventBody
 
 // --- Renderer-facing API exposed as window.api ------------------------------
 
@@ -86,4 +182,8 @@ export interface DeskApi {
   chatSend(req: ChatSendRequest): Promise<ChatSendResult>
   /** Subscribe to chat events; returns an unsubscribe function. */
   onChatEvent(listener: (event: ChatEvent) => void): () => void
+  activityHistory(req: ActivityHistoryRequest): Promise<ActivityHistoryResult>
+  usageSummary(req: UsageSummaryRequest): Promise<UsageSummaryResult>
+  /** Subscribe to activity events; returns an unsubscribe function. */
+  onActivityEvent(listener: (event: ActivityEvent) => void): () => void
 }
