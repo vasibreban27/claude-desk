@@ -1,13 +1,34 @@
 import { randomUUID } from 'node:crypto'
-import type { ChatEvent, ChatMessage, ChatSendResult } from '../../shared/ipc'
+import {
+  ACTIVITY_BUFFER_MAX,
+  type ActivityEvent,
+  type ChatEvent,
+  type ChatMessage,
+  type ChatSendResult
+} from '../../shared/ipc'
 import { loadConfig, ConfigError, type ConfigResult } from '../config'
+import type { RunStore } from '../db'
+import type { ActivityDraft, AgentUsage, RunUsage } from './activity'
 import type { ChatRunner } from './runner'
+
+interface RunState {
+  projectId: string
+  runId: string
+  startedAt: Date
+  seq: number
+  usage: { usage: RunUsage; agents: AgentUsage[] } | null
+  finished: boolean
+}
 
 export interface ChatServiceDeps {
   /** Returns the absolute project path, or undefined when the project is unknown. */
   resolveProjectPath: (projectId: string) => string | undefined
   runner: ChatRunner
   emit: (event: ChatEvent) => void
+  /** Receives stamped activity events (same routing as `emit` is the caller's job). */
+  emitActivity?: (event: ActivityEvent) => void
+  /** Where finished runs' usage is saved; optional so chat works without a database. */
+  runStore?: Pick<RunStore, 'recordRun'>
   loadConfig?: () => ConfigResult
   now?: () => Date
   newId?: () => string
@@ -20,6 +41,7 @@ export class ChatService {
   private readonly history = new Map<string, ChatMessage[]>()
   private readonly sessions = new Map<string, string>()
   private readonly busy = new Set<string>()
+  private readonly activity = new Map<string, ActivityEvent[]>()
   private readonly deps: ChatServiceDeps
 
   constructor(deps: ChatServiceDeps) {
@@ -51,9 +73,11 @@ export class ChatService {
     text: string,
     assistant: ChatMessage
   ): Promise<void> {
+    let run: RunState | null = null
     try {
       const cfg = (this.deps.loadConfig ?? (() => loadConfig()))()
       if (!cfg.ok) throw cfg.error
+      run = this.startRun(projectId)
       const stream = this.deps.runner({
         prompt: text,
         cwd: projectPath,
@@ -63,19 +87,89 @@ export class ChatService {
       for await (const item of stream) {
         if (item.kind === 'session') {
           this.sessions.set(projectId, item.sessionId)
+        } else if (item.kind === 'activity') {
+          this.recordActivity(run, item.draft)
+        } else if (item.kind === 'usage') {
+          run.usage = item
         } else {
           assistant.text += item.text
           this.deps.emit({ projectId, turnId, type: 'text-delta', text: item.text })
         }
       }
+      this.finishRun(run, run.usage?.usage.isError ? 'error' : 'success')
       this.busy.delete(projectId)
       this.deps.emit({ projectId, turnId, type: 'done' })
     } catch (err) {
+      if (run) this.finishRun(run, 'error')
       this.busy.delete(projectId)
       console.error('chat turn failed:', err instanceof Error ? err.name : 'unknown')
       const message = err instanceof ConfigError ? err.message : GENERIC_ERROR
       this.deps.emit({ projectId, turnId, type: 'error', message })
     }
+  }
+
+  /** Latest run's events for a project, oldest first; [] when none. */
+  activityHistory(projectId: string): ActivityEvent[] {
+    return (this.activity.get(projectId) ?? []).map((e) => ({ ...e }))
+  }
+
+  private startRun(projectId: string): RunState {
+    const startedAt = this.now()
+    const run: RunState = { projectId, runId: this.id(), startedAt, seq: 0, usage: null, finished: false }
+    this.activity.set(projectId, [])
+    this.recordActivity(run, { agent: 'main', agentId: null, type: 'run-started' })
+    return run
+  }
+
+  private recordActivity(run: RunState, draft: ActivityDraft): void {
+    const event = {
+      ...draft,
+      projectId: run.projectId,
+      runId: run.runId,
+      seq: run.seq++,
+      at: this.now().toISOString()
+    } as ActivityEvent
+    const buffer = this.activity.get(run.projectId)
+    if (buffer) {
+      buffer.push(event)
+      if (buffer.length > ACTIVITY_BUFFER_MAX) buffer.splice(0, buffer.length - ACTIVITY_BUFFER_MAX)
+    }
+    try {
+      this.deps.emitActivity?.(event)
+    } catch {
+      console.error('activity emit failed')
+    }
+  }
+
+  /** Emits exactly one run-finished and stores the run's usage; a store failure never breaks the chat turn. */
+  private finishRun(run: RunState, status: 'success' | 'error'): void {
+    if (run.finished) return
+    run.finished = true
+    this.recordActivity(run, {
+      agent: 'main',
+      agentId: null,
+      type: 'run-finished',
+      status,
+      costUsd: run.usage?.usage.costUsd ?? null,
+      durationMs: run.usage?.usage.durationMs ?? null
+    })
+    if (run.usage && this.deps.runStore) {
+      try {
+        this.deps.runStore.recordRun({
+          runId: run.runId,
+          projectId: run.projectId,
+          startedAt: run.startedAt.getTime(),
+          usage: run.usage.usage,
+          agents: run.usage.agents
+        })
+      } catch (err) {
+        console.error('recording run usage failed:', err instanceof Error ? err.name : 'unknown')
+      }
+    }
+  }
+
+  private now(): Date {
+    return this.deps.now?.() ?? new Date()
   }
 
   private append(projectId: string, role: ChatMessage['role'], text: string): ChatMessage {
