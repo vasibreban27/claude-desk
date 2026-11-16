@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 const fsCalls = vi.hoisted(() => ({ n: 0, jsRealpath: 0 }))
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -595,7 +595,7 @@ describe('guardPreToolUse link edge cases (F43)', () => {
 
 describe('guardPreToolUse denies backslashes in globs on POSIX (F12)', () => {
   const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor
-  afterAll(() => Object.defineProperty(process, 'platform', realPlatform))
+  afterEach(() => Object.defineProperty(process, 'platform', realPlatform))
   const as = (platform: NodeJS.Platform) => Object.defineProperty(process, 'platform', { ...realPlatform, value: platform })
 
   it('denies an escaped ".." glob on linux with no fs calls', () => {
