@@ -185,7 +185,8 @@ interface ProbeCtx {
  * Checked on win32: junction chains, case and 8.3 short names resolve consistently; `realCwd` uses the same
  * function, so containment compares like with like (this also fixes F42: 8.3 and long forms now agree).
  */
-const MAX_PROBES = 256
+/** F40: sized so the documented 128 brace expansions of a typical monorepo glob fit (`{16}/{8}/src/**` costs 272). */
+const MAX_PROBES = 512
 
 class ProbeBudgetError extends Error {}
 
@@ -264,6 +265,8 @@ function targetBase(ctx: ProbeCtx, raw: string, resolved: string): string | null
   const lexicalCwd = path.resolve(ctx.cwd)
   if (isInside(lexicalCwd, resolved)) return lexicalCwd
   // Compare against the real cwd too (cwd reached through a link or a short name), still without walking.
+  // F42: the real cwd is the native (long, true-case) form, so a long-form path under an 8.3 cwd is accepted.
+  // The reverse (an 8.3 path under a long-form cwd) fails closed: canonicalizing it would need extra probes.
   const realCwd = resolveRealCwd(ctx)
   return isInside(realCwd, resolved) ? realCwd : null
 }
@@ -286,11 +289,14 @@ const TOO_COMPLEX = 'Glob pattern is too complex to check safely: use fewer brac
 
 /** null when the pattern is acceptable, otherwise the deny reason (`outside` or a complexity reason). */
 function patternDenial(ctx: ProbeCtx, base: string, pattern: string, outside: string): string | null {
+  // F41: the character cap covers every pattern, brace-free ones included, before any other work.
+  if (pattern.length > MAX_PATH_LENGTH) return TOO_DEEP
   const expansions = expandBraces(pattern)
   if (expansions === null) return outside
   // Lexical pass over every expansion first, so a denial never costs a filesystem access.
   if (!expansions.every(expansionLexicallyOk)) return outside
-  if (expansions.some((e) => segmentCount(e) > MAX_PATH_SEGMENTS)) return TOO_DEEP
+  // Only the literal prefix is walked on disk, so only its segments count (`src/**/*/*/x` is cheap).
+  if (expansions.some((e) => segmentCount(literalPrefix(e)) > MAX_PATH_SEGMENTS)) return TOO_DEEP
   const targets = new Map<string, string>()
   for (const expanded of expansions) {
     const prefix = literalPrefix(expanded)

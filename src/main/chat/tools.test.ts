@@ -340,12 +340,12 @@ describe('guardPreToolUse bounds the filesystem work of brace expansion (S51)', 
   })
 
   it('denies with a clear reason when the probe budget is exceeded', () => {
-    const names = Array.from({ length: 64 }, (_, i) => `q${i}`)
-    for (const n of names) mkdirSync(path.join(cwd, 'fan', n, 'a', 'b', 'c'), { recursive: true })
-    const out = g('Glob', { pattern: `fan/{${names.join(',')}}/a/b/c/*` })
+    const names = Array.from({ length: 100 }, (_, i) => `q${i}`)
+    for (const n of names) mkdirSync(path.join(cwd, 'fan', n, 'a', 'b', 'c', 'd', 'e'), { recursive: true })
+    const out = g('Glob', { pattern: `fan/{${names.join(',')}}/a/b/c/d/e/*` })
     expect(isDenied(out)).toBe(true)
     expect(out.hookSpecificOutput?.permissionDecisionReason).toContain('too complex')
-    expect(fsCalls.n).toBeLessThanOrEqual(300)
+    expect(fsCalls.n).toBeLessThanOrEqual(600)
   })
 
   it('allows a legitimate fan-out glob over existing directories (F30)', () => {
@@ -528,5 +528,43 @@ describe('guardPreToolUse bounds the cost of link chains (S61)', () => {
     expect(fsCalls.n).toBeLessThan(25)
     // The JS realpath walks every hop in userland (~130 ms per probe for 60 hops); only the native one is allowed.
     expect(fsCalls.jsRealpath).toBe(0)
+  })
+})
+
+describe('guardPreToolUse budget, pattern caps and path forms (F40, F41, F42)', () => {
+  beforeEach(() => {
+    fsCalls.n = 0
+  })
+
+  it('allows a 16 x 8 fan-out glob that costs more than 256 probes (F40)', () => {
+    const a = Array.from({ length: 16 }, (_, i) => `m${i}`)
+    const b = Array.from({ length: 8 }, (_, i) => `n${i}`)
+    for (const x of a) for (const y of b) mkdirSync(path.join(cwd, x, y, 'src'), { recursive: true })
+    const pattern = `{${a.join(',')}}/{${b.join(',')}}/src/**`
+    expect(g('Glob', { pattern })).toEqual({})
+    expect(fsCalls.n).toBeGreaterThan(256)
+    expect(fsCalls.n).toBeLessThanOrEqual(512)
+  })
+
+  it('denies a brace-free pattern longer than 4096 characters with no fs calls (F41)', () => {
+    for (const out of [g('Glob', { pattern: 'x'.repeat(4097) }), g('Grep', { pattern: 'x', glob: '*'.repeat(4097) })]) {
+      expect(isDenied(out)).toBe(true)
+      expect(out.hookSpecificOutput?.permissionDecisionReason).toContain('4096 characters')
+    }
+    expect(fsCalls.n).toBe(0)
+  })
+
+  it('counts only literal-prefix segments toward the segment cap (F41)', () => {
+    expect(g('Glob', { pattern: 'src/' + '*/'.repeat(100) + 'x' })).toEqual({})
+    expect(isDenied(g('Glob', { pattern: 'a/'.repeat(65) + '*' }))).toBe(true)
+  })
+
+  it.runIf(process.platform === 'win32')('treats long and 8.3 forms of the cwd alike (F42)', (ctx) => {
+    const long = realpathSync.native(cwd)
+    if (long.toLowerCase() === cwd.toLowerCase()) ctx.skip() // the temp dir has no short form here
+    expect(guardPreToolUse({ tool_name: 'Read', tool_input: { file_path: path.join(long, 'a.txt') } }, cwd)).toEqual({})
+    // Documented limit: an 8.3 path under a long-form cwd fails closed (usability only, never unsafe).
+    expect(isDenied(guardPreToolUse({ tool_name: 'Read', tool_input: { file_path: path.join(cwd, 'a.txt') } }, long))).toBe(true)
+    expect(isDenied(guardPreToolUse({ tool_name: 'Read', tool_input: { file_path: path.join(outside, 'data.txt') } }, long))).toBe(true)
   })
 })
