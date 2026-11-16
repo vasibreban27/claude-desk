@@ -218,7 +218,7 @@ Tasks that touch the contract say `Contract: <channel>`.
 ### Wave 4
 
 ### T7: IPC wiring and database bootstrap
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: `activity:event`, `activity:history`, `usage:summary`
 - Owns: `src/main/ipc/handlers.ts`, `src/main/ipc/handlers.test.ts`, `src/main/ipc/register.ts`, `src/preload/index.ts`, `src/preload/index.test.ts`, `src/main/index.ts`, `src/main/index.test.ts`
@@ -231,7 +231,7 @@ Tasks that touch the contract say `Contract: <channel>`.
   - Given the app quits When `will-quit` fires Then handlers are removed and the database is closed.
 
 ### T8: Workspace tabs and app wiring
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Contract: none (consumes T5 and T6)
 - Owns: `src/renderer/src/components/Workspace/**`, `src/renderer/src/App.tsx`, `src/renderer/src/App.test.tsx`
@@ -297,4 +297,10 @@ Wave 3 (reviewer and security audit both PASS; minor findings, not fixed):
 - F4 `src/renderer/src/hooks/useActivity.test.ts`: no test for a project switch while history is in flight (stale-history guard untested).
 - F5 `src/renderer/src/hooks/useActivity.ts:61-66`: after a history load failure the error stays until the project changes while live rows keep appending; clear the error on the next live event.
 - T4 caveats: `duration_ms` on `PostToolUse` and `last_assistant_message` on `SubagentStop` not confirmed by the docs (code degrades to null/empty; check live in T9); unsure whether a denied tool also fires `PostToolUseFailure` (possible duplicate `tool-finished`); a config error produces no activity run; a runner that throws before any result records nothing to the store; `Stop` is not registered (maps to no event).
+Wave 4 (reviewer and security audit both PASS; minor findings, not fixed):
+- F1 `src/main/ipc/register.ts:26`, `src/main/index.ts:78`: no test for `emitActivity` routing, for the dispose list including the new channels, or for the database close at `will-quit` (`register.ts` has no test file; predates T7). A short `register.test.ts` with mocked electron would cover it.
+- F2 `src/renderer/src/components/Workspace/Workspace.tsx:51`: a finished run loaded from history bumps the usage refresh signal on mount (and on project switch with scope "all"), causing one extra, harmless fetch. Seed `seenRunId` from the first history load or bump only on live events.
+- F3 `src/renderer/src/components/Workspace/Workspace.tsx:90`: `aria-controls` on the inactive tab points to a panel that is not rendered, and the tabpanel has no `tabIndex={0}`. Render one panel with a fixed id (or set `aria-controls` only on the selected tab) and add `tabIndex={0}`.
+- F4 `src/renderer/src/App.test.tsx`: the refresh test does not assert that a repeated `run-finished` with the same run id leaves the usage call count unchanged ("once per run id").
+- `tests/integration/main-flow.test.ts` (Phase 1) also times out under parallel load (about 3s alone, 5s limit) and the `afterEach` cleanup then fails with EPERM; same class as the `status.test.ts` timeout. Both pass alone.
 - Known, outside this plan: `src/main/git/status.test.ts` times out under parallel load (deferred by the user).
