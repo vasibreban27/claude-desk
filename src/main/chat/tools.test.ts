@@ -614,7 +614,7 @@ describe('guardPreToolUse denies backslashes in globs on POSIX (F12)', () => {
 })
 
 describe('guardPreToolUse walks the prefix through parentheses and "!" (S71)', () => {
-  for (const dir of ['(grp)', 'a!b']) it(`denies an absolute glob through a junction below "${dir}"`, (ctx) => {
+  for (const dir of ['(grp)', 'a!b', 'a]b', 'x)']) it(`denies an absolute glob through a junction below "${dir}"`, (ctx) => {
     mkdirSync(path.join(cwd, dir), { recursive: true })
     makeLink(ctx, outside, path.join(cwd, dir, 'jin'))
     const abs = path.join(cwd, dir, 'jin').split(path.sep).join('/')

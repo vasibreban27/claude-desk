@@ -67,11 +67,12 @@ function lexicallyOutside(cwd: string, raw: string, resolved: string): boolean {
 }
 
 /**
- * Characters the search tools treat as glob syntax. `(`, `)` and `!` are NOT in this set: the Glob tool takes them
- * literally (Next.js route groups like `app/(group)/`), so cutting the prefix there would leave the directories
- * after them unchecked (S71). Walking a longer prefix is always the safe direction.
+ * Characters that start glob syntax for the Glob tool's base directory: it cuts an absolute pattern at the first
+ * `*`, `?`, `[` or `{`. `(`, `)`, `!` and `]` are NOT in this set: they are literal (Next.js route groups like
+ * `app/(group)/`), so cutting the prefix there would leave the directories after them unchecked (S71, S72).
+ * `}` is not needed either: an unmatched one is denied by `expandBraces`. Walking a longer prefix is always safe.
  */
-const MAGIC = /[*?[\]{}]/
+const MAGIC = /[*?[{]/
 
 /** The literal directory prefix: text before the segment that holds the first magic character. */
 function literalPrefix(pattern: string): string {
