@@ -274,7 +274,7 @@ Done when (from the vision): during a run the user sees each agent's actions liv
 Resolved history (waves 1-5 findings, rounds 2-5, the close-out): `docs/notes/phase-2-followups-history.md`. Only open items are listed here.
 
 - Manual live checks still required (`docs/notes/phase-2-manual-check.md`): `duration_ms` and `last_assistant_message`, no duplicate `tool-finished` on a denied tool, hooks inside subagents, a `Skill` cannot run shell commands before the guard, the `flow` plugin skills load and the project's `CLAUDE.md` is in effect with `settingSources: []`, and the real end-to-end run against the SDK.
-- Final security audit of the close-out diff (S70, S61, F40-F44, F12) must return PASS.
+- Guard assumptions to re-check on every SDK upgrade: how the Grep/Glob tools normalize `path` and the Glob base dir (trim, `/x/` drive mapping, glob characters). Last verified against CLI 2.1.323. Windows device names (`CON`, `CONIN$`) in a path are not handled (at most a blocked tool call).
 - Known limits of the CLAUDE.md injection: an edited `CLAUDE.md` reaches a resumed chat only after compaction or in a new session; a hardlinked `CLAUDE.md` pointing outside the project is not detected.
 - Unverified: a symlink inside the project pointing to a UNC target would make the real-path resolution touch SMB before the deny (could not be created on the test machine).
 - The guard allows the search tools only because the installed Claude Code does not pass `--follow` to ripgrep; revisit if that changes.
