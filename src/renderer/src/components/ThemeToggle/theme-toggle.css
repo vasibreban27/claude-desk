@@ -7,8 +7,12 @@
   --toggle-dark-text: #e6e9ee;
   --toggle-dark-border: #2f3640;
 
-  display: flex;
-  gap: var(--space-1);
+  /* Lay out by the width this component actually gets (the sidebar is resizable). */
+  container-type: inline-size;
+  min-width: 0;
+}
+
+.theme-toggle__fieldset {
   margin: 0;
   padding: 0;
   border: 0;
@@ -16,17 +20,24 @@
 }
 
 .theme-toggle__legend {
-  float: left;
-  width: 100%;
-  margin-bottom: var(--space-1);
+  margin: 0 0 var(--space-2);
   padding: 0;
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);
 }
 
+/* Narrow: one full-width row per option, icon and label side by side. */
+.theme-toggle__options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  /* Wider than the 2px selection ring so neighbours never touch. */
+  gap: var(--space-2);
+  /* Room for the selection ring on the outer edges (the footer clips overflow). */
+  padding: 2px;
+}
+
 .theme-toggle__option {
   position: relative;
-  flex: 1 1 0;
   min-width: 0;
 }
 
@@ -40,21 +51,45 @@
 
 .theme-toggle__label {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  justify-content: center;
-  gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
+  justify-content: flex-start;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  min-width: 0;
+  padding: var(--space-1) var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-text);
   font-size: var(--font-size-sm);
-  text-align: center;
+  line-height: 1.2;
   opacity: 0.8;
 }
 
 .theme-toggle__icon {
   flex: none;
+}
+
+.theme-toggle__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Enough room: three equal columns, icon above the label. */
+@container (min-width: 10.5rem) {
+  .theme-toggle__options {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .theme-toggle__label {
+    flex-direction: column;
+    justify-content: center;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-1);
+    font-size: var(--font-size-xs);
+    text-align: center;
+  }
 }
 
 .theme-toggle__label--light {

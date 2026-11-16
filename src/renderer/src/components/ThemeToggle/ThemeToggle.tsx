@@ -44,27 +44,36 @@ const OPTIONS: ReadonlyArray<{ value: ThemeMode; label: string }> = [
   { value: 'dark', label: 'Dark' }
 ]
 
+/**
+ * The outer div is the size container: the options switch between stacked rows (narrow sidebar)
+ * and three columns (enough room) by container width, not by window width.
+ * The options live in their own grid so the legend is a plain caption, never a flex item.
+ */
 export function ThemeToggle(): React.JSX.Element {
   const { mode, setMode } = useTheme()
   return (
-    <fieldset className="theme-toggle">
-      <legend className="theme-toggle__legend">Theme</legend>
-      {OPTIONS.map((option) => (
-        <label key={option.value} className="theme-toggle__option">
-          <input
-            className="theme-toggle__input"
-            type="radio"
-            name="theme"
-            value={option.value}
-            checked={mode === option.value}
-            onChange={() => setMode(option.value)}
-          />
-          <span className={`theme-toggle__label theme-toggle__label--${option.value}`}>
-            <Icon mode={option.value} />
-            {option.label}
-          </span>
-        </label>
-      ))}
-    </fieldset>
+    <div className="theme-toggle">
+      <fieldset className="theme-toggle__fieldset">
+        <legend className="theme-toggle__legend">Theme</legend>
+        <div className="theme-toggle__options">
+          {OPTIONS.map((option) => (
+            <label key={option.value} className="theme-toggle__option">
+              <input
+                className="theme-toggle__input"
+                type="radio"
+                name="theme"
+                value={option.value}
+                checked={mode === option.value}
+                onChange={() => setMode(option.value)}
+              />
+              <span className={`theme-toggle__label theme-toggle__label--${option.value}`}>
+                <Icon mode={option.value} />
+                <span className="theme-toggle__text">{option.label}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+    </div>
   )
 }
