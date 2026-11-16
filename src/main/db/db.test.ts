@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { AgentUsage, RunUsage } from '../chat/activity'
 import { openDatabase } from './database'
 import { DatabaseVersionError, MIGRATIONS, migrate } from './migrations'
-import { createRunStore, emptySummary, type RecordRunInput } from './runStore'
+import { createRunStore, emptySummary, localDay, type RecordRunInput } from './runStore'
 
 const P1 = '11111111-1111-4111-8111-111111111111'
 const P2 = '22222222-2222-4222-8222-222222222222'
@@ -197,7 +197,7 @@ describe('RunStore', () => {
 
   it('treats a missing cost as zero in sums', () => {
     const { store } = setup()
-    store.recordRun(run({ usage: usage({ costUsd: null, durationMs: null, isError: true }) }))
+    store.recordRun(run({ usage: usage({ costUsd: null, durationMs: null, isError: true, models: [] }) }))
     const s = store.summary({ projectId: null, days: 1 })
     expect(s.totals.costUsd).toBe(0)
     expect(s.totals.runs).toBe(1)
@@ -225,5 +225,81 @@ describe('RunStore', () => {
     expect(store.summary({ projectId: null, days: 1 }).byAgent[0]?.agent).toBe(evil)
     expect((db.prepare('SELECT model FROM usage_models').get() as { model: string }).model).toBe(evil)
     expect((db.prepare('SELECT COUNT(*) AS c FROM runs').get() as { c: number }).c).toBe(1)
+  })
+
+  it('stores the sum of model costs when the reported cost is null', () => {
+    const { db, store } = setup()
+    const m = (model: string, costUsd: number): RunUsage['models'][number] => ({
+      model,
+      costUsd,
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0
+    })
+    store.recordRun(run({ runId: 'a', usage: usage({ costUsd: null, models: [m('x', 0.25), m('y', 0.5)] }) }))
+    store.recordRun(run({ runId: 'b', usage: usage({ costUsd: null, models: [] }) }))
+    store.recordRun(run({ runId: 'c', usage: usage({ costUsd: 2, models: [m('x', 0.25)] }) }))
+    const cost = (id: string): number | null =>
+      (db.prepare('SELECT cost_usd AS c FROM runs WHERE id = ?').get(id) as { c: number | null }).c
+    expect(cost('a')).toBe(0.75)
+    expect(cost('b')).toBeNull()
+    expect(cost('c')).toBe(2)
+    expect(store.summary({ projectId: null, days: 1 }).totals.costUsd).toBe(2.75)
+  })
+
+  it('excludes runs with a future startedAt from every window', () => {
+    const { store } = setup()
+    store.recordRun(run({ startedAt: daysAgo(-1, 12) }))
+    store.recordRun(run({ startedAt: daysAgo(-30) }))
+    store.recordRun(run({ startedAt: daysAgo(0) }))
+    for (const projectId of [null, P1]) {
+      const s = store.summary({ projectId, days: 365 })
+      expect(s.totals.runs).toBe(1)
+      expect(s.byDay).toHaveLength(1)
+      expect(s.byAgent.find((a) => a.agent === 'main')?.steps).toBe(2)
+    }
+    expect(store.summary({ projectId: null, days: 7 }).byProject).toEqual([
+      { projectId: P1, runs: 1, costUsd: 0.5 }
+    ])
+  })
+
+  it.each([1, 2, 7, 30, 365])('window boundary for days=%i', (days) => {
+    const { store } = setup()
+    store.recordRun(run({ runId: 'out', startedAt: daysAgo(days, 23) }))
+    store.recordRun(run({ runId: 'in', startedAt: daysAgo(days - 1, 0) }))
+    const s = store.summary({ projectId: null, days })
+    expect(s.totals.runs).toBe(1)
+    expect(s.byDay).toHaveLength(1)
+  })
+
+  it('marks an agent approximate when any run of it is approximate', () => {
+    const { store } = setup()
+    store.recordRun(run({ agents: [agent('reviewer', { approximate: true })] }))
+    store.recordRun(run({ agents: [agent('reviewer', { approximate: false })] }))
+    store.recordRun(run({ agents: [agent('tester', { approximate: false })] }))
+    const s = store.summary({ projectId: null, days: 1 })
+    expect(s.byAgent.find((a) => a.agent === 'reviewer')?.approximate).toBe(true)
+    expect(s.byAgent.find((a) => a.agent === 'tester')?.approximate).toBe(false)
+  })
+
+  it('records day as the local date in a non-UTC timezone', () => {
+    const prev = process.env.TZ
+    try {
+      process.env.TZ = 'Pacific/Kiritimati' // UTC+14, no DST
+      const at = Date.UTC(2026, 0, 1, 11, 0, 0) // 2026-01-01 UTC, 2026-01-02 01:00 local
+      expect(localDay(at)).toBe('2026-01-02')
+      const { db, store } = setup()
+      store.recordRun(run({ startedAt: at }))
+      expect((db.prepare('SELECT day FROM runs').get() as { day: string }).day).toBe('2026-01-02')
+    } finally {
+      if (prev === undefined) delete process.env.TZ
+      else process.env.TZ = prev
+    }
+  })
+
+  it.each([0, 366, 1.5, NaN, Infinity, -3])('rejects invalid days %s', (days) => {
+    const { store } = setup()
+    expect(() => store.summary({ projectId: null, days })).toThrow(RangeError)
   })
 })

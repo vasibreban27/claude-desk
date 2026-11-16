@@ -16,6 +16,14 @@ export interface SummaryQuery {
   days: number
 }
 
+/**
+ * `summary` validates `days` itself: anything that is not an integer in 1..365
+ * (NaN, fractions, out of range) throws a RangeError. The IPC handler already
+ * validates with zod and maps a throw to an empty summary, so behavior matches.
+ */
+export const MIN_DAYS = 1
+export const MAX_DAYS = 365
+
 export interface RunStore {
   recordRun(input: RecordRunInput): void
   summary(query: SummaryQuery): UsageSummary
@@ -52,6 +60,13 @@ function windowStartDay(days: number, now: number): string {
   d.setHours(12, 0, 0, 0) // noon avoids DST edge cases when subtracting days
   d.setDate(d.getDate() - (days - 1))
   return localDay(d.getTime())
+}
+
+/** Run cost: the reported total, else the sum of per-model costs, else NULL. */
+function runCost(u: RunUsage): number | null {
+  if (u.costUsd !== null) return u.costUsd
+  const costs = u.models.map((m) => m.costUsd).filter((c): c is number => typeof c === 'number')
+  return costs.length > 0 ? costs.reduce((a, c) => a + c, 0) : null
 }
 
 interface TotalsRow {
@@ -119,7 +134,7 @@ export function createRunStore(db: Database.Database, now: () => number = Date.n
       Math.round(r.startedAt),
       localDay(r.startedAt),
       r.usage.isError ? 'error' : 'success',
-      r.usage.costUsd,
+      runCost(r.usage),
       r.usage.durationMs,
       t.inputTokens,
       t.outputTokens,
@@ -156,12 +171,12 @@ export function createRunStore(db: Database.Database, now: () => number = Date.n
     `SELECT COUNT(*) AS runs, COALESCE(SUM(cost_usd), 0) AS cost,
        COALESCE(SUM(input_tokens), 0) AS i, COALESCE(SUM(output_tokens), 0) AS o,
        COALESCE(SUM(cache_read_tokens), 0) AS cr, COALESCE(SUM(cache_creation_tokens), 0) AS cc
-     FROM runs WHERE day >= ? AND (? IS NULL OR project_id = ?)`
+     FROM runs WHERE day >= ? AND day <= ? AND (? IS NULL OR project_id = ?)`
   )
   const dayStmt = db.prepare(
     `SELECT day, COUNT(*) AS runs, COALESCE(SUM(cost_usd), 0) AS cost,
        SUM(input_tokens) AS i, SUM(output_tokens) AS o
-     FROM runs WHERE day >= ? AND (? IS NULL OR project_id = ?)
+     FROM runs WHERE day >= ? AND day <= ? AND (? IS NULL OR project_id = ?)
      GROUP BY day ORDER BY day ASC`
   )
   const agentStmt = db.prepare(
@@ -169,12 +184,12 @@ export function createRunStore(db: Database.Database, now: () => number = Date.n
        SUM(a.output_tokens) AS o, SUM(a.cache_read_tokens) AS cr,
        SUM(a.cache_creation_tokens) AS cc, MAX(a.approximate) AS approx
      FROM usage_agents a JOIN runs r ON r.id = a.run_id
-     WHERE r.day >= ? AND (? IS NULL OR r.project_id = ?)
+     WHERE r.day >= ? AND r.day <= ? AND (? IS NULL OR r.project_id = ?)
      GROUP BY a.agent ORDER BY (SUM(a.input_tokens) + SUM(a.output_tokens)) DESC, a.agent ASC`
   )
   const projectStmt = db.prepare(
     `SELECT project_id, COUNT(*) AS runs, COALESCE(SUM(cost_usd), 0) AS cost
-     FROM runs WHERE day >= ?
+     FROM runs WHERE day >= ? AND day <= ?
      GROUP BY project_id ORDER BY cost DESC, project_id ASC`
   )
 
@@ -183,16 +198,21 @@ export function createRunStore(db: Database.Database, now: () => number = Date.n
       write(input)
     },
     summary({ projectId, days }) {
-      const start = windowStartDay(days, now())
-      const t = totalsStmt.get(start, projectId, projectId) as TotalsRow
-      const byDay = (dayStmt.all(start, projectId, projectId) as DayRow[]).map((r) => ({
+      if (!Number.isInteger(days) || days < MIN_DAYS || days > MAX_DAYS) {
+        throw new RangeError(`days must be an integer between ${MIN_DAYS} and ${MAX_DAYS}`)
+      }
+      const nowMs = now()
+      const start = windowStartDay(days, nowMs)
+      const end = localDay(nowMs) // upper bound: runs with a future startedAt are excluded
+      const t = totalsStmt.get(start, end, projectId, projectId) as TotalsRow
+      const byDay = (dayStmt.all(start, end, projectId, projectId) as DayRow[]).map((r) => ({
         day: r.day,
         runs: r.runs,
         costUsd: r.cost,
         inputTokens: r.i,
         outputTokens: r.o
       }))
-      const byAgent = (agentStmt.all(start, projectId, projectId) as AgentRow[]).map((r) => ({
+      const byAgent = (agentStmt.all(start, end, projectId, projectId) as AgentRow[]).map((r) => ({
         agent: r.agent,
         steps: r.steps,
         inputTokens: r.i,
@@ -203,7 +223,7 @@ export function createRunStore(db: Database.Database, now: () => number = Date.n
       }))
       const byProject =
         projectId === null
-          ? (projectStmt.all(start) as ProjectRow[]).map((r) => ({
+          ? (projectStmt.all(start, end) as ProjectRow[]).map((r) => ({
               projectId: r.project_id,
               runs: r.runs,
               costUsd: r.cost
