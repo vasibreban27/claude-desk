@@ -140,7 +140,7 @@ export interface SdkRunnerDeps {
 /**
  * Real runner: Agent SDK `query()` using the existing Claude Code login. The project's CLAUDE.md is read
  * by the main process (settingSources stays []) and appended to Claude Code's default system prompt only
- * when it exists; without it no `systemPrompt` option is set.
+ * when it exists; the full `claude_code` preset is used either way.
  */
 export function createSdkRunner(deps: SdkRunnerDeps = { loadProjectContext }): ChatRunner {
   return (args) => runSdk(args, deps)
@@ -163,15 +163,13 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
       // user with no trust prompt and outside our PreToolUse guard (S50). The toolkit comes from `plugins`.
       // Revisiting this is a Phase 3/6 decision that needs a per-project trust setting.
       settingSources: [],
-      ...(context
-        ? {
-            systemPrompt: {
-              type: 'preset' as const,
-              preset: 'claude_code' as const,
-              append: frameProjectContext(context)
-            }
-          }
-        : {}),
+      // Always the full Claude Code prompt, so a project with a CLAUDE.md and one without behave alike;
+      // the project's CLAUDE.md is only appended when it exists.
+      systemPrompt: {
+        type: 'preset' as const,
+        preset: 'claude_code' as const,
+        ...(context ? { append: frameProjectContext(context) } : {})
+      },
       plugins: [{ type: 'local', path: args.pluginPath }],
       includePartialMessages: true,
       allowedTools: [...ALLOWED_TOOLS],

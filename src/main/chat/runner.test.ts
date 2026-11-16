@@ -84,13 +84,20 @@ describe('sdkRunner options', () => {
     expect(append).toContain("Project instructions (from the project's CLAUDE.md")
     expect(append.endsWith('Run npm test.')).toBe(true)
 
+    // Without a CLAUDE.md (or when loading fails) the same full preset is used, with nothing appended.
     const without = createSdkRunner({ loadProjectContext: async () => null })
     await collect(without({ prompt: 'p', cwd: '/w', pluginPath: '/plug' }))
-    expect('systemPrompt' in (state.captured as unknown as Captured).options).toBe(false)
+    expect((state.captured as unknown as Captured).options.systemPrompt).toEqual({
+      type: 'preset',
+      preset: 'claude_code'
+    })
 
     const failing = createSdkRunner({ loadProjectContext: async () => Promise.reject(new Error('x')) })
     await collect(failing({ prompt: 'p', cwd: '/w', pluginPath: '/plug' }))
-    expect('systemPrompt' in (state.captured as unknown as Captured).options).toBe(false)
+    expect((state.captured as unknown as Captured).options.systemPrompt).toEqual({
+      type: 'preset',
+      preset: 'claude_code'
+    })
   })
 
   it('aborts immediately when the caller signal is already aborted', async () => {
