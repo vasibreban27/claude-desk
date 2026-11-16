@@ -271,6 +271,23 @@ Done when (from the vision): during a run the user sees each agent's actions liv
 
 ## 10. Follow-ups
 
+### Status after the resolution pass (commits 130d9c1, e736165, 05e1031, 27b21c6, 5115f25, e540638, 2f35150, 1b2c8bb; reviewed in two rounds, security audit PASS)
+
+Resolved: every wave 1-5 finding below (F, S and T-caveat items), including S10 (read tools are scoped to the project folder, UNC/other-drive paths denied with no filesystem access, brace and link-prefix globs denied, `Agent`/`Task` input allowlisted), S1 (identifier caps), `PostToolUseFailure` mapping with per-`toolUseId` dedupe, the `days` validation in `RunStore.summary`, the usage window upper bound, the test timeouts (now scoped to the two git-backed test files; 3 consecutive green full runs of 324-325 tests), `register.test.ts`, and the renderer race, tab and stale-data fixes. `settingSources: []` was set (see below).
+
+Still open:
+- Decision for the owner: `settingSources: []` means the chat no longer loads the project's own `CLAUDE.md`, `.claude/skills` and `.claude/agents` (Phase 1 loaded everything by default). The docs do not say whether `plugins` still loads with `[]`: confirm in the manual check that the `flow` skills appear in the `init` message. Hooks in `options.hooks` are unaffected.
+- F10 (round 2) `src/main/chat/tools.ts`: every glob containing `{` or `}` is denied, including common ones like `**/*.{ts,tsx}`; the model sees a misleading reason. Either allow braces when the pattern has no `..` substring (literal prefix up to the first `{`), or give a clearer deny reason.
+- F11 (round 2) `src/main/chat/tools.ts` `AGENT_INPUT_KEYS`: only `description`, `prompt`, `subagent_type`, `model` are allowed; a call with `name` or `resume` is denied. Consider adding the benign keys; keep `isolation`, `mode`, `team_name`, `cwd` denied.
+- F12 (round 2, theoretical): on POSIX a backslash in a glob escapes the next character, so `\.\./x` is not seen as a `..` segment; deny patterns containing a backslash on non-win32.
+- F13 (round 2, defense in depth): the literal prefix stops before a partial segment containing magic (`ln*/**`); only matters if the search tool follows symlinks, which it does not today (no `--follow`).
+- Unverified: a symlink inside the project pointing to a UNC target would make `realResolve` touch SMB before the deny (could not be created on the test machine).
+- Manual live checks still required (see `docs/notes/phase-2-manual-check.md`): `duration_ms` and `last_assistant_message`, no duplicate `tool-finished` on a denied tool, hooks inside subagents, a `Skill` cannot run shell commands before the guard, plugin skills load with `settingSources: []`, and the real end-to-end run against the SDK.
+- The guard allows the search tools only because the installed Claude Code does not pass `--follow` to ripgrep; revisit if that changes.
+- Timezone test relies on a runtime `TZ` change (passes on Windows; not checked on macOS or Linux).
+
+### Findings by wave (history)
+
 Wave 1 (reviewer and security audit both PASS; minor findings, not fixed):
 - F1 `src/main/chat/activity.ts:236`: `agents()` marks `main` as `approximate: false` even without `mainTokens` (run errored or aborted before `result`); should be `true` unless `mainTokens` overrides.
 - F2 `src/main/chat/activity.ts:59`: no mapping for `PostToolUseFailure`; a failing tool leaves a `tool-started` with no `tool-finished` (shows "running" forever). Map it to `tool-finished` (`denied: false`, `durationMs: null`) or have T5 close open tools at `run-finished`. Decide before wave 3.
