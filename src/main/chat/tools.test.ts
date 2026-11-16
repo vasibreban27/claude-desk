@@ -185,6 +185,26 @@ describe('guardPreToolUse glob and link hardening (F1, S30)', () => {
     expect(isDenied(g('Glob', { pattern: '{a,b}' + 'x'.repeat(600) }))).toBe(true)
   })
 
+  it('allows exactly 64 expansions and brace-free patterns longer than the brace cap', () => {
+    expect(g('Glob', { pattern: '{a,b}'.repeat(6) })).toEqual({})
+    expect(g('Glob', { pattern: '**/' + 'x'.repeat(600) })).toEqual({})
+    expect(g('Grep', { pattern: 'a', glob: '**/' + 'x'.repeat(600) })).toEqual({})
+  })
+
+  it('denies "[" inside a brace group but allows a class outside braces', () => {
+    expect(isDenied(g('Glob', { pattern: '{a,[bc]}/*' }))).toBe(true)
+    expect(isDenied(g('Glob', { pattern: '{a,{b,[c]}}/*' }))).toBe(true)
+    expect(isDenied(g('Grep', { pattern: 'a', glob: '*.{ts,[jt]s}' }))).toBe(true)
+    expect(g('Glob', { pattern: 'src/[ab]*.ts' })).toEqual({})
+    expect(g('Glob', { pattern: '{a,b}/[cd]*.ts' })).toEqual({})
+  })
+
+  it('mentions the limits in the deny reason', () => {
+    const reason = g('Glob', { pattern: '{..,x}/*' }).hookSpecificOutput?.permissionDecisionReason
+    expect(reason).toContain('512')
+    expect(reason).toContain('64')
+  })
+
   it('gives a hint in the deny reason', () => {
     const out = g('Glob', { pattern: '{..,x}/*' })
     expect(out.hookSpecificOutput?.permissionDecisionReason).toContain('relative')
@@ -241,8 +261,71 @@ describe('guardPreToolUse never touches the filesystem for UNC and other drives 
     expect(fsCalls.n).toBe(0)
   })
 
+  it('denies lexical brace escapes without touching the filesystem (F23)', () => {
+    for (const p of ['{..,x}/*', '{~,x}/*', '{a,{..,b}}/x']) {
+      expect(isDenied(g('Glob', { pattern: p }))).toBe(true)
+    }
+    expect(fsCalls.n).toBe(0)
+  })
+
+  it('denies an absolute brace expansion outside the project with only a few probes', () => {
+    expect(isDenied(g('Glob', { pattern: '{/etc,x}/*' }))).toBe(true)
+    expect(fsCalls.n).toBeLessThan(10)
+  })
+
+  it('does not touch the filesystem to deny an over-long brace pattern or a "[" in braces', () => {
+    expect(isDenied(g('Glob', { pattern: '{a,b}' + 'x'.repeat(600) }))).toBe(true)
+    expect(isDenied(g('Glob', { pattern: '{a,[b]}/*' }))).toBe(true)
+    expect(fsCalls.n).toBe(0)
+  })
+
   it('still resolves legitimate paths with the filesystem', () => {
     expect(g('Read', { file_path: 'a.txt' })).toEqual({})
     expect(fsCalls.n).toBeGreaterThan(0)
+  })
+})
+
+describe('guardPreToolUse bounds the filesystem work of brace expansion (S51)', () => {
+  beforeEach(() => {
+    fsCalls.n = 0
+  })
+
+  it('a deep pattern with 64 expansions and ~230 missing segments makes few fs calls', () => {
+    const deep = '{a,b}/{c,d}/{e,f}/{g,h}/{i,j}/{k,l}/' + 'a/'.repeat(115) + '*'
+    expect(deep.length).toBeLessThanOrEqual(512)
+    expect(g('Glob', { pattern: deep })).toEqual({})
+    expect(fsCalls.n).toBeLessThan(200)
+    fsCalls.n = 0
+    expect(g('Grep', { pattern: 'x', glob: deep })).toEqual({})
+    expect(fsCalls.n).toBeLessThan(200)
+  })
+
+  it('deduplicates expansions and resolves the real cwd once', () => {
+    expect(g('Glob', { pattern: '{src,src,src}/{a,a}/*.ts' })).toEqual({})
+    // cwd (2 probes) + src (2) + src/a missing (1)
+    expect(fsCalls.n).toBeLessThanOrEqual(6)
+  })
+
+  it('denies with a clear reason when the probe budget is exceeded', () => {
+    const names = Array.from({ length: 8 }, (_, i) => `w${i}`)
+    for (const a of names) for (const b of names) mkdirSync(path.join(cwd, a, b), { recursive: true })
+    const set = `{${names.join(',')}}`
+    const out = g('Glob', { pattern: `${set}/${set}/x/*` })
+    expect(isDenied(out)).toBe(true)
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain('too complex')
+    expect(fsCalls.n).toBeLessThanOrEqual(300)
+  })
+
+  it('still allows existing in-project prefixes and denies a link prefix mid-pattern', () => {
+    expect(g('Glob', { pattern: '{src,w0}/{x,y}/**' })).toEqual({})
+    const link = path.join(cwd, 'deep-link')
+    try {
+      symlinkSync(outside, link, 'junction')
+    } catch {
+      return // symlinks unavailable
+    }
+    expect(isDenied(g('Glob', { pattern: '{src,deep-link}/**' }))).toBe(true)
+    expect(isDenied(g('Glob', { pattern: 'src/../deep-link/*' }))).toBe(true)
+    expect(isDenied(g('Glob', { pattern: '{a,deep-link}/x/y/*' }))).toBe(true)
   })
 })

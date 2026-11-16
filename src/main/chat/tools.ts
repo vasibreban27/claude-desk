@@ -106,16 +106,33 @@ const MAX_EXPANSIONS = 64
 const MAX_EXPANSION_LENGTH = 512
 
 /**
+ * True when a `[` appears inside a brace group: ripgrep's globset and our splitter parse character classes
+ * inside braces differently, so such patterns are denied (defense in depth).
+ */
+function bracketInsideBraces(pattern: string): boolean {
+  let depth = 0
+  for (const ch of pattern) {
+    if (ch === '{') depth++
+    else if (ch === '}') depth = Math.max(0, depth - 1)
+    else if (ch === '[' && depth > 0) return true
+  }
+  return false
+}
+
+/**
  * Expands `{a,b}` alternatives (nesting and empty alternatives supported, no ranges). Returns null when the
  * braces are unbalanced or the result exceeds the caps, so callers deny the pattern.
  */
 export function expandBraces(pattern: string): string[] | null {
-  if (pattern.length > MAX_EXPANSION_LENGTH) return null
+  // The length cap only applies to brace patterns; brace-free patterns behave as before braces were handled.
+  const braced = pattern.includes('{')
+  if (braced && pattern.length > MAX_EXPANSION_LENGTH) return null
+  if (braced && bracketInsideBraces(pattern)) return null
   const results: string[] = []
   const stack: string[] = [pattern]
   while (stack.length > 0) {
     const current = stack.pop() as string
-    if (current.length > MAX_EXPANSION_LENGTH) return null
+    if (braced && current.length > MAX_EXPANSION_LENGTH) return null
     const open = current.indexOf('{')
     if (open === -1) {
       if (current.includes('}')) return null
@@ -161,17 +178,91 @@ function expansionLexicallyOk(pattern: string): boolean {
   return true
 }
 
-function patternInside(cwd: string, base: string, pattern: string): boolean {
+/** Per guard call state: the real cwd is resolved once and filesystem probes are capped. */
+interface ProbeCtx {
+  cwd: string
+  realCwd: string | null
+  probes: number
+}
+
+const MAX_PROBES = 256
+
+class ProbeBudgetError extends Error {}
+
+function probeExists(ctx: ProbeCtx, p: string): boolean {
+  if (++ctx.probes > MAX_PROBES) throw new ProbeBudgetError()
+  return existsSync(p)
+}
+
+function probeReal(ctx: ProbeCtx, p: string): string {
+  if (++ctx.probes > MAX_PROBES) throw new ProbeBudgetError()
+  return realpathSync(p)
+}
+
+/** Like realResolve, but counted against the probe budget. */
+function realResolveCounted(ctx: ProbeCtx, p: string): string {
+  let current = path.resolve(p)
+  const rest: string[] = []
+  for (;;) {
+    if (probeExists(ctx, current)) return path.join(probeReal(ctx, current), ...rest.reverse())
+    const parent = path.dirname(current)
+    if (parent === current) return path.resolve(p)
+    rest.push(path.basename(current))
+    current = parent
+  }
+}
+
+/**
+ * True when `resolved` stays inside the real cwd. A target that is lexically inside cwd is walked from the
+ * real cwd downward and stops at the first missing component (the rest cannot leave cwd), so the work is
+ * bounded by the number of existing components rather than the pattern length.
+ */
+function targetInside(ctx: ProbeCtx, raw: string, resolved: string): boolean {
+  if (raw.startsWith('~') || raw.includes('\0')) return false
+  if (lexicallyOutside(ctx.cwd, raw, resolved)) return false
+  ctx.realCwd ??= realResolveCounted(ctx, ctx.cwd)
+  const realCwd = ctx.realCwd
+  const lexicalCwd = path.resolve(ctx.cwd)
+  if (!isInside(lexicalCwd, resolved)) return isInside(realCwd, realResolveCounted(ctx, resolved))
+  let current = realCwd
+  for (const segment of path.relative(lexicalCwd, resolved).split(path.sep)) {
+    if (segment === '') continue
+    const next = path.join(current, segment)
+    if (!probeExists(ctx, next)) return true
+    current = probeReal(ctx, next)
+    if (!isInside(realCwd, current)) return false
+  }
+  return true
+}
+
+const TOO_COMPLEX = 'Glob pattern is too complex to check safely: use fewer brace alternatives and a shorter literal path prefix.'
+
+/** null when the pattern is acceptable, otherwise the deny reason (`outside` or a complexity reason). */
+function patternDenial(ctx: ProbeCtx, base: string, pattern: string, outside: string): string | null {
   const expansions = expandBraces(pattern)
-  if (expansions === null) return false
+  if (expansions === null) return outside
   // Lexical pass over every expansion first, so a denial never costs a filesystem access.
-  if (!expansions.every(expansionLexicallyOk)) return false
-  return expansions.every((expanded) => {
+  if (!expansions.every(expansionLexicallyOk)) return outside
+  const targets = new Map<string, string>()
+  for (const expanded of expansions) {
     const prefix = literalPrefix(expanded)
-    if (path.isAbsolute(expanded)) return pathInside(cwd, prefix.length > 0 ? prefix : path.sep)
-    // Relative: the literal prefix must stay inside cwd after resolving links and junctions.
-    return pathInside(cwd, base, prefix)
-  })
+    if (path.isAbsolute(expanded)) {
+      const raw = prefix.length > 0 ? prefix : path.sep
+      targets.set(path.resolve(ctx.cwd, raw), raw)
+    } else {
+      // Relative: the literal prefix must stay inside cwd after resolving links and junctions.
+      targets.set(path.resolve(ctx.cwd, base, prefix), base)
+    }
+  }
+  try {
+    for (const [resolved, raw] of targets) {
+      if (!targetInside(ctx, raw, resolved)) return outside
+    }
+  } catch (error) {
+    if (error instanceof ProbeBudgetError) return TOO_COMPLEX
+    throw error
+  }
+  return null
 }
 
 function checkPathTool(name: string, input: Record<string, unknown>, cwd: string): string | null {
@@ -180,7 +271,8 @@ function checkPathTool(name: string, input: Record<string, unknown>, cwd: string
     return 'Malformed tool request.'
   }
   const args = toolInput as Record<string, unknown>
-  const outside = `Tool "${name}" may only access files inside the project folder. Use relative paths and globs without "..", absolute or "~" paths, and with at most 64 brace alternatives.`
+  const outside = `Tool "${name}" may only access files inside the project folder. Use relative paths and globs without "..", absolute or "~" paths, with at most 64 brace alternatives, no "[" inside braces, and brace patterns of at most ${MAX_EXPANSION_LENGTH} characters.`
+  const ctx: ProbeCtx = { cwd, realCwd: null, probes: 0 }
   const pathKeys = name === 'Read' ? ['file_path'] : ['path']
   const patternKeys = name === 'Read' ? [] : name === 'Glob' ? ['pattern'] : ['glob']
 
@@ -200,7 +292,8 @@ function checkPathTool(name: string, input: Record<string, unknown>, cwd: string
     const v = args[key]
     if (v === undefined || v === null) continue
     if (typeof v !== 'string') return 'Malformed tool request.'
-    if (!patternInside(cwd, baseDir, v)) return outside
+    const denial = patternDenial(ctx, baseDir, v, outside)
+    if (denial !== null) return denial
   }
   return null
 }
