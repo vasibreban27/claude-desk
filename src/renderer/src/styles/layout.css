@@ -1,0 +1,96 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+.layout {
+  height: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.layout__cell {
+  min-width: 0;
+}
+
+.layout__panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding: var(--space-3);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.layout__title {
+  flex: none;
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.layout__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.layout__separator {
+  position: relative;
+  flex: none;
+  width: 1px;
+  background: var(--color-border);
+  transition: background-color 0.15s;
+}
+
+/* Transparent, wider hit area; the visible line stays 1px. */
+.layout__separator::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--space-1));
+  right: calc(-1 * var(--space-1));
+}
+
+.layout__separator:hover,
+.layout__separator[data-separator='active'],
+.layout__separator:focus-visible {
+  background: var(--color-accent);
+}
+
+.layout__empty {
+  margin: auto;
+  max-width: 28ch;
+  padding: var(--space-5);
+  text-align: center;
+}
+
+.layout__empty-title {
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.layout__empty-hint {
+  margin: 0;
+  font-size: var(--font-size-md);
+  color: var(--color-text-muted);
+}
