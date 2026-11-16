@@ -1,7 +1,27 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+const fsCalls = vi.hoisted(() => ({ n: 0 }))
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    existsSync: (...a: Parameters<typeof actual.existsSync>) => {
+      fsCalls.n++
+      return actual.existsSync(...a)
+    },
+    realpathSync: Object.assign(
+      (...a: Parameters<typeof actual.realpathSync>) => {
+        fsCalls.n++
+        return actual.realpathSync(...a)
+      },
+      actual.realpathSync
+    )
+  }
+})
+
 import { ALLOWED_TOOLS, guardPreToolUse, isDenied } from './tools'
 
 let root: string
@@ -26,8 +46,20 @@ const g = (tool_name: string, tool_input?: unknown) =>
   guardPreToolUse({ hook_event_name: 'PreToolUse', tool_name, tool_input }, cwd)
 
 describe('guardPreToolUse', () => {
-  it.each(['Agent', 'Task', 'Skill'])('allows %s', (tool_name) => {
-    expect(g(tool_name)).toEqual({})
+  it('allows Skill without inspecting input', () => {
+    expect(g('Skill')).toEqual({})
+    expect(g('Skill', { skill: 'x', args: 'y' })).toEqual({})
+  })
+
+  it.each(['Agent', 'Task'])('%s: allows only description, prompt, subagent_type and model (S31)', (tool) => {
+    expect(g(tool, { description: 'd', prompt: 'p', subagent_type: 'Explore', model: 'haiku' })).toEqual({})
+    expect(isDenied(g(tool, { description: 'd', prompt: 'p', isolation: 'worktree' }))).toBe(true)
+    expect(isDenied(g(tool, { description: 'd', prompt: 'p', surprise: 1 }))).toBe(true)
+    expect(isDenied(g(tool, { prompt: 'p', run_in_background: true }))).toBe(true)
+    expect(isDenied(g(tool))).toBe(true)
+    expect(isDenied(g(tool, []))).toBe(true)
+    const out = g(tool, { isolation: 'worktree' })
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain('isolation')
   })
 
   it.each(['Write', 'Edit', 'Bash', 'NotebookEdit', 'WebFetch', 'mcp__x__y', 'read'])(
@@ -113,5 +145,62 @@ describe('guardPreToolUse path scoping (S10)', () => {
     expect(isDenied(g('Read', { file_path: 'Z:\\nope\\x' }))).toBe(true)
     expect(isDenied(g('Read', { file_path: '\\\\server\\share\\x' }))).toBe(true)
     expect(isDenied(g('Glob', { pattern: 'D:foo' }))).toBe(true)
+  })
+})
+
+describe('guardPreToolUse glob and link hardening (F1, S30)', () => {
+  it.each(['{..,x}/*', '{a,..}/.ssh/*', '{.,.}./out/*', 'src/{a,b}/*.ts', '*.{ts,js}'])(
+    'denies brace pattern %s',
+    (pattern) => {
+      expect(isDenied(g('Glob', { pattern }))).toBe(true)
+      expect(isDenied(g('Grep', { pattern: 'a', glob: pattern }))).toBe(true)
+    }
+  )
+
+  it('denies an absolute brace pattern', () => {
+    const abs = cwd.replace(/\\/g, '/') + '/{.,.}./out/*'
+    expect(isDenied(g('Glob', { pattern: abs }))).toBe(true)
+  })
+
+  it('denies patterns whose literal prefix goes through a link that leaves the project', () => {
+    const link = path.join(cwd, 'docs-link')
+    try {
+      symlinkSync(outside, link, 'junction')
+    } catch {
+      return // symlinks unavailable
+    }
+    expect(isDenied(g('Glob', { pattern: 'docs-link/**' }))).toBe(true)
+    expect(isDenied(g('Glob', { pattern: 'docs-link/*.txt', path: cwd }))).toBe(true)
+    expect(isDenied(g('Grep', { pattern: 'a', glob: 'docs-link/**/*.txt' }))).toBe(true)
+    expect(isDenied(g('Grep', { pattern: 'a', glob: '*.txt', path: 'docs-link' }))).toBe(true)
+    expect(g('Glob', { pattern: 'src/**' })).toEqual({})
+  })
+})
+
+describe('guardPreToolUse never touches the filesystem for UNC and other drives (F2)', () => {
+  beforeEach(() => {
+    fsCalls.n = 0
+  })
+
+  it.runIf(process.platform === 'win32')('denies UNC, extended-length and other-drive paths up front', () => {
+    const cases = [
+      '\\\\attacker\\share\\x',
+      '//attacker/share/x',
+      '\\\\?\\C:\\x',
+      '\\\\.\\pipe\\x',
+      'Z:\\nope\\x'
+    ]
+    for (const p of cases) {
+      expect(isDenied(g('Read', { file_path: p }))).toBe(true)
+      expect(isDenied(g('Grep', { pattern: 'a', path: p }))).toBe(true)
+      expect(isDenied(g('Glob', { pattern: '**', path: p }))).toBe(true)
+      expect(isDenied(g('Glob', { pattern: p + '\\*' }))).toBe(true)
+    }
+    expect(fsCalls.n).toBe(0)
+  })
+
+  it('still resolves legitimate paths with the filesystem', () => {
+    expect(g('Read', { file_path: 'a.txt' })).toEqual({})
+    expect(fsCalls.n).toBeGreaterThan(0)
   })
 })

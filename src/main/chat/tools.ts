@@ -7,6 +7,13 @@ export const ALLOWED_TOOLS = ['Read', 'Grep', 'Glob', 'Agent', 'Task', 'Skill'] 
 const ALLOWED_SET: ReadonlySet<string> = new Set(ALLOWED_TOOLS)
 /** Read-only tools that touch the filesystem and are pre-approved by `allowedTools`: scoped to the run's cwd. */
 const PATH_TOOLS: ReadonlySet<string> = new Set(['Read', 'Grep', 'Glob'])
+/** Sub-agent tools: their input is inspected so they cannot escape the read-only sandbox (e.g. `isolation`). */
+const AGENT_TOOLS: ReadonlySet<string> = new Set(['Agent', 'Task'])
+/**
+ * Conservative allowlist of Agent/Task input keys. Revisit when the SDK adds new Agent input fields:
+ * anything not listed here is denied until it has been reviewed.
+ */
+const AGENT_INPUT_KEYS: ReadonlySet<string> = new Set(['description', 'prompt', 'subagent_type', 'model'])
 
 export interface GuardOutput {
   hookSpecificOutput?: {
@@ -52,26 +59,53 @@ function isInside(root: string, target: string): boolean {
   return rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel)
 }
 
-/** True when `value` (absolute or relative to cwd) resolves, through symlinks, inside cwd. */
-function pathInside(cwd: string, value: string): boolean {
-  if (value.startsWith('~')) return false
-  if (value.includes('\0')) return false
+const sameRoot = (a: string, b: string): boolean =>
+  process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+
+const UNC_LIKE = /^[\\/]{2}/
+
+/**
+ * Lexical pre-check that never touches the filesystem: UNC, extended-length (`\\?\`) and device (`\\.\`)
+ * paths and other drives are denied before any realpath (a UNC target would make the process attempt
+ * SMB/NTLM authentication).
+ */
+function lexicallyOutside(cwd: string, raw: string, resolved: string): boolean {
+  if (UNC_LIKE.test(raw) || UNC_LIKE.test(resolved)) return true
+  return !sameRoot(path.parse(path.resolve(cwd)).root, path.parse(resolved).root)
+}
+
+/** True when the joined path (absolute or relative to cwd) resolves, through symlinks, inside cwd. */
+function pathInside(cwd: string, ...parts: string[]): boolean {
+  if ((parts[0] ?? '').startsWith('~')) return false
+  if (parts.some((p) => p.includes('\0'))) return false
+  const resolved = path.resolve(cwd, ...parts)
+  if (lexicallyOutside(cwd, parts[0] ?? '', resolved)) return false
   const root = realResolve(cwd)
-  return isInside(root, realResolve(path.resolve(cwd, value)))
+  return isInside(root, realResolve(resolved))
 }
 
 const MAGIC = /[*?[\]{}()!]/
 
-function patternInside(cwd: string, pattern: string): boolean {
+/** The literal directory prefix: text before the segment that holds the first magic character. */
+function literalPrefix(pattern: string): string {
+  const idx = pattern.search(MAGIC)
+  if (idx === -1) return pattern
+  const head = pattern.slice(0, idx)
+  const cut = Math.max(head.lastIndexOf('/'), head.lastIndexOf('\\'))
+  return cut === -1 ? '' : head.slice(0, cut + 1)
+}
+
+function patternInside(cwd: string, base: string, pattern: string): boolean {
   if (pattern.includes('\0') || pattern.startsWith('~')) return false
+  // Brace expansion can assemble `..` segments out of pieces; not supported in Phase 2.
+  if (/[{}]/.test(pattern)) return false
   if (pattern.split(/[\\/]+/).includes('..')) return false
   if (/^[a-zA-Z]:(?![\\/])/.test(pattern)) return false
-  if (path.isAbsolute(pattern) || /^[\\/]{2}/.test(pattern)) {
-    const idx = pattern.search(MAGIC)
-    const prefix = idx === -1 ? pattern : pattern.slice(0, idx)
-    return pathInside(cwd, prefix.length > 0 ? prefix : path.sep)
-  }
-  return true
+  if (UNC_LIKE.test(pattern)) return false
+  const prefix = literalPrefix(pattern)
+  if (path.isAbsolute(pattern)) return pathInside(cwd, prefix.length > 0 ? prefix : path.sep)
+  // Relative: the literal prefix must stay inside cwd after resolving links and junctions.
+  return pathInside(cwd, base, prefix)
 }
 
 function checkPathTool(name: string, input: Record<string, unknown>, cwd: string): string | null {
@@ -94,11 +128,26 @@ function checkPathTool(name: string, input: Record<string, unknown>, cwd: string
     if (v.length === 0) continue
     if (!pathInside(cwd, v)) return outside
   }
+  const rawBase = args['path']
+  const baseDir = typeof rawBase === 'string' && rawBase.length > 0 ? rawBase : '.'
   for (const key of patternKeys) {
     const v = args[key]
     if (v === undefined || v === null) continue
     if (typeof v !== 'string') return 'Malformed tool request.'
-    if (!patternInside(cwd, v)) return outside
+    if (!patternInside(cwd, baseDir, v)) return outside
+  }
+  return null
+}
+
+function checkAgentTool(name: string, input: Record<string, unknown>): string | null {
+  const toolInput = input['tool_input']
+  if (typeof toolInput !== 'object' || toolInput === null || Array.isArray(toolInput)) {
+    return 'Malformed tool request.'
+  }
+  for (const key of Object.keys(toolInput)) {
+    if (!AGENT_INPUT_KEYS.has(key)) {
+      return `Tool "${name}" input "${key}" is not allowed in chat.`
+    }
   }
   return null
 }
@@ -116,6 +165,10 @@ export function guardPreToolUse(input: unknown, cwd: string): GuardOutput {
     if (PATH_TOOLS.has(name)) {
       if (typeof cwd !== 'string' || cwd.length === 0) return deny('Malformed tool request.')
       const reason = checkPathTool(name, rec, cwd)
+      if (reason !== null) return deny(reason)
+    }
+    if (AGENT_TOOLS.has(name)) {
+      const reason = checkAgentTool(name, rec)
       if (reason !== null) return deny(reason)
     }
     return {}
