@@ -14,8 +14,21 @@ import type { ActivityEvent, ChatEvent } from '../src/shared/ipc'
 type HookFn = (input: unknown, id: string | undefined, opts: { signal: AbortSignal }) => Promise<unknown>
 type HookMap = Record<string, Array<{ hooks: unknown[] }>>
 
-const base = { session_id: 's', transcript_path: '', cwd: '/p' }
+const base = { session_id: 's', transcript_path: '' }
 const LEAK_MARKER = 'tool-response-body-must-not-leak'
+
+function makeFire(cwd: string, drafts: ActivityDraft[]) {
+  const hooks = buildHooks((d) => drafts.push(d), cwd) as unknown as HookMap
+  return async (input: Record<string, unknown>): Promise<unknown> => {
+    let out: unknown = {}
+    for (const m of hooks[String(input['hook_event_name'])] ?? []) {
+      for (const cb of m.hooks) {
+        out = await (cb as HookFn)({ ...base, cwd, ...input }, undefined, { signal: new AbortController().signal })
+      }
+    }
+    return out
+  }
+}
 
 describe('phase 2 flow (SDK mocked, real hooks, service, SQLite file and handlers)', () => {
   let root: string
@@ -28,7 +41,7 @@ describe('phase 2 flow (SDK mocked, real hooks, service, SQLite file and handler
 
   afterEach(() => {
     db.close()
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   })
 
   it(
@@ -70,20 +83,17 @@ describe('phase 2 flow (SDK mocked, real hooks, service, SQLite file and handler
       ]
 
       // Fake runner: fires the real hook callbacks (guard and trackers) like the SDK would.
-      const runner: ChatRunner = async function* () {
+      // Guard outcomes are captured here and asserted in the test body.
+      const outcomes: { denied?: unknown; outside?: unknown; inside?: unknown } = {}
+      const runner: ChatRunner = (args) => fakeRun(args.cwd, outcomes, usage, agents)
+      const fakeRun = async function* (
+        cwd: string,
+        out: { denied?: unknown; outside?: unknown; inside?: unknown },
+        usage: RunUsage,
+        agents: AgentUsage[]
+      ): AsyncGenerator<RunnerItem> {
         const drafts: ActivityDraft[] = []
-        const hooks = buildHooks((d) => drafts.push(d)) as unknown as HookMap
-        const fire = async (input: Record<string, unknown>): Promise<unknown> => {
-          let out: unknown = {}
-          for (const m of hooks[String(input['hook_event_name'])] ?? []) {
-            for (const cb of m.hooks) {
-              out = await (cb as HookFn)({ ...base, ...input }, undefined, {
-                signal: new AbortController().signal
-              })
-            }
-          }
-          return out
-        }
+        const fire = makeFire(cwd, drafts)
         const flush = function* (): Generator<RunnerItem> {
           while (drafts.length) yield { kind: 'activity', draft: drafts.shift() as ActivityDraft }
         }
@@ -101,8 +111,9 @@ describe('phase 2 flow (SDK mocked, real hooks, service, SQLite file and handler
         await fire({ hook_event_name: 'SubagentStop', last_assistant_message: 'found it', ...sub })
         yield* flush()
 
-        const denied = await fire({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_use_id: 't3', tool_input: { file_path: 'x' } })
-        expect(JSON.stringify(denied)).toContain('deny')
+        out.denied = await fire({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_use_id: 't3', tool_input: { file_path: 'x' } })
+        out.outside = await fire({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 't4', tool_input: { file_path: join(cwd, '..', 'elsewhere.txt') } })
+        out.inside = await fire({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 't5', tool_input: { file_path: join(cwd, 'ok.txt') } })
         yield* flush()
 
         yield { kind: 'usage', usage, agents }
@@ -151,13 +162,20 @@ describe('phase 2 flow (SDK mocked, real hooks, service, SQLite file and handler
         'agent-finished|Explore|',
         'tool-started|main|Write',
         'tool-finished|main|Write',
+        'tool-started|main|Read',
+        'tool-finished|main|Read',
+        'tool-started|main|Read',
         'run-finished|main|'
       ])
       expect(history[1]).toMatchObject({ summary: 'a.txt' })
       expect(history[2]).toMatchObject({ durationMs: 12, denied: false })
       expect(history[5]).toMatchObject({ summary: 'found it', agentId: 'ag1' })
       expect(history[7]).toMatchObject({ denied: true, durationMs: null })
-      expect(history[8]).toMatchObject({ status: 'success', costUsd: 0.0123 })
+      expect(history[9]).toMatchObject({ type: 'tool-finished', denied: true, toolUseId: 't4' })
+      expect(history[11]).toMatchObject({ status: 'success', costUsd: 0.0123 })
+      expect(JSON.stringify(outcomes.denied)).toContain('deny')
+      expect(JSON.stringify(outcomes.outside)).toContain('deny')
+      expect(outcomes.inside).toEqual({})
       expect(JSON.stringify(history)).not.toContain(LEAK_MARKER)
 
       const summary = await h.usageSummary({ projectId, days: 7 })
@@ -177,4 +195,39 @@ describe('phase 2 flow (SDK mocked, real hooks, service, SQLite file and handler
     },
     20000
   )
+
+  it('records an error run with usage when the result is an error', async () => {
+    const projectId = '22222222-2222-4222-8222-222222222222'
+    let finish: () => void = () => {}
+    const finished = new Promise<void>((r) => (finish = r))
+    const usage: RunUsage = {
+      costUsd: 0.5,
+      durationMs: 10,
+      isError: true,
+      models: [],
+      mainTokens: { inputTokens: 1, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0 }
+    }
+    const agents: AgentUsage[] = [{ agent: 'main', steps: 1, ...usage.mainTokens, approximate: false }]
+    const runner: ChatRunner = async function* () {
+      yield { kind: 'usage', usage, agents }
+      throw new Error('sdk-result-error')
+    }
+    const store = createRunStore(db)
+    const live: ActivityEvent[] = []
+    const chat = new ChatService({
+      resolveProjectPath: (id) => (id === projectId ? root : undefined),
+      runner,
+      emit: (e) => {
+        if (e.type === 'done' || e.type === 'error') finish()
+      },
+      emitActivity: (e) => live.push(e),
+      runStore: store,
+      loadConfig: () => ({ ok: true, config: { toolkitPath: '/toolkit' } })
+    })
+    expect(chat.send(projectId, 'go').ok).toBe(true)
+    await finished
+    expect(live.at(-1)).toMatchObject({ type: 'run-finished', status: 'error' })
+    const summary = store.summary({ projectId, days: 7 })
+    expect(summary.totals).toMatchObject({ runs: 1, costUsd: 0.5 })
+  })
 })

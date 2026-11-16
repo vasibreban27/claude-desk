@@ -21,8 +21,24 @@ function num(v: unknown): number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0
 }
 
+const ID_MAX = 100
+const SUBAGENT_TYPE_RE = /^[\w:.-]{1,100}$/
+
+/** Cuts to `max` UTF-16 units without leaving a lone high surrogate. */
+function cut(s: string, max: number): string {
+  if (s.length <= max) return s
+  const code = s.charCodeAt(max - 1)
+  return s.slice(0, code >= 0xd800 && code <= 0xdbff ? max - 1 : max)
+}
+
 function truncate(s: string): string {
-  return s.length > SUMMARY_MAX ? s.slice(0, SUMMARY_MAX) : s
+  return cut(s, SUMMARY_MAX)
+}
+
+/** Identifier-like string capped at 100 chars. */
+function ident(v: unknown): string | null {
+  const s = str(v)
+  return s === null ? null : cut(s, ID_MAX)
 }
 
 /** Summary from allowlisted tool_input keys only; never from tool_response. */
@@ -36,9 +52,9 @@ export function summarizeToolInput(toolInput: unknown): string {
 }
 
 function agentOf(input: Rec): { agent: string; agentId: string | null } {
-  const agentId = str(input['agent_id'])
+  const agentId = ident(input['agent_id'])
   if (agentId === null) return { agent: 'main', agentId: null }
-  return { agent: str(input['agent_type']) ?? 'subagent', agentId }
+  return { agent: ident(input['agent_type']) ?? 'subagent', agentId }
 }
 
 /** Maps a hook input to an activity draft; null for unknown or malformed input. */
@@ -48,8 +64,8 @@ export function mapHookInput(input: unknown): ActivityDraft | null {
   const who = agentOf(input)
   switch (event) {
     case 'PreToolUse': {
-      const tool = str(input['tool_name'])
-      const toolUseId = str(input['tool_use_id'])
+      const tool = ident(input['tool_name'])
+      const toolUseId = ident(input['tool_use_id'])
       if (!tool || !toolUseId) return null
       return {
         ...who,
@@ -60,12 +76,19 @@ export function mapHookInput(input: unknown): ActivityDraft | null {
       }
     }
     case 'PostToolUse': {
-      const tool = str(input['tool_name'])
-      const toolUseId = str(input['tool_use_id'])
+      const tool = ident(input['tool_name'])
+      const toolUseId = ident(input['tool_use_id'])
       if (!tool || !toolUseId) return null
       const d = input['duration_ms']
       const durationMs = typeof d === 'number' && Number.isFinite(d) && d >= 0 ? Math.round(d) : null
       return { ...who, type: 'tool-finished', toolUseId, tool, durationMs, denied: false }
+    }
+    case 'PostToolUseFailure': {
+      // Never reads error or tool_response content.
+      const tool = ident(input['tool_name'])
+      const toolUseId = ident(input['tool_use_id'])
+      if (!tool || !toolUseId) return null
+      return { ...who, type: 'tool-finished', toolUseId, tool, durationMs: null, denied: false }
     }
     case 'SubagentStop': {
       if (who.agentId === null) return null
@@ -80,8 +103,8 @@ export function mapHookInput(input: unknown): ActivityDraft | null {
 /** A tool call the guard denied: a tool-finished with `denied: true`. */
 export function mapDeniedToolUse(input: unknown): ActivityDraft | null {
   if (!isRecord(input)) return null
-  const tool = str(input['tool_name'])
-  const toolUseId = str(input['tool_use_id'])
+  const tool = ident(input['tool_name'])
+  const toolUseId = ident(input['tool_use_id'])
   if (!tool || !toolUseId) return null
   return { ...agentOf(input), type: 'tool-finished', toolUseId, tool, durationMs: null, denied: true }
 }
@@ -193,24 +216,24 @@ export function createUsageAccumulator(): UsageAccumulator {
       if (!isRecord(message) || message['type'] !== 'assistant') return
       const inner = message['message']
       if (!isRecord(inner)) return
-      const parent = str(message['parent_tool_use_id'])
+      const parent = ident(message['parent_tool_use_id'])
 
       const content = inner['content']
       if (Array.isArray(content)) {
         for (const block of content) {
           if (!isRecord(block) || block['type'] !== 'tool_use') continue
-          const id = str(block['id'])
+          const id = ident(block['id'])
           const name = str(block['name'])
           const input = block['input']
           if (id && name && SUBAGENT_TOOLS.has(name) && isRecord(input)) {
-            const t = str(input['subagent_type'])
-            if (t) subagentByToolUse.set(id, t)
+            const t = input['subagent_type']
+            subagentByToolUse.set(id, typeof t === 'string' && SUBAGENT_TYPE_RE.test(t) ? t : 'subagent')
           }
         }
       }
 
       const usage = inner['usage']
-      const messageId = str(inner['id'])
+      const messageId = str(inner['id']) ?? str(message['uuid'])
       if (!isRecord(usage) || messageId === null) return
       const key = `${messageId}|${parent ?? ''}`
       if (seen.has(key)) return
@@ -230,6 +253,9 @@ export function createUsageAccumulator(): UsageAccumulator {
         const main = result.find((g) => g.agent === 'main')
         if (main) Object.assign(main, mainTokens, { approximate: false })
         else result.unshift({ agent: 'main', steps: 0, ...mainTokens, approximate: false })
+      } else {
+        const main = result.find((g) => g.agent === 'main')
+        if (main) main.approximate = true
       }
       return result
     }

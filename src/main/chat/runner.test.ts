@@ -31,7 +31,7 @@ async function collect(it: AsyncIterable<RunnerItem>): Promise<RunnerItem[]> {
   return out
 }
 
-const call = async (hooks: Hooks, event: 'PreToolUse' | 'PostToolUse' | 'SubagentStop', input: unknown) => {
+const call = async (hooks: Hooks, event: 'PreToolUse' | 'PostToolUse' | 'PostToolUseFailure' | 'SubagentStop', input: unknown) => {
   const matcher = hooks[event]?.[0]
   if (!matcher) throw new Error('no matcher')
   const cb = matcher.hooks[0]
@@ -69,6 +69,17 @@ describe('sdkRunner options', () => {
     expect(options.hooks?.PreToolUse?.[0]?.onFailure).toBe('block')
     expect(options.hooks?.PostToolUse?.[0]?.onFailure).toBe('continue')
     expect(options.hooks?.SubagentStop?.[0]?.onFailure).toBe('continue')
+    expect(options.hooks?.PostToolUseFailure?.[0]?.onFailure).toBe('continue')
+    expect(options.settingSources).toEqual([])
+  })
+
+  it('aborts immediately when the caller signal is already aborted', async () => {
+    state.script = async function* () {}
+    const ctrl = new AbortController()
+    ctrl.abort()
+    await collect(run({ signal: ctrl.signal }))
+    const { options } = state.captured as unknown as Captured
+    expect(options.abortController?.signal.aborted).toBe(true)
   })
 
   it('aborts the SDK when the caller signal aborts', async () => {
@@ -126,14 +137,29 @@ describe('sdkRunner stream', () => {
 describe('buildHooks', () => {
   const drafts = () => {
     const list: ActivityDraft[] = []
-    return { list, hooks: buildHooks((d) => list.push(d)) }
+    return { list, hooks: buildHooks((d) => list.push(d), '/w') }
   }
 
   it('guard allows Read and reports tool-started only', async () => {
     const { list, hooks } = drafts()
-    const out = await call(hooks, 'PreToolUse', { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'u', tool_input: {} })
+    const out = await call(hooks, 'PreToolUse', { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'u', tool_input: { file_path: 'a.ts' } })
     expect(out).toEqual({})
     expect(list.map((d) => d.type)).toEqual(['tool-started'])
+  })
+
+  it('guard denies a Read outside the run cwd and allows one inside', async () => {
+    const { hooks } = drafts()
+    const mk = (file_path: string) => ({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'u', tool_input: { file_path } })
+    expect(await call(hooks, 'PreToolUse', mk('../outside.txt'))).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } })
+    expect(await call(hooks, 'PreToolUse', mk('inside.txt'))).toEqual({})
+  })
+
+  it('PostToolUseFailure maps to tool-finished with no error content', async () => {
+    const { list, hooks } = drafts()
+    await call(hooks, 'PostToolUseFailure', { hook_event_name: 'PostToolUseFailure', tool_name: 'Grep', tool_use_id: 'u', error: 'ERR-BODY' })
+    expect(list).toEqual([
+      { agent: 'main', agentId: null, type: 'tool-finished', toolUseId: 'u', tool: 'Grep', durationMs: null, denied: false }
+    ])
   })
 
   it('guard denies Write, reporting tool-started then a denied tool-finished', async () => {
@@ -172,9 +198,9 @@ describe('buildHooks', () => {
   it('a throwing emitter never breaks the guard or tracking hooks', async () => {
     const hooks = buildHooks(() => {
       throw new Error('queue broke')
-    })
+    }, '/w')
     await expect(
-      call(hooks, 'PreToolUse', { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'u', tool_input: {} })
+      call(hooks, 'PreToolUse', { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'u', tool_input: { file_path: 'a.ts' } })
     ).resolves.toEqual({})
     await expect(
       call(hooks, 'PostToolUse', { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_use_id: 'u' })

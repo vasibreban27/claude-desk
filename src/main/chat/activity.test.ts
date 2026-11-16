@@ -137,7 +137,7 @@ describe('createUsageAccumulator', () => {
         outputTokens: 1,
         cacheReadTokens: 5,
         cacheCreationTokens: 3,
-        approximate: false
+        approximate: true
       }
     ])
   })
@@ -264,5 +264,74 @@ describe('parseResultMessage', () => {
   it('returns null for other messages', () => {
     expect(parseResultMessage({ type: 'assistant' })).toBeNull()
     expect(parseResultMessage(null)).toBeNull()
+  })
+})
+
+describe('review fixes (S1, F1-F4)', () => {
+  it('caps identifiers at 100 chars', () => {
+    const long = 'a'.repeat(500)
+    const e = mapHookInput(
+      pre({ tool_name: long, tool_use_id: long, agent_id: long, agent_type: long })
+    ) as Record<string, unknown>
+    expect((e['tool'] as string).length).toBe(100)
+    expect((e['toolUseId'] as string).length).toBe(100)
+    expect((e['agentId'] as string).length).toBe(100)
+    expect((e['agent'] as string).length).toBe(100)
+  })
+
+  it('falls back to "subagent" for an invalid model-written subagent_type', () => {
+    const toolUse = (t: unknown) => ({
+      type: 'assistant',
+      parent_tool_use_id: null,
+      message: { id: 'm', usage: {}, content: [{ type: 'tool_use', id: 'tu', name: 'Agent', input: { subagent_type: t } }] }
+    })
+    const child = { type: 'assistant', parent_tool_use_id: 'tu', message: { id: 's1', usage: { input_tokens: 1 }, content: [] } }
+    for (const bad of ['bad name\nwith <html>', 'x'.repeat(101)]) {
+      const acc = createUsageAccumulator()
+      acc.add(toolUse(bad))
+      acc.add(child)
+      expect(acc.agents().map((a) => a.agent).sort()).toEqual(['main', 'subagent'])
+    }
+  })
+
+  it('marks main approximate without a result override', () => {
+    const acc = createUsageAccumulator()
+    acc.add({ type: 'assistant', parent_tool_use_id: null, message: { id: 'm1', usage: { input_tokens: 1 }, content: [] } })
+    expect(acc.agents()[0]).toMatchObject({ agent: 'main', approximate: true })
+    const main = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheCreationTokens: 0 }
+    expect(acc.agents(main)[0]).toMatchObject({ approximate: false })
+  })
+
+  it('maps PostToolUseFailure to tool-finished without error content', () => {
+    const d = mapHookInput({
+      hook_event_name: 'PostToolUseFailure',
+      tool_name: 'Read',
+      tool_use_id: 'u',
+      error: 'ERR-BODY',
+      tool_response: 'RESP-BODY'
+    })
+    expect(d).toEqual({
+      agent: 'main',
+      agentId: null,
+      type: 'tool-finished',
+      toolUseId: 'u',
+      tool: 'Read',
+      durationMs: null,
+      denied: false
+    })
+  })
+
+  it('does not leave a lone high surrogate when truncating', () => {
+    const s = 'x'.repeat(199) + '\u{1F600}'
+    const e = mapHookInput(pre({ tool_input: { file_path: s } })) as { summary: string }
+    expect(e.summary).toBe('x'.repeat(199))
+  })
+
+  it('dedupes assistant steps by uuid when message.id is missing', () => {
+    const acc = createUsageAccumulator()
+    const m = { type: 'assistant', uuid: 'u1', parent_tool_use_id: null, message: { usage: { input_tokens: 4 }, content: [] } }
+    acc.add(m)
+    acc.add(m)
+    expect(acc.agents()[0]).toMatchObject({ steps: 1, inputTokens: 4 })
   })
 })

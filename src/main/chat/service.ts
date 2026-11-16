@@ -18,6 +18,8 @@ interface RunState {
   seq: number
   usage: { usage: RunUsage; agents: AgentUsage[] } | null
   finished: boolean
+  /** toolUseIds that already have a tool-finished (a denied tool may also fire PostToolUseFailure). */
+  finishedTools: Set<string>
 }
 
 export interface ChatServiceDeps {
@@ -115,13 +117,17 @@ export class ChatService {
 
   private startRun(projectId: string): RunState {
     const startedAt = this.now()
-    const run: RunState = { projectId, runId: this.id(), startedAt, seq: 0, usage: null, finished: false }
+    const run: RunState = { projectId, runId: this.id(), startedAt, seq: 0, usage: null, finished: false, finishedTools: new Set() }
     this.activity.set(projectId, [])
     this.recordActivity(run, { agent: 'main', agentId: null, type: 'run-started' })
     return run
   }
 
   private recordActivity(run: RunState, draft: ActivityDraft): void {
+    if (draft.type === 'tool-finished') {
+      if (run.finishedTools.has(draft.toolUseId)) return
+      run.finishedTools.add(draft.toolUseId)
+    }
     const event = {
       ...draft,
       projectId: run.projectId,

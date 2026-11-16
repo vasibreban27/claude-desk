@@ -56,7 +56,7 @@ type Hooks = NonNullable<Options['hooks']>
  * `tool-finished` itself because a denied tool never reaches PostToolUse. Doing both in one callback
  * keeps start before finish. Tracking-only hooks use `onFailure: "continue"`.
  */
-export function buildHooks(emit: (draft: ActivityDraft) => void): Hooks {
+export function buildHooks(emit: (draft: ActivityDraft) => void, cwd: string): Hooks {
   const safeEmit = (draft: ActivityDraft | null): void => {
     if (!draft) return
     try {
@@ -68,7 +68,7 @@ export function buildHooks(emit: (draft: ActivityDraft) => void): Hooks {
 
   const guard: HookCallback = async (input) => {
     safeEmit(mapHookInput(input))
-    const output = guardPreToolUse(input)
+    const output = guardPreToolUse(input, cwd)
     if (isDenied(output)) safeEmit(mapDeniedToolUse(input))
     return output
   }
@@ -81,11 +81,16 @@ export function buildHooks(emit: (draft: ActivityDraft) => void): Hooks {
   return {
     PreToolUse: [{ hooks: [guard], onFailure: 'block' }],
     PostToolUse: [{ hooks: [track], onFailure: 'continue' }],
+    PostToolUseFailure: [{ hooks: [track], onFailure: 'continue' }],
     SubagentStop: [{ hooks: [track], onFailure: 'continue' }]
   }
 }
 
-/** Minimal push queue: hook callbacks and the message pump feed one async iterable. */
+/**
+ * Minimal push queue: hook callbacks and the message pump feed one async iterable.
+ * The queue is unbounded by design: items are small and one run is short-lived; the consumer
+ * (the chat service) drains it as fast as the SDK produces.
+ */
 function createQueue<T>() {
   const items: T[] = []
   let closed = false
@@ -130,16 +135,19 @@ function createQueue<T>() {
 /** Real runner: Agent SDK `query()` using the existing Claude Code login. */
 export const sdkRunner: ChatRunner = async function* (args) {
   const abortController = new AbortController()
-  args.signal?.addEventListener('abort', () => abortController.abort(), { once: true })
+  if (args.signal?.aborted) abortController.abort()
+  else args.signal?.addEventListener('abort', () => abortController.abort(), { once: true })
   const queue = createQueue<RunnerItem>()
   const stream = query({
     prompt: args.prompt,
     options: {
       cwd: args.cwd,
+      // Plugins load independently of settingSources; no user/project/local settings are needed.
+      settingSources: [],
       plugins: [{ type: 'local', path: args.pluginPath }],
       includePartialMessages: true,
       allowedTools: [...ALLOWED_TOOLS],
-      hooks: buildHooks((draft) => queue.push({ kind: 'activity', draft })),
+      hooks: buildHooks((draft) => queue.push({ kind: 'activity', draft }), args.cwd),
       abortController,
       ...(args.resume ? { resume: args.resume } : {})
     }

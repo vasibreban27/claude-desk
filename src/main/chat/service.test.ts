@@ -310,3 +310,16 @@ describe('sdk message extraction', () => {
     expect(extractSessionId({ session_id: 5 })).toBeNull()
   })
 })
+
+describe('ChatService tool-finished dedupe', () => {
+  it('emits at most one tool-finished per toolUseId', async () => {
+    const finished = (denied: boolean): RunnerItem => ({
+      kind: 'activity',
+      draft: { agent: 'main', agentId: null, type: 'tool-finished', toolUseId: 't1', tool: 'Read', durationMs: null, denied }
+    })
+    const { activity, run } = setupActivity(streamOf([toolStarted('t1'), finished(true), finished(false), usageItem()]))
+    await run()
+    expect(activity.filter((e) => e.type === 'tool-finished')).toHaveLength(1)
+    expect(activity.map((e) => e.seq)).toEqual(activity.map((_, i) => i))
+  })
+})
