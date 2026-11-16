@@ -144,9 +144,20 @@ export function expandBraces(pattern: string): string[] | null {
   return results
 }
 
+/**
+ * S70: on win32 a segment ending in "." or a space is normalized away by the OS and by ripgrep but makes
+ * `lstat` report ENOENT, so the guard would treat a junction named `x.` as missing. Denied lexically.
+ */
+function hasWinTrailingDotOrSpace(p: string): boolean {
+  if (process.platform !== 'win32') return false
+  return p.split(/[\\/]+/).some((s) => s !== '.' && s !== '..' && /[. ]$/.test(s))
+}
+
 /** Lexical checks for one expanded pattern; never touches the filesystem. */
 function expansionLexicallyOk(pattern: string): boolean {
   if (pattern.includes('\0') || pattern.startsWith('~')) return false
+  // Only the literal prefix names real directories (and a fully literal pattern names the file itself).
+  if (hasWinTrailingDotOrSpace(literalPrefix(pattern))) return false
   if (pattern.split(/[\\/]+/).includes('..')) return false
   if (/^[a-zA-Z]:(?![\\/])/.test(pattern)) return false
   if (UNC_LIKE.test(pattern)) return false
@@ -326,6 +337,7 @@ function checkPathTool(name: string, input: Record<string, unknown>, cwd: string
     if (typeof v !== 'string') return 'Malformed tool request.'
     if (v.length === 0) continue
     if (v.length > MAX_PATH_LENGTH || segmentCount(v) > MAX_PATH_SEGMENTS) return TOO_DEEP
+    if (hasWinTrailingDotOrSpace(v)) return outside
     const denial = argDenial(ctx, v, outside)
     if (denial !== null) return denial
   }

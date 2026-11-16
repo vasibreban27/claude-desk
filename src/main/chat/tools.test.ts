@@ -450,3 +450,50 @@ describe('guardPreToolUse bounds path arguments (S60, S61)', () => {
     expect(isDenied(g('Read', { file_path: path.join(outside, 'data.txt') }))).toBe(true)
   })
 })
+
+describe('guardPreToolUse denies win32 trailing dot and space segments lexically (S70)', () => {
+  beforeEach(() => {
+    fsCalls.n = 0
+  })
+
+  it.runIf(process.platform === 'win32').each([
+    ['Grep path', () => g('Grep', { pattern: 'x', path: 'jfirst.' })],
+    ['Read file', () => g('Read', { file_path: 'jfirst./s.txt' })],
+    ['Read file, backslash', () => g('Read', { file_path: 'jfirst.\\s.txt' })],
+    ['Read intermediate segment', () => g('Read', { file_path: 'src/a/jmid./s.txt' })],
+    ['Read absolute', () => g('Read', { file_path: path.join(cwd, 'jfirst.', 's.txt') })],
+    ['Read trailing space', () => g('Read', { file_path: 'jfirst /s.txt' })],
+    ['Glob path', () => g('Glob', { pattern: '*', path: 'jfirst.' })],
+    ['Glob prefix', () => g('Glob', { pattern: 'jfirst./**' })],
+    ['Glob intermediate prefix', () => g('Glob', { pattern: 'src/jmid./**/*.ts' })],
+    ['Glob literal pattern', () => g('Glob', { pattern: 'jfirst./s.txt' })],
+    ['Glob brace expansion', () => g('Glob', { pattern: '{src,jfirst.}/**' })],
+    ['Glob nested brace expansion', () => g('Glob', { pattern: 'src/{a,{b,jmid. }}/**' })],
+    ['Grep glob prefix', () => g('Grep', { pattern: 'x', glob: 'jfirst./**' })],
+    ['Grep glob brace expansion', () => g('Grep', { pattern: 'x', glob: '{jfirst.,src}/*.ts' })]
+  ])('denies %s with no fs calls', (_name, call) => {
+    expect(isDenied(call())).toBe(true)
+    expect(fsCalls.n).toBe(0)
+  })
+
+  it.runIf(process.platform === 'win32')('keeps allowing "." and "..", inner dots and dot-prefixed names', () => {
+    expect(g('Read', { file_path: './a.txt' })).toEqual({})
+    expect(g('Read', { file_path: 'src/./../a.txt' })).toEqual({})
+    expect(g('Read', { file_path: '.hidden/a.b.txt' })).toEqual({})
+    expect(g('Glob', { pattern: 'src/**/*.' })).toEqual({})
+  })
+
+  it.runIf(process.platform === 'win32')('denies a junction reached through a trailing-dot name', (ctx) => {
+    const link = path.join(cwd, 'jfirst')
+    try {
+      symlinkSync(outside, link, 'junction')
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) ctx.skip()
+      throw error
+    }
+    fsCalls.n = 0
+    expect(isDenied(g('Grep', { pattern: 'x', path: 'jfirst.' }))).toBe(true)
+    expect(isDenied(g('Read', { file_path: 'jfirst./data.txt' }))).toBe(true)
+    expect(fsCalls.n).toBe(0)
+  })
+})
