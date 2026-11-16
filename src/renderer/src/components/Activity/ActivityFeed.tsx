@@ -4,7 +4,8 @@ import { isNearBottom } from '../Chat/stickToBottom'
 import { buildRows, formatCost, formatDuration, formatTime, type ActivityRow } from './rows'
 import './activity.css'
 
-export interface ActivityFeedProps extends Omit<UseActivity, 'projectId'> {
+export interface ActivityFeedProps
+  extends Omit<UseActivity, 'projectId' | 'historyLoaded' | 'historyFinishedRunId'> {
   hasProject: boolean
 }
 
