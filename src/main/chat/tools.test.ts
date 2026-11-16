@@ -624,3 +624,45 @@ describe('guardPreToolUse walks the prefix through parentheses and "!" (S71)', (
     expect(g('Glob', { pattern: dir + '/*.ts' })).toEqual({})
   })
 })
+
+describe('guardPreToolUse denies whitespace-padded and drive-rooted paths (S73, S74)', () => {
+  beforeEach(() => {
+    fsCalls.n = 0
+  })
+
+  const WS = [' ', '\t', '\n', '\r', '\u00a0', '\u2003', '\ufeff']
+
+  it.each(WS)('denies a path padded with %j, which the tool would trim, with no fs calls', (w) => {
+    for (const out of [
+      g('Grep', { pattern: 'S', path: w + 'C:\\Windows' }),
+      g('Grep', { pattern: 'S', path: '..' + w }),
+      g('Glob', { pattern: '*', path: '..' + w }),
+      g('Grep', { pattern: 'S', path: w + '\\\\127.0.0.1\\c$' }),
+      g('Read', { file_path: w + 'a.txt' }),
+      g('Glob', { pattern: cwd + '\\..' + w + '\\*' }),
+      g('Glob', { pattern: '{src,..' + w + '}/*' })
+    ]) {
+      expect(isDenied(out)).toBe(true)
+    }
+    expect(fsCalls.n).toBe(0)
+  })
+
+  it('still allows names with inner spaces', () => {
+    mkdirSync(path.join(cwd, 'my docs'), { recursive: true })
+    expect(g('Read', { file_path: 'my docs/a.txt' })).toEqual({})
+    expect(g('Glob', { pattern: 'my docs/**/*.ts' })).toEqual({})
+  })
+
+  it.runIf(process.platform === 'win32')('denies rooted paths without a drive letter on win32', () => {
+    const q = '/' + path.parse(cwd).root[0]?.toLowerCase() + '/Windows'
+    for (const out of [
+      g('Grep', { pattern: 'S', path: q }),
+      g('Glob', { pattern: '*', path: '/cygdrive/c/Windows' }),
+      g('Glob', { pattern: q + '/*' }),
+      g('Read', { file_path: q + '/win.ini' })
+    ]) {
+      expect(isDenied(out)).toBe(true)
+    }
+    expect(fsCalls.n).toBe(0)
+  })
+})

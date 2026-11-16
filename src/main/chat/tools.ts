@@ -155,8 +155,21 @@ export function expandBraces(pattern: string): string[] | null {
  * `lstat` report ENOENT, so the guard would treat a junction named `x.` as missing. Denied lexically.
  */
 function hasWinTrailingDotOrSpace(p: string): boolean {
-  if (process.platform !== 'win32') return false
-  return p.split(/[\\/]+/).some((s) => s !== '.' && s !== '..' && /[. ]$/.test(s))
+  const win = process.platform === 'win32'
+  return p.split(/[\\/]+/).some((s) => {
+    // S73: the Grep/Glob tools `trim()` their path (any whitespace or U+FEFF), so `" C:\Windows"`, `"..\t"` or
+    // `"\t\\\\host\\share"` would be resolved by the tool differently from the guard. Denied on every platform.
+    if (/^[\s\uFEFF]|[\s\uFEFF]$/.test(s)) return true
+    return win && s !== '.' && s !== '..' && s.endsWith('.')
+  })
+}
+
+/**
+ * S74: on win32 the tools map a leading `/x/` or `/cygdrive/x/` to the drive `X:\`, which the guard would resolve
+ * against the cwd's drive instead. A rooted path without a drive letter is never a project-relative path: denied.
+ */
+function isWinRootRelative(p: string): boolean {
+  return process.platform === 'win32' && /^[\\/]/.test(p)
 }
 
 /** Lexical checks for one expanded pattern; never touches the filesystem. */
@@ -165,7 +178,7 @@ function expansionLexicallyOk(pattern: string): boolean {
   // F12: on POSIX a backslash escapes the next character, so `\.\./x` would hide a ".." segment from the split below.
   if (process.platform !== 'win32' && pattern.includes('\\')) return false
   // Only the literal prefix names real directories (and a fully literal pattern names the file itself).
-  if (hasWinTrailingDotOrSpace(literalPrefix(pattern))) return false
+  if (hasWinTrailingDotOrSpace(literalPrefix(pattern)) || isWinRootRelative(pattern)) return false
   if (pattern.split(/[\\/]+/).includes('..')) return false
   if (/^[a-zA-Z]:(?![\\/])/.test(pattern)) return false
   if (UNC_LIKE.test(pattern)) return false
@@ -357,7 +370,7 @@ function checkPathTool(name: string, input: Record<string, unknown>, cwd: string
     if (typeof v !== 'string') return 'Malformed tool request.'
     if (v.length === 0) continue
     if (v.length > MAX_PATH_LENGTH || segmentCount(v) > MAX_PATH_SEGMENTS) return TOO_DEEP
-    if (hasWinTrailingDotOrSpace(v)) return outside
+    if (hasWinTrailingDotOrSpace(v) || isWinRootRelative(v)) return outside
     const denial = argDenial(ctx, v, outside)
     if (denial !== null) return denial
   }
