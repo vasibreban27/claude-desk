@@ -5,8 +5,15 @@ import { openDatabase, createRunStore, type RunStore } from './db'
 import type Database from 'better-sqlite3'
 import { registerIpc } from './ipc/register'
 import { openJsonProjectStore } from './projects/store'
+import { loadEnvFile } from './config'
 
 const DB_FILE_NAME = 'claude-desk.db'
+
+/** Development only: a packaged app has no project `.env`. Real environment variables win over the file. */
+export function loadDevEnv(isPackaged: boolean, appPath: string): void {
+  if (isPackaged) return
+  if (loadEnvFile(appPath) === 'failed') console.error('reading .env failed')
+}
 
 export function getWindowOptions(preloadPath: string): BrowserWindowConstructorOptions {
   return {
@@ -50,6 +57,8 @@ export function openRunStore(dataDir: string): { db: Database.Database; store: R
     return undefined
   }
 }
+
+loadDevEnv(app.isPackaged, app.getAppPath())
 
 app
   .whenReady()

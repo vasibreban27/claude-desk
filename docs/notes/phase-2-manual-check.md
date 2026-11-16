@@ -2,7 +2,7 @@
 
 Confirms "done when": watch each agent act live, then see what it cost. Live SDK only; the rest is automated.
 
-1. Logged in to Claude Code; `CLAUDE_TOOLKIT_PATH` set; `npm install`; `npm run build` succeeds; `npm run dev`. DevTools: `window.api` has `activityHistory`, `usageSummary`, `onActivityEvent`, no console errors.
+1. Logged in to Claude Code; `CLAUDE_TOOLKIT_PATH` set (in `.env` at the project root, copied from `.env.example`, or in the shell; it must point at the `plugins/flow` folder); `npm install`; `npm run build` succeeds; `npm run dev`. DevTools: `window.api` has `activityHistory`, `usageSummary`, `onActivityEvent`, no console errors.
 2. Add a project. Ask something that makes Claude read files and call a subagent (e.g. "use the Explore agent to summarize src/").
 3. Activity tab: rows appear live, labelled `main` or the subagent type. Expect (a) tool rows show durations and the subagent row shows a summary (`duration_ms` on PostToolUse, `last_assistant_message` on SubagentStop).
 4. Open Usage after the run: totals, per-day and per-agent rows, costs shown as "~$" estimates, subagent output tokens marked "~".

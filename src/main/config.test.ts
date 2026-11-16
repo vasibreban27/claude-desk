@@ -1,6 +1,82 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { loadConfig } from './config'
+import { loadConfig, loadEnvFile } from './config'
+
+describe('loadEnvFile', () => {
+  const reading = (text: string) => ({ readText: () => text })
+
+  it('copies CLAUDE_TOOLKIT_PATH from the file into an empty env', () => {
+    const env: Record<string, string | undefined> = {}
+    expect(loadEnvFile('/proj', env, reading('# comment\nCLAUDE_TOOLKIT_PATH=/some/plugin\n'))).toBe('loaded')
+    expect(env['CLAUDE_TOOLKIT_PATH']).toBe('/some/plugin')
+  })
+
+  it('handles quoted values and CRLF line endings', () => {
+    const env: Record<string, string | undefined> = {}
+    loadEnvFile('/proj', env, reading('CLAUDE_TOOLKIT_PATH="C:\\\\tools\\\\flow"\r\n'))
+    expect(env['CLAUDE_TOOLKIT_PATH']).toBeDefined()
+    expect(env['CLAUDE_TOOLKIT_PATH']).not.toContain('"')
+  })
+
+  it('does not override a variable that is already set', () => {
+    const env: Record<string, string | undefined> = { CLAUDE_TOOLKIT_PATH: '/from/shell' }
+    loadEnvFile('/proj', env, reading('CLAUDE_TOOLKIT_PATH=/from/file'))
+    expect(env['CLAUDE_TOOLKIT_PATH']).toBe('/from/shell')
+  })
+
+  it('treats a blank existing variable as unset', () => {
+    const env: Record<string, string | undefined> = { CLAUDE_TOOLKIT_PATH: '  ' }
+    loadEnvFile('/proj', env, reading('CLAUDE_TOOLKIT_PATH=/from/file'))
+    expect(env['CLAUDE_TOOLKIT_PATH']).toBe('/from/file')
+  })
+
+  it('ignores keys that are not allowed, such as an API key', () => {
+    const env: Record<string, string | undefined> = {}
+    loadEnvFile('/proj', env, reading('ANTHROPIC_API_KEY=sk-ant-x\nNODE_OPTIONS=--inspect\nCLAUDE_TOOLKIT_PATH=/p'))
+    expect(env).toEqual({ CLAUDE_TOOLKIT_PATH: '/p' })
+  })
+
+  it('returns missing when the file does not exist', () => {
+    const env: Record<string, string | undefined> = {}
+    const readText = (): string => {
+      throw Object.assign(new Error('nope'), { code: 'ENOENT' })
+    }
+    expect(loadEnvFile('/proj', env, { readText })).toBe('missing')
+    expect(env).toEqual({})
+  })
+
+  it('returns failed on other read errors without leaking the message', () => {
+    const env: Record<string, string | undefined> = {}
+    const readText = (): string => {
+      throw Object.assign(new Error('secret detail'), { code: 'EACCES' })
+    }
+    expect(loadEnvFile('/proj', env, { readText })).toBe('failed')
+    expect(env).toEqual({})
+  })
+
+  describe('with a real file', () => {
+    let dir: string
+    beforeEach(() => {
+      dir = mkdtempSync(path.join(os.tmpdir(), 'claude-desk-env-'))
+    })
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
+    })
+
+    it('reads <dir>/.env from disk', () => {
+      writeFileSync(path.join(dir, '.env'), 'CLAUDE_TOOLKIT_PATH=/real/plugin\n')
+      const env: Record<string, string | undefined> = {}
+      expect(loadEnvFile(dir, env)).toBe('loaded')
+      expect(env['CLAUDE_TOOLKIT_PATH']).toBe('/real/plugin')
+    })
+
+    it('returns missing when the folder has no .env', () => {
+      expect(loadEnvFile(dir, {})).toBe('missing')
+    })
+  })
+})
 
 describe('loadConfig', () => {
   it('errors when unset', () => {
