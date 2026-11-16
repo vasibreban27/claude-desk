@@ -5,9 +5,11 @@ vi.mock('electron', () => ({
   BrowserWindow: class {}
 }))
 vi.mock('./ipc/register', () => ({ registerIpc: vi.fn(() => () => undefined) }))
+const { openDatabase } = vi.hoisted(() => ({ openDatabase: vi.fn() }))
+vi.mock('./db', () => ({ openDatabase, createRunStore: vi.fn(() => ({ recordRun: vi.fn(), summary: vi.fn() })) }))
 vi.mock('./projects/store', () => ({ openJsonProjectStore: vi.fn() }))
 
-import { getWindowOptions } from './index'
+import { getWindowOptions, openRunStore } from './index'
 
 describe('getWindowOptions', () => {
   it('enables context isolation and disables node integration', () => {
@@ -27,5 +29,27 @@ describe('preload build output', () => {
     expect(out?.format).toBe('cjs')
     expect(out?.entryFileNames).toBe(PRELOAD_FILE_NAME)
     expect(PRELOAD_FILE_NAME).toMatch(/\.c?js$/)
+  })
+})
+
+describe('openRunStore', () => {
+  it('opens claude-desk.db in the data dir', () => {
+    const db = { close: vi.fn() }
+    openDatabase.mockReturnValue(db)
+    const opened = openRunStore('/data')
+    expect(openDatabase).toHaveBeenCalledWith(expect.stringMatching(/claude-desk\.db$/))
+    expect(opened?.db).toBe(db)
+  })
+
+  it('returns undefined and logs only the error name when opening fails', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    openDatabase.mockImplementation(() => {
+      throw new RangeError('cannot open /home/someone/data')
+    })
+    expect(openRunStore('/data')).toBeUndefined()
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('someone')
+    expect(spy.mock.calls[0]![1]).toBe('RangeError')
+    spy.mockRestore()
   })
 })

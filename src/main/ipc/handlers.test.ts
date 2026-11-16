@@ -25,6 +25,7 @@ function setup(over: Partial<HandlerDeps> = {}) {
     pickFolder: vi.fn(async () => '/repo'),
     chat: {
       getHistory: vi.fn(() => []),
+      activityHistory: vi.fn(() => []),
       send: vi.fn(() => ({ ok: true as const, turnId: 't1' }))
     },
     ...over
@@ -129,7 +130,7 @@ describe('chat', () => {
   })
 
   it('send undoes the route when rejected (busy)', async () => {
-    const { h } = setup({ chat: { getHistory: () => [], send: () => ({ ok: false, error: 'busy' }) } })
+    const { h } = setup({ chat: { getHistory: () => [], activityHistory: () => [], send: () => ({ ok: false, error: 'busy' }) } })
     const undo = vi.fn()
     expect(await h.chatSend({ projectId: ID, text: 'hi' }, () => undo)).toEqual({ ok: false, error: 'busy' })
     expect(undo).toHaveBeenCalled()
@@ -140,11 +141,79 @@ describe('chat', () => {
     const { h } = setup({
       chat: {
         getHistory: () => [],
+        activityHistory: () => [],
         send: () => {
           throw new Error('x')
         }
       }
     })
     expect(await h.chatSend({ projectId: ID, text: 'hi' })).toEqual({ ok: false, error: 'invalid' })
+  })
+})
+
+describe('activity:history', () => {
+  it('returns [] for a malformed payload without calling the service', async () => {
+    const { h, deps } = setup()
+    expect(await h.activityHistory({ projectId: 'nope' })).toEqual([])
+    expect(await h.activityHistory(undefined)).toEqual([])
+    expect(deps.chat.activityHistory).not.toHaveBeenCalled()
+  })
+
+  it('passes the parsed project id to the service', async () => {
+    const events = [
+      { projectId: ID, runId: 'r', seq: 0, at: '2026-01-01T00:00:00.000+00:00', agent: 'main', agentId: null, type: 'run-started' as const }
+    ]
+    const { h, deps } = setup()
+    vi.mocked(deps.chat.activityHistory).mockReturnValue(events)
+    expect(await h.activityHistory({ projectId: ID })).toEqual(events)
+    expect(deps.chat.activityHistory).toHaveBeenCalledWith(ID)
+  })
+})
+
+describe('usage:summary', () => {
+  const empty = (days: number) => ({
+    days,
+    estimated: true as const,
+    totals: { runs: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+    byDay: [],
+    byAgent: [],
+    byProject: []
+  })
+
+  it('returns an empty summary for invalid payloads and never reaches the store', async () => {
+    const summary = vi.fn()
+    const { h } = setup({ runStore: { summary } })
+    const bad = [null, {}, { projectId: null, days: 0 }, { projectId: null, days: 1000 }, { projectId: null, days: Number.NaN }, { projectId: 'x', days: 7 }]
+    for (const payload of bad) {
+      const res = await h.usageSummary(payload)
+      expect(res.totals.runs).toBe(0)
+      expect(res.estimated).toBe(true)
+    }
+    expect(summary).not.toHaveBeenCalled()
+  })
+
+  it('passes parsed values to the store', async () => {
+    const summary = vi.fn(() => empty(7))
+    const { h } = setup({ runStore: { summary } })
+    await h.usageSummary({ projectId: ID, days: 7 })
+    expect(summary).toHaveBeenCalledWith({ projectId: ID, days: 7 })
+  })
+
+  it('returns an empty summary when the database is unavailable', async () => {
+    const { h } = setup()
+    expect(await h.usageSummary({ projectId: null, days: 90 })).toEqual(empty(90))
+  })
+
+  it('returns an empty summary when the store throws', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { h } = setup({
+      runStore: {
+        summary: () => {
+          throw new TypeError('boom /home/user/data')
+        }
+      }
+    })
+    expect(await h.usageSummary({ projectId: null, days: 30 })).toEqual(empty(30))
+    expect(console.error).toHaveBeenCalledWith('usage:summary failed:', 'TypeError')
   })
 })
