@@ -131,10 +131,10 @@ Tasks that touch the contract say `Contract: <channel>`.
 ### Wave 1
 
 ### T1: SQLite dependency and spike
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: none
-- Owns: `package.json`, `package-lock.json`, `electron.vite.config.ts` (or the file actually used by the scaffold), `vitest.config.ts`, `docs/notes/sqlite-spike.md`, the Commands section of `CLAUDE.md`
+- Owns: `package.json`, `package-lock.json`, `electron.vite.config.ts` (or the file actually used by the scaffold), `vitest.config.ts`, `docs/notes/sqlite-spike.md`, `tests/sqlite-smoke.test.ts`, the Commands section of `CLAUDE.md`
 - Depends on: none
 - Acceptance criteria:
   - Given the current Electron version When `better-sqlite3` is added Then `npm run dev` and `npm run build` still work and a `better-sqlite3` import in main bundles as an external, loadable module.
@@ -144,10 +144,10 @@ Tasks that touch the contract say `Contract: <channel>`.
   - Given the new scripts When `CLAUDE.md` Commands is read Then it matches `package.json` scripts.
 
 ### T2: IPC contract, event mapping and tool guard
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: `activity:event`, `activity:history`, `usage:summary`
-- Owns: `src/shared/ipc.ts`, `src/shared/ipc.test.ts`, `src/shared/ipc.schemas.test.ts`, `src/main/chat/activity.ts`, `src/main/chat/activity.test.ts`, `src/main/chat/tools.ts`, `src/main/chat/tools.test.ts`
+- Owns: `src/shared/ipc.ts`, `src/shared/ipc.test.ts`, `src/main/chat/activity.ts`, `src/main/chat/activity.test.ts`, `src/main/chat/tools.ts`, `src/main/chat/tools.test.ts`
 - Depends on: none
 - Acceptance criteria:
   - Given the contract section When `ipc.ts` is read Then channels, zod request schemas (`activityHistoryRequestSchema`, `usageSummaryRequestSchema`), `ActivityEvent`, `UsageSummary`, `ACTIVITY_BUFFER_MAX` and the three `DeskApi` methods exist exactly as specified, with no `any`.
@@ -269,3 +269,13 @@ Workers: `node-developer` for T1-T4, T7, T9 (`src/main`, `src/preload`, `src/sha
 Done when (from the vision): during a run the user sees each agent's actions live, and afterwards what it cost.
 
 ## 10. Follow-ups
+
+Wave 1 (reviewer and security audit both PASS; minor findings, not fixed):
+- F1 `src/main/chat/activity.ts:236`: `agents()` marks `main` as `approximate: false` even without `mainTokens` (run errored or aborted before `result`); should be `true` unless `mainTokens` overrides.
+- F2 `src/main/chat/activity.ts:59`: no mapping for `PostToolUseFailure`; a failing tool leaves a `tool-started` with no `tool-finished` (shows "running" forever). Map it to `tool-finished` (`denied: false`, `durationMs: null`) or have T5 close open tools at `run-finished`. Decide before wave 3.
+- F3 `src/main/chat/activity.ts:19`: `truncate` can split a surrogate pair at the cut; drop a trailing high surrogate.
+- F4 `src/main/chat/activity.ts:150`: assistant messages without `message.id` are ignored; confirm the SDK always sets it, else fall back to `uuid`.
+- S1 `src/main/chat/activity.ts` (lines 39-53, 83-84, 207-212): only `summary` is capped; `tool`, `toolUseId`, `agentId`, `agent` and the model-written `subagent_type` pass through at any length (memory and IPC bloat). Cap identifiers at ~100 chars; validate `subagent_type` or fall back to `"subagent"`.
+- T1 caveats: `@types/better-sqlite3` ^9.6.0 not checked against `better-sqlite3` v13's API (T3 confirms by typechecking); `npm run dev` with HMR not run against the new dependency; not verified on macOS or Linux.
+- To confirm in T4 (security audit): the guard runs for subagent tool calls and is registered with `onFailure: "block"`; a `Skill` cannot run shell commands before the `PreToolUse` hook sees them; hook field names (`agent_id`, `agent_type`, `duration_ms`, `last_assistant_message`) match the installed SDK; the denied-tool event comes from `mapDeniedToolUse`.
+- Known, outside this plan: `src/main/git/status.test.ts` times out under parallel load (deferred by the user).
