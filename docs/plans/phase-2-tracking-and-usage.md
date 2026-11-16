@@ -175,7 +175,7 @@ Tasks that touch the contract say `Contract: <channel>`.
 ### Wave 3
 
 ### T4: Runner and service run lifecycle
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: `activity:event`, `activity:history`
 - Owns: `src/main/chat/runner.ts`, `src/main/chat/service.ts`, `src/main/chat/service.test.ts`, `src/main/chat/runner.test.ts`
@@ -189,7 +189,7 @@ Tasks that touch the contract say `Contract: <channel>`.
   - Given the existing `service.test.ts` cases (history, `busy`, errors, session resume, config error) When run Then they pass with only mechanical updates.
 
 ### T5: Activity feed (renderer)
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Contract: `activity:event`, `activity:history`
 - Owns: `src/renderer/src/hooks/useActivity.ts`, `src/renderer/src/hooks/useActivity.test.ts`, `src/renderer/src/components/Activity/**`
@@ -203,7 +203,7 @@ Tasks that touch the contract say `Contract: <channel>`.
   - Given the feed grows When it is scrolled up Then it does not jump; when at the bottom Then it follows (reuse the existing `stickToBottom` helper from the chat if it fits, else a local equivalent).
 
 ### T6: Usage view (renderer)
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Contract: `usage:summary`
 - Owns: `src/renderer/src/hooks/useUsage.ts`, `src/renderer/src/hooks/useUsage.test.ts`, `src/renderer/src/components/Usage/**`
@@ -288,4 +288,13 @@ Wave 2 (reviewer and security audit both PASS; minor findings, not fixed):
 - F4 `src/main/db/runStore.ts` (~line 85): `day` is fixed at record time in the timezone then in effect; no test under a non-UTC timezone. Acceptable behavior, test gap only.
 - S (note) `RunStore.summary` does not validate `days` itself; NaN gives an empty summary. It relies on the IPC zod schema (T7).
 - To confirm in T7: where the database file lives (`userData/data`), and that the database is closed at quit so the WAL is checkpointed.
+Wave 3 (reviewer and security audit both PASS; minor findings, not fixed):
+- S10 `src/main/chat/runner.ts:140`, `src/main/chat/tools.ts:30`: the guard checks the tool name only, and bare `allowedTools` rules pre-approve `Read`/`Grep`/`Glob` for every path. A prompt-injected file in a project could make the agent read `~/.ssh/*`, `~/.aws/credentials` or another project's `.env`; the content would appear in chat, in-memory history and the SDK transcript on disk. No network tool exists in Phase 2, so this is disclosure, not exfiltration, but it becomes an exfiltration path once `Bash`/`WebFetch`/push arrive. Fix: in `guardPreToolUse`, resolve `file_path`/`path` (default `cwd`) with `path.resolve` + `fs.realpathSync` and deny anything outside the run's `cwd` (pass `cwd` into `buildHooks`). Needs a decision from the user (see build report).
+- Security (not a finding, unverified): set `settingSources` explicitly in the `query()` options so only the intended settings sources load; confirm in T9 that hooks fire for subagent tool calls and that a `Skill` cannot run shell commands before `PreToolUse` (skill `!`cmd`` with `allowed-tools: Bash`).
+- F1 `src/renderer/src/hooks/useUsage.ts:34-58`: on project or scope change the previous summary stays rendered (and an error shows beside it) until the new response arrives; key the data by request (`projectId`, `days`, scope), dim or hide mismatches, show "Refreshing", add a project-switch test.
+- F2 `src/main/chat/runner.ts:131-180`: the push queue is unbounded (document it); an already-aborted `args.signal` never aborts the run (latent, the service passes no signal).
+- F3 `src/renderer/src/components/Activity/ActivityFeed.tsx:28`: a null cost renders "cost unknown (estimated)"; append "(estimated)" only for a non-null cost.
+- F4 `src/renderer/src/hooks/useActivity.test.ts`: no test for a project switch while history is in flight (stale-history guard untested).
+- F5 `src/renderer/src/hooks/useActivity.ts:61-66`: after a history load failure the error stays until the project changes while live rows keep appending; clear the error on the next live event.
+- T4 caveats: `duration_ms` on `PostToolUse` and `last_assistant_message` on `SubagentStop` not confirmed by the docs (code degrades to null/empty; check live in T9); unsure whether a denied tool also fires `PostToolUseFailure` (possible duplicate `tool-finished`); a config error produces no activity run; a runner that throws before any result records nothing to the store; `Stop` is not registered (maps to no event).
 - Known, outside this plan: `src/main/git/status.test.ts` times out under parallel load (deferred by the user).
