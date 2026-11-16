@@ -156,6 +156,8 @@ function hasWinTrailingDotOrSpace(p: string): boolean {
 /** Lexical checks for one expanded pattern; never touches the filesystem. */
 function expansionLexicallyOk(pattern: string): boolean {
   if (pattern.includes('\0') || pattern.startsWith('~')) return false
+  // F12: on POSIX a backslash escapes the next character, so `\.\./x` would hide a ".." segment from the split below.
+  if (process.platform !== 'win32' && pattern.includes('\\')) return false
   // Only the literal prefix names real directories (and a fully literal pattern names the file itself).
   if (hasWinTrailingDotOrSpace(literalPrefix(pattern))) return false
   if (pattern.split(/[\\/]+/).includes('..')) return false
@@ -241,7 +243,7 @@ function probeComponent(ctx: ProbeCtx, realCwd: string, next: string): string | 
       spend(ctx)
       const target = path.resolve(path.dirname(next), readlinkSync(next))
       // Dangling: harmless only if its literal target is inside the project; otherwise report it as outside.
-      result = isInside(realCwd, target) ? null : target
+      result = isInside(realCwd, target) || isInside(path.resolve(ctx.cwd), target) ? null : target
     }
   }
   ctx.cache.set(key, result)

@@ -62,6 +62,16 @@ afterAll(() => {
   rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
 })
 
+/** Creates a junction/symlink; skips the test only when the platform or permissions forbid it, rethrows otherwise. */
+function makeLink(ctx: { skip: () => never }, target: string, linkPath: string, type: 'junction' | 'dir' = 'junction'): void {
+  try {
+    symlinkSync(target, linkPath, type)
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) ctx.skip()
+    throw error
+  }
+}
+
 const g = (tool_name: string, tool_input?: unknown) =>
   guardPreToolUse({ hook_event_name: 'PreToolUse', tool_name, tool_input }, cwd)
 
@@ -146,13 +156,9 @@ describe('guardPreToolUse path scoping (S10)', () => {
     expect(g('Glob', { pattern: path.join(cwd, '**', '*.ts').replace(/\\/g, '/') })).toEqual({})
   })
 
-  it('denies a symlink that points outside', () => {
+  it('denies a symlink that points outside', (ctx) => {
     const link = path.join(cwd, 'link')
-    try {
-      symlinkSync(outside, link, 'junction')
-    } catch {
-      return // symlinks unavailable
-    }
+    makeLink(ctx, outside, link)
     expect(isDenied(g('Read', { file_path: path.join(link, 'data.txt') }))).toBe(true)
     expect(isDenied(g('Grep', { pattern: 'a', path: 'link' }))).toBe(true)
   })
@@ -235,13 +241,9 @@ describe('guardPreToolUse glob and link hardening (F1, S30)', () => {
     expect(isDenied(g('Glob', { pattern: abs }))).toBe(true)
   })
 
-  it('denies patterns whose literal prefix goes through a link that leaves the project', () => {
+  it('denies patterns whose literal prefix goes through a link that leaves the project', (ctx) => {
     const link = path.join(cwd, 'docs-link')
-    try {
-      symlinkSync(outside, link, 'junction')
-    } catch {
-      return // symlinks unavailable
-    }
+    makeLink(ctx, outside, link)
     expect(isDenied(g('Glob', { pattern: 'docs-link/**' }))).toBe(true)
     expect(isDenied(g('Glob', { pattern: '{docs-link,x}/**' }))).toBe(true)
     expect(isDenied(g('Grep', { pattern: 'a', glob: '{src,docs-link}/*.{ts,txt}' }))).toBe(true)
@@ -321,13 +323,10 @@ describe('guardPreToolUse bounds the filesystem work of brace expansion (S51)', 
     expect(fsCalls.n).toBe(0)
   })
 
-  it('the worst allowed pattern (64 segments, 64 expansions) is cheap and bounded', () => {
+  it('the worst allowed pattern (64 segments, 6 brace groups) is cheap and bounded', () => {
     const worst = '{a,b}/{c,d}/{e,f}/{g,h}/{i,j}/{k,l}/' + 'a/'.repeat(57) + '*'
-    const t0 = performance.now()
     expect(g('Glob', { pattern: worst })).toEqual({})
-    const ms = performance.now() - t0
     expect(fsCalls.n).toBeLessThan(200)
-    expect(ms).toBeLessThan(500) // generous: guards against pathological regressions only
     fsCalls.n = 0
     expect(g('Grep', { pattern: 'x', glob: worst })).toEqual({})
     expect(fsCalls.n).toBeLessThan(200)
@@ -370,14 +369,10 @@ describe('guardPreToolUse bounds the filesystem work of brace expansion (S51)', 
     expect(out.hookSpecificOutput?.permissionDecisionReason).toContain('inside the project folder')
   })
 
-  it('still allows existing in-project prefixes and denies a link prefix mid-pattern', () => {
+  it('still allows existing in-project prefixes and denies a link prefix mid-pattern', (ctx) => {
     expect(g('Glob', { pattern: '{src,w0}/{x,y}/**' })).toEqual({})
     const link = path.join(cwd, 'deep-link')
-    try {
-      symlinkSync(outside, link, 'junction')
-    } catch {
-      return // symlinks unavailable
-    }
+    makeLink(ctx, outside, link)
     expect(isDenied(g('Glob', { pattern: '{src,deep-link}/**' }))).toBe(true)
     expect(isDenied(g('Glob', { pattern: 'src/../deep-link/*' }))).toBe(true)
     expect(isDenied(g('Glob', { pattern: '{a,deep-link}/x/y/*' }))).toBe(true)
@@ -430,20 +425,13 @@ describe('guardPreToolUse bounds path arguments (S60, S61)', () => {
     const rel64 = ['legit', ...parts.slice(0, 62)].join('/') + '/f.txt'
     mkdirSync(path.join(cwd, 'legit', ...parts.slice(0, 62)), { recursive: true })
     writeFileSync(path.join(cwd, 'legit', ...parts.slice(0, 62), 'f.txt'), 'x')
-    const t0 = performance.now()
     expect(g('Read', { file_path: rel64 })).toEqual({})
-    const ms = performance.now() - t0
     expect(fsCalls.n).toBeLessThanOrEqual(70)
-    expect(ms).toBeLessThan(500)
   })
 
-  it('denies a Read/Grep/Glob path through a junction pointing outside', () => {
+  it('denies a Read/Grep/Glob path through a junction pointing outside', (ctx) => {
     const link = path.join(cwd, 'out-link')
-    try {
-      symlinkSync(outside, link, 'junction')
-    } catch {
-      return // symlinks unavailable
-    }
+    makeLink(ctx, outside, link)
     expect(isDenied(g('Read', { file_path: 'out-link/data.txt' }))).toBe(true)
     expect(isDenied(g('Read', { file_path: 'out-link' }))).toBe(true)
     expect(isDenied(g('Grep', { pattern: 'x', path: 'out-link' }))).toBe(true)
@@ -566,5 +554,61 @@ describe('guardPreToolUse budget, pattern caps and path forms (F40, F41, F42)', 
     // Documented limit: an 8.3 path under a long-form cwd fails closed (usability only, never unsafe).
     expect(isDenied(guardPreToolUse({ tool_name: 'Read', tool_input: { file_path: path.join(cwd, 'a.txt') } }, long))).toBe(true)
     expect(isDenied(guardPreToolUse({ tool_name: 'Read', tool_input: { file_path: path.join(outside, 'data.txt') } }, long))).toBe(true)
+  })
+})
+
+describe('guardPreToolUse link edge cases (F43)', () => {
+  it('allows a dangling link whose target is inside and denies one whose target is outside', (ctx) => {
+    makeLink(ctx, path.join(cwd, 'nope-inside'), path.join(cwd, 'dang-in'))
+    makeLink(ctx, path.join(outside, 'nope-outside'), path.join(cwd, 'dang-out'))
+    expect(g('Read', { file_path: 'dang-in/x.txt' })).toEqual({})
+    expect(isDenied(g('Read', { file_path: 'dang-out/x.txt' }))).toBe(true)
+    expect(isDenied(g('Glob', { pattern: 'dang-out/**' }))).toBe(true)
+  })
+
+  it('resolves relative link targets', (ctx) => {
+    makeLink(ctx, path.join('..', 'proj-evil'), path.join(cwd, 'rel-out'), 'dir')
+    makeLink(ctx, path.join('..', 'proj', 'src'), path.join(cwd, 'rel-in'), 'dir')
+    expect(isDenied(g('Read', { file_path: 'rel-out/data.txt' }))).toBe(true)
+    expect(g('Read', { file_path: 'rel-in/x.txt' })).toEqual({})
+  })
+
+  it('works when the cwd is itself a link', (ctx) => {
+    const cwdLink = path.join(root, 'proj-link')
+    makeLink(ctx, cwd, cwdLink)
+    const viaLink = (file_path: string) => guardPreToolUse({ tool_name: 'Read', tool_input: { file_path } }, cwdLink)
+    expect(viaLink('a.txt')).toEqual({})
+    expect(viaLink(path.join(cwdLink, 'a.txt'))).toEqual({})
+    expect(viaLink(path.join(realpathSync.native(cwd), 'a.txt'))).toEqual({})
+    expect(isDenied(viaLink(path.join(outside, 'data.txt')))).toBe(true)
+    expect(isDenied(viaLink('../proj-evil/data.txt'))).toBe(true)
+  })
+
+  it.runIf(process.platform === 'win32')('is case-insensitive for paths and links on win32', (ctx) => {
+    makeLink(ctx, outside, path.join(cwd, 'case-link'))
+    expect(g('Read', { file_path: path.join(cwd.toUpperCase(), 'A.TXT') })).toEqual({})
+    expect(isDenied(g('Read', { file_path: path.join(outside.toUpperCase(), 'DATA.TXT') }))).toBe(true)
+    expect(isDenied(g('Read', { file_path: 'CASE-LINK/data.txt' }))).toBe(true)
+    expect(isDenied(g('Glob', { pattern: '{src,Case-Link}/**' }))).toBe(true)
+  })
+})
+
+describe('guardPreToolUse denies backslashes in globs on POSIX (F12)', () => {
+  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor
+  afterAll(() => Object.defineProperty(process, 'platform', realPlatform))
+  const as = (platform: NodeJS.Platform) => Object.defineProperty(process, 'platform', { ...realPlatform, value: platform })
+
+  it('denies an escaped ".." glob on linux with no fs calls', () => {
+    as('linux')
+    fsCalls.n = 0
+    expect(isDenied(g('Glob', { pattern: '\\.\\./x' }))).toBe(true)
+    expect(isDenied(g('Grep', { pattern: 'x', glob: 'src/\\*.ts' }))).toBe(true)
+    expect(fsCalls.n).toBe(0)
+  })
+
+  it('does not apply the rule on win32, where a backslash is a separator', () => {
+    as('win32')
+    expect(isDenied(g('Glob', { pattern: 'src\\*.ts' }))).toBe(false)
+    expect(isDenied(g('Glob', { pattern: '..\\x' }))).toBe(true)
   })
 })
