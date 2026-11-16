@@ -2,15 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Current state
-
-The repo contains no source code yet (no commits, no package.json). The only content is `docs/vision.md`, the product vision and phased roadmap, and `.claude/settings.json`, which enables the `flow@claude-toolkit` plugin. Build, lint and test commands do not exist yet; add them here once Phase 1 scaffolds the app.
-
 ## What this is
 
 claude-desk is a desktop control panel (Electron + React + TypeScript strict) for a personal agentic workflow. It orchestrates and observes Claude Code agents; it does not implement agent logic. Three-panel UI: projects (left), workspace (middle), chat (right).
 
 ## Working with docs/vision.md
+
+Plans live in `docs/plans/`.
 
 - Read the **Phase** you are asked about plus *Principles*, *Stack* and *Open questions*. Later phases are intent, not commitments: do not plan or build beyond the requested phase.
 - Open questions (SDK auth/billing, plugin loading options, `claude --worktree`, `better-sqlite3` rebuild under Electron, concurrent sessions) must be verified against current docs before designing around them.
@@ -25,13 +23,9 @@ claude-desk is a desktop control panel (Electron + React + TypeScript strict) fo
 - Pipeline: planner writes `docs/plans/<slug>.md` -> orchestrator dispatches workers (max N parallel) -> reviewers -> blocking findings return to the worker for auto-fix rounds -> merge/push per policy.
 - Token-aware defaults: small tasks, short reports, cheap models by default, usage always visible.
 
-
-## Project: claude-desk
-Electron desktop control panel for agentic workflows. Vision, phases and open questions are in `docs/vision.md`: read only the phase you are asked about, plus its Principles, Stack and Open questions. Plans live in `docs/plans/`.
-
 ## Stack and layout
 Electron + React + TypeScript (strict). Agent SDK and SQLite (`better-sqlite3`) in the main process.
-- `src/main/` Electron main process: `chat/` (SDK session service), `git/`, `projects/` (JSON store behind `ProjectStore`), `ipc/` (handlers), `config.ts`; SQLite arrives in a later phase
+- `src/main/` Electron main process: `chat/` (SDK session service), `git/`, `projects/` (JSON store behind `ProjectStore`), `ipc/` (handlers), `db/` (SQLite via `better-sqlite3`, `RunStore`), `config.ts`
 - `src/preload/` preload scripts, the only bridge between main and renderer
 - `src/renderer/` React UI
 - `src/shared/` types shared by all three (IPC channel names, payload types, zod schemas)
