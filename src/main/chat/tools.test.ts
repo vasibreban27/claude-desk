@@ -612,3 +612,15 @@ describe('guardPreToolUse denies backslashes in globs on POSIX (F12)', () => {
     expect(isDenied(g('Glob', { pattern: '..\\x' }))).toBe(true)
   })
 })
+
+describe('guardPreToolUse walks the prefix through parentheses and "!" (S71)', () => {
+  it.each(['(grp)', 'a!b'])('denies an absolute glob through a junction below "%s"', (dir, ctx) => {
+    mkdirSync(path.join(cwd, dir), { recursive: true })
+    makeLink(ctx, outside, path.join(cwd, dir, 'jin'))
+    const abs = path.join(cwd, dir, 'jin').split(path.sep).join('/')
+    expect(isDenied(g('Glob', { pattern: abs + '/*' }))).toBe(true)
+    expect(isDenied(g('Grep', { pattern: 'x', glob: abs + '/**' }))).toBe(true)
+    expect(isDenied(g('Glob', { pattern: dir + '/jin/*' }))).toBe(true)
+    expect(g('Glob', { pattern: dir + '/*.ts' })).toEqual({})
+  })
+})

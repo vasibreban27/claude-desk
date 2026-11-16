@@ -66,7 +66,12 @@ function lexicallyOutside(cwd: string, raw: string, resolved: string): boolean {
   return !sameRoot(path.parse(path.resolve(cwd)).root, path.parse(resolved).root)
 }
 
-const MAGIC = /[*?[\]{}()!]/
+/**
+ * Characters the search tools treat as glob syntax. `(`, `)` and `!` are NOT in this set: the Glob tool takes them
+ * literally (Next.js route groups like `app/(group)/`), so cutting the prefix there would leave the directories
+ * after them unchecked (S71). Walking a longer prefix is always the safe direction.
+ */
+const MAGIC = /[*?[\]{}]/
 
 /** The literal directory prefix: text before the segment that holds the first magic character. */
 function literalPrefix(pattern: string): string {
