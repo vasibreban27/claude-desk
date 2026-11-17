@@ -106,7 +106,7 @@ DeskApi additions: `pipelinePlans`, `pipelineStart`, `pipelineStatus`, `pipeline
 ## Wave 1: parser and contract
 
 ### T1: Plan parser accepts flow-plan/1
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: M
 - Sensitive: yes
@@ -126,7 +126,7 @@ DeskApi additions: `pipelinePlans`, `pipelineStart`, `pipelineStatus`, `pipeline
   - Given existing tests and callers When `npm run typecheck` runs Then it passes without edits outside Owns (the new `PlanTask` fields are optional).
 
 ### T2: IPC contract and preload bridge
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: S
 - Sensitive: no
@@ -268,3 +268,7 @@ DeskApi additions: `pipelinePlans`, `pipelineStart`, `pipelineStatus`, `pipeline
   - Given the note When read Then it has a live step for `permissionMode: 'acceptEdits'` (run the live test with `CLAUDE_DESK_LIVE=1` and `CLAUDE_TOOLKIT_PATH`, with and without the setting, never committing the change) with a result line to fill in, and the decision it implies (keep, or remove the setting in a follow-up).
 
 ## Follow-ups
+- W1 reviewer F1 `planParser.ts` (~196-250): in flow-plan/1 a `### T<n>:` heading before the first `## Wave` is silently dropped (no error); report it as an error.
+- W1 auditor S1 `planParser.ts:436-447`: `readFirst` (no path-shape or protected check) and `doneWhen` (any string) come from repo-controlled plan files; unused so far. Before any later task gives `readFirst` to a worker or runs `doneWhen`, validate paths with `badPathShape` and `isDefaultProtected`, and never run `doneWhen` directly.
+- W1 T2: the 100-character `planFile` limit lives in the zod schema (`.max(100)`), not in `PLAN_FILE_PATTERN` alone; later code must use the schema.
+- W1 auditor note: the handler that resolves `planFile` against `docs/plans` (symlinks, junctions) is not in wave 1; audit it when T3 lands.
