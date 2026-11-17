@@ -183,3 +183,136 @@ describe('ownsCovers', () => {
     expect(ownsCovers(['../'], 'x.ts', 'linux')).toBe(false)
   })
 })
+
+interface FlowSpec {
+  id: string
+  owns?: string
+  deps?: string
+  omit?: string
+  over?: Record<string, string>
+}
+
+function flowTask(t: FlowSpec): string {
+  const f: Record<string, string> = {
+    Status: '[ ] todo',
+    Worker: 'node-developer',
+    Size: 'S',
+    Sensitive: 'no',
+    Contract: 'none',
+    Owns: t.owns ?? `src/${t.id}.ts`,
+    'Read first': '`src/a.ts`',
+    'Depends on': t.deps ?? 'none',
+    'Done when': '`npm test -- src/a.test.ts`',
+    Model: 'sonnet',
+    Tests: 'writer',
+    ...(t.over ?? {})
+  }
+  if (t.omit) delete f[t.omit]
+  const lines = Object.entries(f).map(([k, v]) => `- ${k}: ${v}`)
+  return [`### ${t.id}: Title ${t.id}`, ...lines, '- Acceptance criteria:', '  - Given x When y Then z'].join('\n')
+}
+
+function flowPlan(waves: string[][], header = 'Format: flow-plan/1'): string {
+  const body = waves.map((w, i) => [`## Wave ${i + 1}: name`, '', ...w.map((t) => t + '\n')].join('\n')).join('\n')
+  return `${header}\n\n# Demo\n\n## Architecture\n\n### API contract\n\n${body}\n## Risks\n\n### T9: not a task\n`
+}
+
+describe('parsePlan flow-plan/1', () => {
+  it('parses tasks and exposes the new fields', () => {
+    const r = parsePlan(flowPlan([[flowTask({ id: 'T1' })], [flowTask({ id: 'T2', deps: 'T1' })]]), 'linux')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.plan.format).toBe('flow-plan/1')
+    expect(r.plan.autonomy).toBeNull()
+    expect(r.plan.waves).toHaveLength(2)
+    expect(r.plan.waves.flatMap((w) => w.tasks)).toHaveLength(2)
+    expect(r.plan.waves[0]?.tasks[0]).toMatchObject({
+      size: 'S',
+      sensitive: false,
+      model: 'sonnet',
+      tests: 'writer',
+      readFirst: ['src/a.ts'],
+      doneWhen: 'npm test -- src/a.test.ts'
+    })
+  })
+
+  it('allows Model and Tests to be absent', () => {
+    const md = flowPlan([[flowTask({ id: 'T1', omit: 'Model' })]]).replace('- Tests: writer\n', '')
+    const r = parsePlan(md, 'linux')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.plan.waves[0]?.tasks[0]?.model).toBeUndefined()
+  })
+
+  it('reads a valid Autonomy header and rejects bad ones with the line', () => {
+    const ok = parsePlan(flowPlan([[flowTask({ id: 'T1' })]], 'Format: flow-plan/1\nAutonomy: checkpoints'), 'linux')
+    expect(ok.ok && ok.plan.autonomy).toBe('checkpoints')
+    const bad = errorsOf(flowPlan([[flowTask({ id: 'T1' })]], 'Format: flow-plan/1\nAutonomy: wild'))
+    expect(bad[0]).toMatchObject({ line: 2 })
+    expect(bad[0]?.message).toContain('Autonomy')
+    const unknown = errorsOf(flowPlan([[flowTask({ id: 'T1' })]], 'Format: flow-plan/1\nOwner: me'))
+    expect(unknown[0]).toMatchObject({ line: 2 })
+    expect(unknown[0]?.message).toContain('unknown header')
+  })
+
+  it('rejects an unsupported format', () => {
+    const e = errorsOf(flowPlan([[flowTask({ id: 'T1' })]], 'Format: flow-plan/2'))
+    expect(e[0]?.line).toBe(1)
+    expect(e[0]?.message).toContain('unsupported plan format')
+  })
+
+  it.each([
+    ['Size', 'L', 'split the task'],
+    ['Size', 'XL', '"Size"'],
+    ['Sensitive', 'maybe', '"Sensitive"'],
+    ['Model', 'gpt', '"Model"'],
+    ['Tests', 'reviewer', '"Tests"'],
+    ['Done when', 'npm test', '"Done when"'],
+    ['Read first', '', '"Read first"']
+  ])('rejects %s = %s', (field, value, msg) => {
+    const md = flowPlan([[flowTask({ id: 'T1', over: { [field]: value } })]])
+    const e = errorsOf(md)
+    expect(e[0]?.message).toContain(msg)
+    expect(md.split('\n')[(e[0]?.line ?? 0) - 1]).toContain(`- ${field}:`)
+  })
+
+  it('rejects a missing required field and an unknown field', () => {
+    expect(errorsOf(flowPlan([[flowTask({ id: 'T1', omit: 'Size' })]]))[0]?.message).toContain('missing the field "Size"')
+    expect(errorsOf(flowPlan([[flowTask({ id: 'T1', over: { Bogus: '1' } })]]))[0]?.message).toContain('unknown field')
+  })
+
+  it('accepts Owns without backticks with the same rules', () => {
+    const ok = parsePlan(flowPlan([[flowTask({ id: 'T1', owns: 'a.ts, b/' })]]), 'linux')
+    expect(ok.ok && ok.plan.waves[0]?.tasks[0]?.owns).toEqual(['a.ts', 'b/'])
+    expect(errorsOf(flowPlan([[flowTask({ id: 'T1', owns: '.env' })]]))[0]?.message).toContain('protected-path')
+    expect(errorsOf(flowPlan([[flowTask({ id: 'T1', owns: '/etc/x' })]]))[0]?.message).toContain('is absolute')
+    const overlap = errorsOf(flowPlan([[flowTask({ id: 'T1', owns: 'src/' }), flowTask({ id: 'T2', owns: 'src/a.ts' })]]))
+    expect(overlap[0]?.message).toContain('overlapping')
+  })
+
+  it('allows a missing title and rejects a plan without waves', () => {
+    const md = flowPlan([[flowTask({ id: 'T1' })]]).replace('# Demo\n', '')
+    const r = parsePlan(md, 'linux')
+    expect(r.ok && r.plan.title).toBe('')
+    expect(errorsOf('Format: flow-plan/1\n\n# Demo\n')[0]?.message).toContain('Wave')
+  })
+})
+
+describe('parsePlan real plan files', () => {
+  const read = (f: string): string => readFileSync(path.join(process.cwd(), 'docs/plans', f), 'utf8')
+  const count = (md: string): { waves: number; tasks: number; format: string } => {
+    const r = parsePlan(md)
+    if (!r.ok) throw new Error(JSON.stringify(r.errors))
+    return { waves: r.plan.waves.length, tasks: r.plan.waves.flatMap((w) => w.tasks).length, format: r.plan.format }
+  }
+
+  it('parses the legacy plans as before', () => {
+    expect(count(read('phase-2-tracking-and-usage.md'))).toMatchObject({ waves: 5, format: 'legacy' })
+    expect(count(read('phase-3-project-settings.md'))).toMatchObject({ waves: 6, format: 'legacy' })
+    expect(count(read('phase-4a-pipeline-engine.md'))).toMatchObject({ waves: 4, format: 'legacy' })
+  })
+
+  it('parses the flow-plan/1 plans', () => {
+    expect(count(read('phase-4b-1-run-and-status.md'))).toEqual({ waves: 4, tasks: 8, format: 'flow-plan/1' })
+    expect(count(read('phase-4b-2-discard.md'))).toMatchObject({ waves: 1, tasks: 1, format: 'flow-plan/1' })
+  })
+})
