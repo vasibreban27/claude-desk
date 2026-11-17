@@ -65,14 +65,11 @@ export function parseSettingsOrDefaults(raw: string | undefined): SettingsParseR
 }
 
 /**
- * Options that are not honoured on session resume. T1 narrows this table;
- * protectedPaths is never listed because it lives in per-query hooks.
+ * Options that are not honoured on session resume. Empty: the spike showed
+ * model, allowedTools and mcpServers are all honoured on resume (see
+ * docs/notes/phase-3-spike.md). Kept so a later SDK version can repopulate it.
  */
-export const SESSION_RESET_OPTIONS: readonly (keyof ProjectSettings)[] = [
-  'model',
-  'allowGitRead',
-  'allowPlanWrites'
-]
+export const SESSION_RESET_OPTIONS: readonly (keyof ProjectSettings)[] = []
 
 export function needsSessionReset(
   previous: ProjectSettings,

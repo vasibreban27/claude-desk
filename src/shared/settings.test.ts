@@ -68,10 +68,17 @@ describe('needsSessionReset', () => {
     expect(needsSessionReset(base, { ...base, protectedPaths: ['x'] })).toBe(false)
   })
 
-  it('is true when model, allowGitRead or allowPlanWrites changed', () => {
-    expect(needsSessionReset(base, { ...base, model: 'opus' })).toBe(true)
-    expect(needsSessionReset(base, { ...base, allowGitRead: true })).toBe(true)
-    expect(needsSessionReset(base, { ...base, allowPlanWrites: true })).toBe(true)
+  it('is false when model, allowGitRead or allowPlanWrites changed', () => {
+    expect(needsSessionReset(base, { ...base, model: 'opus' })).toBe(false)
+    expect(needsSessionReset(base, { ...base, allowGitRead: true })).toBe(false)
+    expect(needsSessionReset(base, { ...base, allowPlanWrites: true })).toBe(false)
+  })
+
+  it('would be true for those options with a non-empty table', () => {
+    const table = ['model', 'allowGitRead', 'allowPlanWrites'] as const
+    expect(needsSessionReset(base, { ...base, model: 'opus' }, table)).toBe(true)
+    expect(needsSessionReset(base, { ...base, allowGitRead: true }, table)).toBe(true)
+    expect(needsSessionReset(base, { ...base, allowPlanWrites: true }, table)).toBe(true)
   })
 
   it('honours a custom option table', () => {

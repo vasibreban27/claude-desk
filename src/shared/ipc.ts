@@ -89,6 +89,8 @@ export type SettingsGetResult =
   | { ok: false; error: 'not-found' }
 
 export type SettingsSetError = 'invalid' | 'not-found' | 'storage-unavailable'
+// sessionReset is always false for now (all options are honoured on resume,
+// see docs/notes/phase-3-spike.md); the field stays in case an SDK change needs it.
 export type SettingsSetResult =
   | { ok: true; settings: ProjectSettings; sessionReset: boolean }
   | { ok: false; error: SettingsSetError }
