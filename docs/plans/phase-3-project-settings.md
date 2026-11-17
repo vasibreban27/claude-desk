@@ -239,7 +239,7 @@ Tasks that touch the contract say `Contract: <channel or tool>`.
 ### Wave 4
 
 ### T9: Runner and service - per-turn settings, model, tools, session rule
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: none
 - Owns: `src/main/chat/runner.ts`, `src/main/chat/runner.test.ts`, `src/main/chat/service.ts`, `src/main/chat/service.test.ts`
@@ -318,3 +318,7 @@ Workers: `node-developer` for T1-T3, T5, T6, T8-T11 (`src/main`, `src/preload`, 
 - F12 (minor, tools.gaps.test.ts `runRg`): the real-ripgrep assertion passes silently when `rg` is not on PATH; use `ctx.skip()` so the skip is visible.
 - Read of Windows device names (`CON`, `NUL`, `COM1`) is allowed by the guard: it leaks nothing protected (an empty read or a stuck open); not fixed.
 - T9 must (from the T8 report): call `guardPreToolUse(input, cwd, policy)` with the per-turn `ToolPolicy` (`protectedPatterns`, `allowGitRead`, `allowPlanWrites`) and the exact cwd string; return the guard output unchanged (an allow result carries `updatedInput`); add `Write` to `allowedTools` for `allowPlanWrites`, and for `allowGitRead` add `GIT_ALLOWED_TOOLS` plus `createGitMcpServer({ cwd, isProtected })` under `GIT_SERVER_NAME` in `mcpServers`; the `isProtected` adapter joins the project-relative path onto `realpathSync.native(cwd)` and uses `createProtectedMatcher(patterns, { realRoot })` (defaults when `usable` is false). Production `runner.ts:72` still calls the guard without a policy until T9 lands.
+- Wave 4 verify: 1 round, no majors. F1 (minor, service.test.ts "sessions are tracked per project"): the test uses an always-true injected rule and a second project without a stored session, so it cannot fail on cross-project leakage; use the default rule, run p1 to get a session id, then assert p2's first turn has `resume` undefined and p1's next turn resumes `s1`.
+- Not verified live (T11 manual check must cover): that SDK hooks fire for tool calls inside Agent/Task subagents (`docs/notes/phase-2-manual-check.md` step 7 still open).
+- Design note (security audit): settings are read once per turn, so an ongoing run keeps a capability the user just turned off until it ends. An injected instruction could make the chat write or overwrite `docs/plans/<slug>.md` when `allowPlanWrites` is on; a later privileged pipeline (Phase 4/5 workers with Bash) must not follow an unreviewed plan.
+- T10 must pass `settings: settingsStore` when constructing `ChatService` (`src/main/ipc/register.ts:19` does not yet; production runs use the safe defaults until then) and compute `sessionReset = needsSessionReset(previous, saved)` in `settings:set` from `store.get(projectId).settings` taken before the save.
