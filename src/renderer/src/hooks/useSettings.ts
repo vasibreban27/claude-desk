@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AppInfo, ProjectSettings, SettingsNotice, SettingsSetError } from '@shared/ipc'
 
 export type SaveError = SettingsSetError | 'unavailable'
@@ -15,6 +15,8 @@ export interface UseSettings {
   /** Bumps whenever loaded or saved values replace the form's starting values. */
   revision: number
   save: (settings: ProjectSettings) => Promise<void>
+  /** Hides the last save outcome; call when the user edits the form. */
+  clearSaveState: () => void
   appInfo: AppInfo | null
   appInfoError: boolean
 }
@@ -36,16 +38,28 @@ interface SaveState {
 export function useSettings(projectId: string | null): UseSettings {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [failure, setFailure] = useState<{ owner: string; message: string } | null>(null)
-  const [saving, setSaving] = useState(false)
+  const [pending, setPending] = useState<ReadonlySet<string>>(new Set())
+  const currentProject = useRef(projectId)
   const [saveState, setSaveState] = useState<SaveState | null>(null)
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
   const [appInfoError, setAppInfoError] = useState(false)
 
+  const [seenProject, setSeenProject] = useState(projectId)
+  if (seenProject !== projectId) {
+    setSeenProject(projectId)
+    setSaveState(null)
+  }
+
   const owner = projectId ?? ''
+  const saving = pending.has(owner)
   const current = projectId !== null && loaded?.owner === owner ? loaded : null
   const loadError = projectId !== null && failure?.owner === owner ? failure.message : null
   const loading = projectId !== null && current === null && loadError === null
   const outcome = saveState?.owner === owner ? saveState : null
+
+  useEffect(() => {
+    currentProject.current = projectId
+  }, [projectId])
 
   useEffect(() => {
     if (projectId === null) return
@@ -100,30 +114,40 @@ export function useSettings(projectId: string | null): UseSettings {
     async (settings: ProjectSettings) => {
       if (projectId === null || saving) return
       const api = window.api
-      setSaving(true)
+      setPending((prev) => new Set(prev).add(projectId))
       setSaveState(null)
+      let state: SaveState
       try {
         if (!api) throw new Error('no bridge')
         const res = await api.settingsSet({ projectId, settings })
         if (res.ok) {
-          setLoaded((prev) => ({
-            owner: projectId,
-            settings: res.settings,
-            notice: null,
-            revision: (prev?.revision ?? 0) + 1
-          }))
-          setSaveState({ owner: projectId, error: null, sessionReset: res.sessionReset })
+          if (currentProject.current === projectId) {
+            setLoaded((prev) => ({
+              owner: projectId,
+              settings: res.settings,
+              notice: null,
+              revision: (prev?.revision ?? 0) + 1
+            }))
+          }
+          state = { owner: projectId, error: null, sessionReset: res.sessionReset }
         } else {
-          setSaveState({ owner: projectId, error: res.error, sessionReset: false })
+          state = { owner: projectId, error: res.error, sessionReset: false }
         }
       } catch {
-        setSaveState({ owner: projectId, error: 'unavailable', sessionReset: false })
+        state = { owner: projectId, error: 'unavailable', sessionReset: false }
       } finally {
-        setSaving(false)
+        setPending((prev) => {
+          const next = new Set(prev)
+          next.delete(projectId)
+          return next
+        })
       }
+      if (currentProject.current === projectId) setSaveState(state)
     },
     [projectId, saving]
   )
+
+  const clearSaveState = useCallback(() => setSaveState(null), [])
 
   return {
     settings: current?.settings ?? null,
@@ -136,6 +160,7 @@ export function useSettings(projectId: string | null): UseSettings {
     sessionReset: outcome?.sessionReset ?? false,
     revision: current?.revision ?? 0,
     save,
+    clearSaveState,
     appInfo,
     appInfoError
   }

@@ -36,9 +36,10 @@ interface FormProps {
   saveOk: boolean
   sessionReset: boolean
   onSave: (settings: ProjectSettings) => void
+  onEdit: () => void
 }
 
-function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave }: FormProps) {
+function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave, onEdit }: FormProps) {
   const id = useId()
   const [model, setModel] = useState<ModelChoice>(initial.model)
   const [paths, setPaths] = useState(initial.protectedPaths.join('\n'))
@@ -68,7 +69,10 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
       <h3 className="settings__heading">Project</h3>
       <div className="settings__field">
         <label htmlFor={`${id}-model`}>Model</label>
-        <select id={`${id}-model`} value={model} onChange={(e) => setModel(e.target.value as ModelChoice)}>
+        <select id={`${id}-model`} value={model} onChange={(e) => {
+            setModel(e.target.value as ModelChoice)
+            onEdit()
+          }}>
           {(Object.keys(MODEL_LABELS) as ModelChoice[]).map((m) => (
             <option key={m} value={m}>
               {MODEL_LABELS[m]}
@@ -84,7 +88,10 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
           value={paths}
           spellCheck={false}
           aria-describedby={`${id}-paths-hint`}
-          onChange={(e) => setPaths(e.target.value)}
+          onChange={(e) => {
+            setPaths(e.target.value)
+            onEdit()
+          }}
         />
         <p id={`${id}-paths-hint`} className="settings__hint">
           One gitignore-style pattern per line; an empty list protects nothing. {BEST_EFFORT_NOTE}
@@ -92,7 +99,10 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
       </div>
       <div className="settings__field">
         <label className="settings__toggle">
-          <input type="checkbox" checked={allowGitRead} onChange={(e) => setAllowGitRead(e.target.checked)} />
+          <input type="checkbox" checked={allowGitRead} onChange={(e) => {
+              setAllowGitRead(e.target.checked)
+              onEdit()
+            }} />
           Allow read-only git
         </label>
         <p className="settings__hint">Adds git status, log and diff tools; no shell access.</p>
@@ -102,7 +112,10 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
           <input
             type="checkbox"
             checked={allowPlanWrites}
-            onChange={(e) => setAllowPlanWrites(e.target.checked)}
+            onChange={(e) => {
+              setAllowPlanWrites(e.target.checked)
+              onEdit()
+            }}
           />
           Allow plan writes
         </label>
@@ -165,6 +178,7 @@ export function SettingsPanel({ projectId }: SettingsPanelProps) {
           saveOk={s.saveOk}
           sessionReset={s.sessionReset}
           onSave={(next) => void s.save(next)}
+          onEdit={s.clearSaveState}
         />
       ) : null}
       <section className="settings__section" aria-label="App">

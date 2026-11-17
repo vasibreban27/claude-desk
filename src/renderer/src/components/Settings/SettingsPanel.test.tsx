@@ -193,6 +193,41 @@ describe('SettingsPanel', () => {
     expect(api.settingsGet).toHaveBeenLastCalledWith({ projectId: P2 })
   })
 
+  it('does not let a pending save in one project disable Save in another', async () => {
+    let resolveA: (v: unknown) => void = () => {}
+    api.settingsSet.mockReturnValueOnce(new Promise((r) => (resolveA = r)))
+    const { rerender } = render(<SettingsPanel projectId={P1} />)
+    await screen.findByLabelText('Model')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByRole('button', { name: 'Saving...' })
+    rerender(<SettingsPanel projectId={P2} />)
+    await screen.findByLabelText('Model')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
+    resolveA({ ok: true, settings: defaultSettings(), sessionReset: false })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(screen.getByLabelText('Model')).toBeInTheDocument()
+    expect(screen.queryByText(/Settings saved/)).toBeNull()
+    rerender(<SettingsPanel projectId={P1} />)
+    await screen.findByLabelText('Model')
+    expect(screen.queryByText(/Settings saved/)).toBeNull()
+  })
+
+  it('clears the saved message on project change and on edit', async () => {
+    const { rerender } = render(<SettingsPanel projectId={P1} />)
+    await screen.findByLabelText('Model')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByText(/Settings saved/)
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'opus' } })
+    expect(screen.queryByText(/Settings saved/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByText(/Settings saved/)
+    rerender(<SettingsPanel projectId={P2} />)
+    await screen.findByLabelText('Model')
+    rerender(<SettingsPanel projectId={P1} />)
+    await screen.findByLabelText('Model')
+    expect(screen.queryByText(/Settings saved/)).toBeNull()
+  })
+
   it('shows the App section with path, status and version', async () => {
     render(<SettingsPanel projectId={P1} />)
     expect(await screen.findByText('/tk/flow')).toBeInTheDocument()

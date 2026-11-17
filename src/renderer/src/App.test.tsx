@@ -2,7 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import type { ActivityEvent, ChatEvent, ChatMessage, DeskApi, Project, UsageSummary } from '@shared/ipc'
+import {
+  defaultSettings,
+  type ActivityEvent,
+  type ChatEvent,
+  type ChatMessage,
+  type DeskApi,
+  type Project,
+  type UsageSummary
+} from '@shared/ipc'
 import { App } from './App'
 
 const P1: Project = {
@@ -46,7 +54,10 @@ beforeEach(() => {
     onActivityEvent: vi.fn().mockImplementation((l: (e: ActivityEvent) => void) => {
       emitActivity = l
       return () => undefined
-    })
+    }),
+    settingsGet: vi.fn().mockResolvedValue({ ok: true, settings: defaultSettings(), notice: null }),
+    settingsSet: vi.fn(),
+    appInfo: vi.fn().mockResolvedValue({ toolkit: { status: 'unset', path: null, version: null } })
   }
   try {
     localStorage.clear()
