@@ -29,8 +29,23 @@ const COMMON_PREFIX = [
   '-c',
   'core.untrackedCache=false',
   '-c',
-  'core.quotepath=false'
+  'core.quotepath=false',
+  // log.showSignature + gpg.program would run an attacker-chosen program on a commit with a gpgsig header.
+  '-c',
+  'log.showSignature=false',
+  '-c',
+  'gpg.program=',
+  '-c',
+  'gpg.ssh.program=',
+  '-c',
+  'gpg.x509.program='
 ]
+
+// Filter drivers (.gitattributes + filter.<name>.clean/smudge/process) run while git re-hashes
+// working-tree files, in status and diff alike. Every configured name is blanked before each run.
+const FILTER_LIST_ARGS = ['config', '--get-regexp', '-z', '^filter\\..*\\.(clean|smudge|process)$']
+const FILTER_KEY = /^filter\.(.+)\.(clean|smudge|process)$/i
+const SAFE_FILTER_NAME = /^[A-Za-z0-9_.-]+$/
 
 const ENV_ADDITIONS: Record<string, string> = {
   GIT_OPTIONAL_LOCKS: '0',
@@ -124,24 +139,74 @@ export function createGitHandlers(deps: GitToolsDeps): GitHandlers {
 
   type RunResult = { stdout: string; overflow: boolean } | { error: string }
 
-  async function run(subcommand: string[]): Promise<RunResult> {
+  function mapError(e: unknown): RunResult {
+    const err = (e ?? {}) as ExecError
+    if (err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+      return { stdout: typeof err.stdout === 'string' ? err.stdout : '', overflow: true }
+    }
+    if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
+      return { error: 'git timed out' }
+    }
+    if (err.code === 'ENOENT') return { error: 'git is not installed' }
+    const stderr = typeof err.stderr === 'string' ? err.stderr : ''
+    if (/not a git repository/i.test(stderr) || /not a git repository/i.test(err.message ?? '')) {
+      return { error: 'not a git repo' }
+    }
+    return { error: `git failed${stderr ? `: ${stderr.trim().slice(0, 200)}` : ''}` }
+  }
+
+  /** Runs git with the hardened prefix only (no working-tree access: config reads, rev-parse). */
+  async function runPlain(subcommand: string[]): Promise<RunResult> {
     try {
       const { stdout } = await exec('git', [...COMMON_PREFIX, ...subcommand], options)
       return { stdout, overflow: false }
     } catch (e) {
-      const err = (e ?? {}) as ExecError
-      if (err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
-        return { stdout: typeof err.stdout === 'string' ? err.stdout : '', overflow: true }
+      return mapError(e)
+    }
+  }
+
+  /** `-c` overrides that blank every configured filter driver; an error string when that is not possible. */
+  async function filterOverrides(): Promise<string[] | { error: string }> {
+    let stdout: string
+    try {
+      ;({ stdout } = await exec('git', [...COMMON_PREFIX, ...FILTER_LIST_ARGS], options))
+    } catch (e) {
+      // Exit code 1 means "no matching key".
+      if (((e ?? {}) as ExecError).code === 1) return []
+      const mapped = mapError(e)
+      if ('error' in mapped && mapped.error !== 'git failed' && !mapped.error.startsWith('git failed:')) {
+        return { error: mapped.error }
       }
-      if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
-        return { error: 'git timed out' }
+      return { error: 'could not read git filter config' }
+    }
+    const names = new Set<string>()
+    for (const entry of stdout.split('\0')) {
+      if (entry.length === 0) continue
+      const key = entry.split('\n')[0] ?? ''
+      const m = FILTER_KEY.exec(key)
+      const name = m?.[1]
+      if (name === undefined || !SAFE_FILTER_NAME.test(name)) {
+        return { error: 'unsupported git filter config' }
       }
-      if (err.code === 'ENOENT') return { error: 'git is not installed' }
-      const stderr = typeof err.stderr === 'string' ? err.stderr : ''
-      if (/not a git repository/i.test(stderr) || /not a git repository/i.test(err.message ?? '')) {
-        return { error: 'not a git repo' }
-      }
-      return { error: `git failed${stderr ? `: ${stderr.trim().slice(0, 200)}` : ''}` }
+      names.add(name)
+    }
+    const args: string[] = []
+    for (const name of names) {
+      for (const v of ['clean', 'smudge', 'process']) args.push('-c', `filter.${name}.${v}=`)
+      args.push('-c', `filter.${name}.required=false`)
+    }
+    return args
+  }
+
+  /** Every call that can touch the working tree goes through here. Fails closed. */
+  async function run(subcommand: string[]): Promise<RunResult> {
+    const overrides = await filterOverrides()
+    if (!Array.isArray(overrides)) return overrides
+    try {
+      const { stdout } = await exec('git', [...COMMON_PREFIX, ...overrides, ...subcommand], options)
+      return { stdout, overflow: false }
+    } catch (e) {
+      return mapError(e)
     }
   }
 
@@ -164,18 +229,32 @@ export function createGitHandlers(deps: GitToolsDeps): GitHandlers {
     return null
   }
 
-  const unquote = (p: string): string => (p.startsWith('"') && p.endsWith('"') ? p.slice(1, -1) : p)
-
   return {
     async git_status() {
-      const r = await run(['status', '--short', '--porcelain=v1', '--untracked-files=normal', '--no-renames'])
+      // Porcelain paths are relative to the repo root; the project may be a subfolder.
+      const pre = await runPlain(['rev-parse', '--show-prefix'])
+      if ('error' in pre) return fail(pre.error)
+      const prefix = pre.stdout.replace(/\r?\n$/, '')
+      const r = await run([
+        'status',
+        '--porcelain=v1',
+        '-z',
+        '--untracked-files=normal',
+        '--no-renames',
+        '--ignore-submodules=all',
+        '--',
+        '.'
+      ])
       if ('error' in r) return fail(r.error)
       let hidden = 0
       const kept: string[] = []
-      for (const line of r.stdout.split('\n')) {
-        if (line.length === 0) continue
-        if (deps.isProtected(unquote(line.slice(3)))) hidden++
-        else kept.push(line)
+      for (const entry of r.stdout.split('\0')) {
+        if (entry.length === 0) continue
+        const rest = entry.slice(3)
+        if (!rest.startsWith(prefix)) continue
+        const rel = rest.slice(prefix.length)
+        if (deps.isProtected(rel)) hidden++
+        else kept.push(`${entry.slice(0, 3)}${rel}`)
       }
       return finish(kept.join('\n'), r.overflow, 'Working tree clean.', hidden ? [omitted(hidden)] : [])
     },
@@ -207,7 +286,16 @@ export function createGitHandlers(deps: GitToolsDeps): GitHandlers {
       const bad = checkPath(parsed.data.path)
       if (bad) return fail(bad)
       const cached = parsed.data.staged === true ? ['--cached'] : []
-      const listArgs = ['diff', '--name-only', '-z', '--no-ext-diff', '--no-textconv', ...cached]
+      const listArgs = [
+        'diff',
+        '--name-only',
+        '-z',
+        '--relative',
+        '--ignore-submodules=all',
+        '--no-ext-diff',
+        '--no-textconv',
+        ...cached
+      ]
       if (parsed.data.path !== undefined) listArgs.push('--', parsed.data.path)
       const listed = await run(listArgs)
       if ('error' in listed) return fail(listed.error)
@@ -221,6 +309,8 @@ export function createGitHandlers(deps: GitToolsDeps): GitHandlers {
       if (allowed.length > MAX_FILES) return fail('too many files')
       const r = await run([
         'diff',
+        '--relative',
+        '--ignore-submodules=all',
         '--no-ext-diff',
         '--no-textconv',
         '--no-color',
