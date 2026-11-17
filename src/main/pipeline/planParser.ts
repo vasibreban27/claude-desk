@@ -15,11 +15,13 @@ import { createProtectedMatcher } from '../chat/protectedPaths'
 
 export const MAX_PLAN_BYTES = 512 * 1024
 export const MAX_PLAN_TASKS = 200
+/** The workers named in the toolkit build skill. test-writer is deliberately absent (verify calls it). */
 export const PLAN_WORKERS: readonly string[] = [
+  'java-developer',
+  'python-developer',
   'node-developer',
   'frontend-developer',
-  'database-engineer',
-  'test-writer'
+  'database-engineer'
 ]
 
 export interface PlanTask {
@@ -120,7 +122,11 @@ interface DraftTask {
   ownsLine: number
 }
 
-export function parsePlan(markdown: string, platform: NodeJS.Platform = process.platform): PlanParseResult {
+export function parsePlan(
+  markdown: string,
+  platform: NodeJS.Platform = process.platform,
+  allowedWorkers: readonly string[] = PLAN_WORKERS
+): PlanParseResult {
   if (typeof markdown !== 'string') return { ok: false, errors: [{ line: 0, message: 'plan is not text' }] }
   if (Buffer.byteLength(markdown, 'utf8') > MAX_PLAN_BYTES) {
     return { ok: false, errors: [{ line: 0, message: `plan is larger than ${MAX_PLAN_BYTES / 1024} KiB` }] }
@@ -259,8 +265,8 @@ export function parsePlan(markdown: string, platform: NodeJS.Platform = process.
     const get = (f: Field): { line: number; value: string } => d.fields.get(f) as { line: number; value: string }
 
     const worker = get('Worker')
-    if (!PLAN_WORKERS.includes(worker.value)) {
-      err(worker.line, `task ${d.id} has unknown worker "${worker.value}" (expected one of ${PLAN_WORKERS.join(', ')})`)
+    if (!allowedWorkers.includes(worker.value)) {
+      err(worker.line, `task ${d.id} has unknown worker "${worker.value}" (expected one of ${allowedWorkers.join(', ')})`)
       valid = false
     }
 

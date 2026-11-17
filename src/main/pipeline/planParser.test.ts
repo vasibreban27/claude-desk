@@ -54,6 +54,22 @@ describe('parsePlan', () => {
     expect(multi?.dependsOn.every((d) => /^T\d+$/.test(d))).toBe(true)
   })
 
+  it('default worker list accepts the five toolkit workers and rejects test-writer', () => {
+    for (const worker of ['java-developer', 'python-developer', 'node-developer', 'frontend-developer', 'database-engineer']) {
+      expect(parsePlan(plan([[task({ id: 'T1', worker })]]), 'linux').ok).toBe(true)
+    }
+    const errs = errorsOf(plan([[task({ id: 'T1', worker: 'test-writer' })]]))
+    expect(errs.some((e) => e.message.includes('unknown worker "test-writer"'))).toBe(true)
+  })
+
+  it('honours a custom worker list', () => {
+    const md = plan([[task({ id: 'T1', worker: 'rust-developer' })]])
+    expect(parsePlan(md, 'linux').ok).toBe(false)
+    expect(parsePlan(md, 'linux', ['rust-developer']).ok).toBe(true)
+    const r = parsePlan(plan([[task({ id: 'T1', worker: 'node-developer' })]]), 'linux', ['rust-developer'])
+    expect(r.ok).toBe(false)
+  })
+
   it('parses a small valid plan', () => {
     const r = parsePlan(plan([[task({ id: 'T1' }), task({ id: 'T2' })], [task({ id: 'T3', deps: 'T1, T2' })]]), 'linux')
     expect(r.ok).toBe(true)
