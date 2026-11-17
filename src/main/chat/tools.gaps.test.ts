@@ -413,7 +413,7 @@ describe('protectedGrepExclusions', () => {
     expect(protectedGrepExclusions(['a/b'], 'linux')).toEqual(['!**/a/b', '!**/a/b/**'])
   })
 
-  it('skips blanks, comments, re-allows, backslashes and non-strings', () => {
+  it('skips blanks, comments, re-allows and non-strings', () => {
     expect(protectedGrepExclusions(['', '   ', '#c', '!x', '/', '//'], 'linux')).toEqual([])
     expect(protectedGrepExclusions([5, null, undefined, {}] as unknown as string[], 'linux')).toEqual([])
     expect(protectedGrepExclusions([], 'linux')).toEqual([])
@@ -427,6 +427,12 @@ describe('protectedGrepExclusions', () => {
     for (const e of protectedGrepExclusions(['a b', 'c d', 'e f', 'g\nh'], 'linux')) {
       expect(e).not.toMatch(/\s/)
     }
+  })
+
+  it('keeps a trailing blank escaped by an odd run of backslashes (F6)', () => {
+    expect(protectedGrepExclusions(['secret\\ '], 'linux')).toEqual(['!**/secret?', '!**/secret?/**'])
+    expect(protectedGrepExclusions(['secret\\  '], 'linux')).toEqual(['!**/secret?', '!**/secret?/**'])
+    expect(protectedGrepExclusions(['secret\\\\ '], 'linux')).toEqual(['!**/secret?', '!**/secret?/**'])
   })
 
   it('folds case outside character classes on win32 only', () => {
@@ -453,6 +459,69 @@ describe('protectedGrepExclusions', () => {
     protectedGrepExclusions(list, 'win32')
     expect(list).toEqual(['.env', 'vault/'])
     expect(fsCalls.n).toBe(0)
+  })
+})
+
+describe('Grep rewrites an alias search root to its canonical path (S2)', () => {
+  const inner = 'configuration/hidden.json'
+  const pol = policy({ protectedPatterns: [inner] })
+  const updated = (out: ReturnType<typeof guardPreToolUse>): Record<string, unknown> =>
+    (out.hookSpecificOutput?.updatedInput ?? {}) as Record<string, unknown>
+
+  let proj: string
+  beforeAll(() => {
+    proj = path.join(root, 's2proj')
+    mkdirSync(path.join(proj, 'configuration'), { recursive: true })
+    writeFileSync(path.join(proj, 'configuration', 'hidden.json'), 'secret')
+  })
+
+  /** Runs a real ripgrep over the rewritten input when rg is on PATH; null otherwise. */
+  async function runRg(input: Record<string, unknown>): Promise<string | null> {
+    const { execFileSync } = await import('node:child_process')
+    try {
+      execFileSync('rg', ['--version'], { stdio: 'ignore' })
+    } catch {
+      return null
+    }
+    const args = ['-n', String(input['pattern']), ...String(input['glob']).split(' ').flatMap((g) => ['--glob', g])]
+    if (typeof input['path'] === 'string') args.push(input['path'])
+    try {
+      return execFileSync('rg', args, { cwd: proj, encoding: 'utf8' })
+    } catch (error) {
+      if ((error as { status?: number }).status === 1) return ''
+      throw error
+    }
+  }
+
+  it('leaves an absent or "." path alone', () => {
+    expect(updated(gp(pol, 'Grep', { pattern: '.' }, proj))['path']).toBeUndefined()
+    expect(updated(gp(pol, 'Grep', { pattern: '.', path: '.' }, proj))['path']).toBe('.')
+  })
+
+  it('rewrites a junction root to its real path so the exclusion still matches', async (ctx) => {
+    makeLink(ctx, path.join(proj, 'configuration'), path.join(proj, 'lnk'))
+    const out = gp(pol, 'Grep', { pattern: '.', path: 'lnk' }, proj)
+    expect(isDenied(out)).toBe(false)
+    const input = updated(out)
+    expect(input['path']).toBe(path.join(realpathSync.native(proj), 'configuration'))
+    const rg = await runRg(input)
+    if (rg !== null) expect(rg).not.toContain('hidden.json')
+  })
+
+  it('rewrites an 8.3 short-name root to the long name', async (ctx) => {
+    const short = path.join(proj, 'CONFIG~1')
+    let longName = ''
+    try {
+      longName = realpathSync.native(short)
+    } catch {
+      ctx.skip()
+    }
+    if (path.basename(longName).toLowerCase() !== 'configuration') ctx.skip()
+    const out = gp(pol, 'Grep', { pattern: '.', path: 'CONFIG~1' }, proj)
+    expect(isDenied(out)).toBe(false)
+    expect(updated(out)['path']).toBe(longName)
+    const rg = await runRg(updated(out))
+    if (rg !== null) expect(rg).not.toContain('hidden.json')
   })
 })
 

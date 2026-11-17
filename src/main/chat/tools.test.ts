@@ -1044,12 +1044,16 @@ describe('guardPreToolUse denies NTFS stream syntax on win32 (S1)', () => {
         g('Glob', { pattern: `{a,.env${suffix}}` }),
         g('Glob', { pattern: '*', path: `.git${suffix}` }),
         gp(full, 'mcp__git__git_log', { path: `.env${suffix}` }),
-        gp(full, 'mcp__git__git_diff', { path: `.git${suffix}` }),
-        gp(full, 'Write', { file_path: `docs/plans/x${suffix}.md`, content: 'a' }),
-        gp(full, 'Write', { file_path: `docs/plans/x.md${suffix}`, content: 'a' })
+        gp(full, 'mcp__git__git_diff', { path: `.git${suffix}` })
       ]
       calls.forEach((c, i) => expect(isDenied(c), `call ${i}`).toBe(true))
       expect(fsCalls.n).toBe(0)
+    })
+
+    it(`denies "${suffix}" in a plan file name through the slug grammar (not the colon rule)`, () => {
+      as('win32')
+      expect(isDenied(gp(full, 'Write', { file_path: `docs/plans/x${suffix}.md`, content: 'a' }))).toBe(true)
+      expect(isDenied(gp(full, 'Write', { file_path: `docs/plans/x.md${suffix}`, content: 'a' }))).toBe(true)
     })
   }
 

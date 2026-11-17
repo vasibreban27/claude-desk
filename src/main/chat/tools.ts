@@ -697,6 +697,15 @@ function unescapeGitignore(s: string): string {
   return out
 }
 
+/** Gitignore trailing-blank rule: unescaped trailing blanks go, a blank escaped by an odd run of `\` stays. */
+function stripTrailingBlanks(s: string): string {
+  const stripped = s.replace(/[ \t]+$/, '')
+  if (stripped === s) return s
+  let backslashes = 0
+  for (let i = stripped.length - 1; i >= 0 && stripped[i] === '\\'; i--) backslashes++
+  return backslashes % 2 === 1 ? `${stripped}${s[stripped.length] as string}` : stripped
+}
+
 /**
  * One ripgrep exclusion glob per protected pattern that converts. Skipped (no exclusion): empty patterns, `#`
  * comments (an unescaped leading `#` is a comment in gitignore, so it protects nothing) and `!` re-allow entries
@@ -706,8 +715,8 @@ export function protectedGrepExclusions(patterns: readonly string[], platform: N
   const out: string[] = []
   for (const pattern of patterns) {
     if (typeof pattern !== 'string') continue
-    let s = pattern.replace(/[ \t]+$/, '')
-    if (s === '' || s.startsWith('!') || s.startsWith('#')) continue
+    let s = stripTrailingBlanks(pattern)
+    if (s === ''|| s.startsWith('!') || s.startsWith('#')) continue
     s = unescapeGitignore(s)
     const dirOnly = s.endsWith('/')
     if (dirOnly) s = s.slice(0, -1)
@@ -721,17 +730,28 @@ export function protectedGrepExclusions(patterns: readonly string[], platform: N
   return out
 }
 
-function grepRewrite(rec: Record<string, unknown>, patterns: readonly string[]): GuardOutput {
+function grepRewrite(rec: Record<string, unknown>, patterns: readonly string[], ctx: ProbeCtx): GuardOutput {
   const exclusions = protectedGrepExclusions(patterns)
   if (exclusions.length === 0) return {}
   const args = rec['tool_input'] as Record<string, unknown>
   const user = typeof args['glob'] === 'string' ? args['glob'].trim() : ''
   const glob = [...(user.length > 0 ? [user] : []), ...exclusions].join(' ')
+  const updated: Record<string, unknown> = { ...args, glob }
+  // S2: ripgrep must walk the canonical names the guard checked, or multi-segment exclusions miss an alias root
+  // (8.3 short name, link, junction). Absent, empty or "." paths stay as they are.
+  const rawPath = args['path']
+  if (typeof rawPath === 'string' && rawPath.length > 0 && rawPath !== '.') {
+    const lexical = path.resolve(ctx.cwd, rawPath)
+    const asWritten = path.resolve(resolveRealCwd(ctx), rawPath)
+    const real = targetReal(ctx, rawPath, lexical)
+    if (real === null) return deny('Tool "Grep" could not resolve the search folder safely.')
+    if (real !== asWritten) updated['path'] = real
+  }
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'allow',
-      updatedInput: { ...args, glob }
+      updatedInput: updated
     }
   }
 }
@@ -764,9 +784,10 @@ export function guardPreToolUse(input: unknown, cwd: string, policy?: ToolPolicy
     const needsCwd = PATH_TOOLS.has(name) || GIT_TOOL_SET.has(name) || name === 'Write'
     if (needsCwd && (typeof cwd !== 'string' || cwd.length === 0)) return deny('Malformed tool request.')
     if (PATH_TOOLS.has(name)) {
-      const reason = checkPathTool(name, rec, newCtx(cwd, resolved.protectedPatterns))
+      const pathCtx = newCtx(cwd, resolved.protectedPatterns)
+      const reason = checkPathTool(name, rec, pathCtx)
       if (reason !== null) return deny(reason)
-      if (name === 'Grep' && policy !== undefined) return grepRewrite(rec, resolved.protectedPatterns)
+      if (name === 'Grep' && policy !== undefined) return grepRewrite(rec, resolved.protectedPatterns, pathCtx)
     }
     if (GIT_TOOL_SET.has(name)) {
       const reason = checkGitTool(name, rec, newCtx(cwd, resolved.protectedPatterns))
