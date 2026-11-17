@@ -4,6 +4,7 @@ import type { ActivityEvent } from '../../shared/ipc'
 type Handler = (event: unknown, payload?: unknown) => unknown
 const handlers = new Map<string, Handler>()
 let capturedEmitActivity: ((e: ActivityEvent) => void) | undefined
+let capturedSettings: unknown
 let chatSendRegister: ((projectId: string) => () => void) | undefined
 
 vi.mock('electron', () => ({
@@ -22,8 +23,9 @@ vi.mock('electron', () => ({
 
 vi.mock('../chat/service', () => ({
   ChatService: class {
-    constructor(deps: { emitActivity: (e: ActivityEvent) => void }) {
+    constructor(deps: { emitActivity: (e: ActivityEvent) => void; settings?: unknown }) {
       capturedEmitActivity = deps.emitActivity
+      capturedSettings = deps.settings
     }
   }
 }))
@@ -74,6 +76,21 @@ describe('registerIpc', () => {
     capturedEmitActivity?.({ projectId: 'other' } as unknown as ActivityEvent)
     expect(b.send).toHaveBeenCalledTimes(1)
     expect(chatSendRegister).toBeDefined()
+    dispose()
+  })
+
+  it('passes the settings store to ChatService and registers the settings channels', () => {
+    const settings = { get: vi.fn(), set: vi.fn() }
+    const dispose = registerIpc(store, undefined, settings)
+    expect(capturedSettings).toBe(settings)
+    for (const c of [IPC.settingsGet, IPC.settingsSet, IPC.appInfo]) expect(handlers.has(c)).toBe(true)
+    dispose()
+    expect(handlers.size).toBe(0)
+  })
+
+  it('uses an unavailable settings store by default', () => {
+    const dispose = registerIpc(store)
+    expect(capturedSettings).toBeDefined()
     dispose()
   })
 

@@ -8,8 +8,13 @@ import {
   type AgentUsage,
   type RunUsage
 } from './activity'
+import { realpathSync } from 'node:fs'
+import path from 'node:path'
+import { DEFAULT_PROTECTED_PATHS, defaultSettings, type ProjectSettings } from '../../shared/settings'
+import { GIT_ALLOWED_TOOLS, GIT_SERVER_NAME, createGitMcpServer } from './gitTools'
+import { createProtectedMatcher } from './protectedPaths'
 import { frameProjectContext, loadProjectContext } from './projectContext'
-import { ALLOWED_TOOLS, guardPreToolUse, isDenied } from './tools'
+import { ALLOWED_TOOLS, guardPreToolUse, isDenied, type ToolPolicy } from './tools'
 
 /** What the chat service needs from the SDK; the renderer never sees raw SDK objects. */
 export type RunnerItem =
@@ -23,7 +28,39 @@ export interface RunnerArgs {
   cwd: string
   pluginPath: string
   resume?: string | undefined
+  /** The project's settings for this turn, read once by the service; absent means the safe defaults. */
+  settings?: ProjectSettings
   signal?: AbortSignal
+}
+
+/** The per-turn guard policy derived from the settings. */
+export function policyFromSettings(settings: ProjectSettings): ToolPolicy {
+  return {
+    protectedPatterns: settings.protectedPaths,
+    allowGitRead: settings.allowGitRead,
+    allowPlanWrites: settings.allowPlanWrites
+  }
+}
+
+/**
+ * `isProtected` for the git tools: takes a project-relative forward-slash path, joins it onto the real
+ * project root and asks the matcher (default patterns when the list is unusable). Fails closed: when the
+ * real root cannot be resolved every path counts as protected.
+ */
+export function createGitIsProtected(
+  cwd: string,
+  patterns: readonly string[],
+  resolveRoot: (p: string) => string = (p) => realpathSync.native(p)
+): (relativePath: string) => boolean {
+  let realRoot: string
+  try {
+    realRoot = resolveRoot(cwd)
+  } catch {
+    return () => true
+  }
+  let matcher = createProtectedMatcher(patterns, { realRoot })
+  if (!matcher.usable) matcher = createProtectedMatcher(DEFAULT_PROTECTED_PATHS, { realRoot })
+  return (relativePath) => matcher.isProtected(path.join(realRoot, ...relativePath.split('/')))
 }
 
 export type ChatRunner = (args: RunnerArgs) => AsyncIterable<RunnerItem>
@@ -57,7 +94,7 @@ type Hooks = NonNullable<Options['hooks']>
  * `tool-finished` itself because a denied tool never reaches PostToolUse. Doing both in one callback
  * keeps start before finish. Tracking-only hooks use `onFailure: "continue"`.
  */
-export function buildHooks(emit: (draft: ActivityDraft) => void, cwd: string): Hooks {
+export function buildHooks(emit: (draft: ActivityDraft) => void, cwd: string, policy?: ToolPolicy): Hooks {
   const safeEmit = (draft: ActivityDraft | null): void => {
     if (!draft) return
     try {
@@ -69,7 +106,7 @@ export function buildHooks(emit: (draft: ActivityDraft) => void, cwd: string): H
 
   const guard: HookCallback = async (input) => {
     safeEmit(mapHookInput(input))
-    const output = guardPreToolUse(input, cwd)
+    const output = guardPreToolUse(input, cwd, policy)
     if (isDenied(output)) safeEmit(mapDeniedToolUse(input))
     return output
   }
@@ -154,6 +191,11 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
   if (args.signal?.aborted) abortController.abort()
   else args.signal?.addEventListener('abort', () => abortController.abort(), { once: true })
   const queue = createQueue<RunnerItem>()
+  const settings = args.settings ?? defaultSettings()
+  const policy = policyFromSettings(settings)
+  const allowedTools: string[] = [...ALLOWED_TOOLS]
+  if (settings.allowPlanWrites) allowedTools.push('Write')
+  if (settings.allowGitRead) allowedTools.push(...GIT_ALLOWED_TOOLS)
   const stream = query({
     prompt: args.prompt,
     options: {
@@ -172,8 +214,19 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
       },
       plugins: [{ type: 'local', path: args.pluginPath }],
       includePartialMessages: true,
-      allowedTools: [...ALLOWED_TOOLS],
-      hooks: buildHooks((draft) => queue.push({ kind: 'activity', draft }), args.cwd),
+      allowedTools,
+      ...(settings.model !== 'auto' ? { model: settings.model } : {}),
+      ...(settings.allowGitRead
+        ? {
+            mcpServers: {
+              [GIT_SERVER_NAME]: createGitMcpServer({
+                cwd: args.cwd,
+                isProtected: createGitIsProtected(args.cwd, settings.protectedPaths)
+              })
+            }
+          }
+        : {}),
+      hooks: buildHooks((draft) => queue.push({ kind: 'activity', draft }), args.cwd, policy),
       abortController,
       ...(args.resume ? { resume: args.resume } : {})
     }

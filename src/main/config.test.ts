@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { loadConfig, loadEnvFile } from './config'
+import { loadConfig, loadEnvFile, MAX_MANIFEST_BYTES, readToolkitInfo } from './config'
 
 describe('loadEnvFile', () => {
   const reading = (text: string) => ({ readText: () => text })
@@ -99,5 +100,83 @@ describe('loadConfig', () => {
     const p = path.resolve('/tmp/toolkit')
     const r = loadConfig({ CLAUDE_TOOLKIT_PATH: p }, { isDirectory: () => true })
     expect(r).toEqual({ ok: true, config: { toolkitPath: p } })
+  })
+})
+
+describe('readToolkitInfo', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), 'toolkit-info-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+  const manifest = (content: string): void => {
+    mkdirSync(path.join(dir, '.claude-plugin'))
+    writeFileSync(path.join(dir, '.claude-plugin', 'plugin.json'), content)
+  }
+  const env = (): Record<string, string | undefined> => ({ CLAUDE_TOOLKIT_PATH: dir })
+
+  it('is unset when the variable is unset or blank', () => {
+    expect(readToolkitInfo({})).toEqual({ status: 'unset', path: null, version: null })
+    expect(readToolkitInfo({ CLAUDE_TOOLKIT_PATH: '  ' }).status).toBe('unset')
+  })
+
+  it('is invalid for a missing folder', () => {
+    const missing = path.join(dir, 'nope')
+    expect(readToolkitInfo({ CLAUDE_TOOLKIT_PATH: missing })).toEqual({
+      status: 'invalid',
+      path: path.resolve(missing),
+      version: null
+    })
+  })
+
+  it('is invalid when plugin.json is missing', () => {
+    expect(readToolkitInfo(env()).status).toBe('invalid')
+  })
+
+  it('is invalid for oversized, unparsable or nameless manifests', () => {
+    manifest(JSON.stringify({ name: 'flow', pad: 'x'.repeat(MAX_MANIFEST_BYTES) }))
+    expect(readToolkitInfo(env()).status).toBe('invalid')
+    writeFileSync(path.join(dir, '.claude-plugin', 'plugin.json'), '{not json')
+    expect(readToolkitInfo(env()).status).toBe('invalid')
+    writeFileSync(path.join(dir, '.claude-plugin', 'plugin.json'), '{"version":"1.0.0"}')
+    expect(readToolkitInfo(env()).status).toBe('invalid')
+    writeFileSync(path.join(dir, '.claude-plugin', 'plugin.json'), '[1]')
+    expect(readToolkitInfo(env()).status).toBe('invalid')
+  })
+
+  it('is invalid when plugin.json is a directory', () => {
+    mkdirSync(path.join(dir, '.claude-plugin', 'plugin.json'), { recursive: true })
+    expect(readToolkitInfo(env()).status).toBe('invalid')
+  })
+
+  it.runIf(process.platform !== 'win32')('is invalid, without blocking, when plugin.json is a FIFO', () => {
+    mkdirSync(path.join(dir, '.claude-plugin'))
+    execFileSync('mkfifo', [path.join(dir, '.claude-plugin', 'plugin.json')])
+    expect(readToolkitInfo(env()).status).toBe('invalid')
+  })
+
+  it('follows a symlink to a regular manifest', (ctx) => {
+    mkdirSync(path.join(dir, '.claude-plugin'))
+    const target = path.join(dir, 'real.json')
+    writeFileSync(target, '{"name":"flow","version":"2.0.0"}')
+    try {
+      symlinkSync(target, path.join(dir, '.claude-plugin', 'plugin.json'))
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'EPERM' || code === 'EACCES' || code === 'ENOSYS') return ctx.skip()
+      throw err
+    }
+    expect(readToolkitInfo(env())).toMatchObject({ status: 'valid', version: '2.0.0' })
+  })
+
+  it('is valid with the version, or null when the version is missing or too long', () => {
+    manifest('{"name":"flow","version":"1.2.3","secret":"s"}')
+    expect(readToolkitInfo(env())).toEqual({ status: 'valid', path: path.resolve(dir), version: '1.2.3' })
+    writeFileSync(path.join(dir, '.claude-plugin', 'plugin.json'), '{"name":"flow"}')
+    expect(readToolkitInfo(env()).version).toBeNull()
+    writeFileSync(path.join(dir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'flow', version: 'v'.repeat(65) }))
+    expect(readToolkitInfo(env())).toMatchObject({ status: 'valid', version: null })
   })
 })

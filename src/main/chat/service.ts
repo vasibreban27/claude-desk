@@ -8,6 +8,12 @@ import {
 } from '../../shared/ipc'
 import { loadConfig, ConfigError, type ConfigResult } from '../config'
 import type { RunStore } from '../db'
+import {
+  needsSessionReset,
+  parseSettingsOrDefaults,
+  projectSettingsSchema,
+  type ProjectSettings
+} from '../../shared/settings'
 import type { ActivityDraft, AgentUsage, RunUsage } from './activity'
 import type { ChatRunner } from './runner'
 
@@ -32,6 +38,10 @@ export interface ChatServiceDeps {
   /** Where finished runs' usage is saved; optional so chat works without a database. */
   runStore?: Pick<RunStore, 'recordRun'>
   loadConfig?: () => ConfigResult
+  /** Per-project settings; read once per turn. Absent or throwing means the safe defaults. */
+  settings?: { get(projectId: string): { settings: ProjectSettings; notice: string | null } }
+  /** Session rule; defaults to the shared `needsSessionReset`. Injectable for tests. */
+  needsSessionReset?: (previous: ProjectSettings, next: ProjectSettings) => boolean
   now?: () => Date
   newId?: () => string
 }
@@ -42,6 +52,8 @@ const GENERIC_ERROR = 'The Claude session failed. Check that Claude Code is logg
 export class ChatService {
   private readonly history = new Map<string, ChatMessage[]>()
   private readonly sessions = new Map<string, string>()
+  /** The settings each project's stored session was started with. */
+  private readonly sessionSettings = new Map<string, ProjectSettings>()
   private readonly busy = new Set<string>()
   private readonly activity = new Map<string, ActivityEvent[]>()
   private readonly deps: ChatServiceDeps
@@ -76,6 +88,8 @@ export class ChatService {
     assistant: ChatMessage
   ): Promise<void> {
     let run: RunState | null = null
+    // Read once, kept for the whole run: a settings change during a run applies to the next turn.
+    const settings = this.readSettings(projectId)
     try {
       const cfg = (this.deps.loadConfig ?? (() => loadConfig()))()
       if (!cfg.ok) throw cfg.error
@@ -84,11 +98,13 @@ export class ChatService {
         prompt: text,
         cwd: projectPath,
         pluginPath: cfg.config.toolkitPath,
-        resume: this.sessions.get(projectId)
+        resume: this.resumeId(projectId, settings),
+        settings
       })
       for await (const item of stream) {
         if (item.kind === 'session') {
           this.sessions.set(projectId, item.sessionId)
+          this.sessionSettings.set(projectId, settings)
         } else if (item.kind === 'activity') {
           this.recordActivity(run, item.draft)
         } else if (item.kind === 'usage') {
@@ -107,6 +123,34 @@ export class ChatService {
       console.error('chat turn failed:', err instanceof Error ? err.name : 'unknown')
       const message = err instanceof ConfigError ? err.message : GENERIC_ERROR
       this.deps.emit({ projectId, turnId, type: 'error', message })
+    }
+  }
+
+  /** Never throws: a failing or invalid reader gives the safe defaults. */
+  private readSettings(projectId: string): ProjectSettings {
+    const reader = this.deps.settings
+    if (reader) {
+      try {
+        const parsed = projectSettingsSchema.safeParse(reader.get(projectId)?.settings)
+        if (parsed.success) return parsed.data
+      } catch {
+        console.error('reading project settings failed')
+      }
+    }
+    return parseSettingsOrDefaults(undefined).settings
+  }
+
+  /** The stored session id, or undefined when none exists or an option that is not honoured on resume changed. */
+  private resumeId(projectId: string, current: ProjectSettings): string | undefined {
+    const id = this.sessions.get(projectId)
+    if (id === undefined) return undefined
+    const previous = this.sessionSettings.get(projectId)
+    if (previous === undefined) return id
+    const rule = this.deps.needsSessionReset ?? ((a, b) => needsSessionReset(a, b))
+    try {
+      return rule(previous, current) ? undefined : id
+    } catch {
+      return undefined
     }
   }
 

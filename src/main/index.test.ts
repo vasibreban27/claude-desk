@@ -9,10 +9,17 @@ const { loadEnvFile } = vi.hoisted(() => ({ loadEnvFile: vi.fn() }))
 vi.mock('./config', () => ({ loadEnvFile }))
 vi.mock('./ipc/register', () => ({ registerIpc: vi.fn(() => () => undefined) }))
 const { openDatabase } = vi.hoisted(() => ({ openDatabase: vi.fn() }))
-vi.mock('./db', () => ({ openDatabase, createRunStore: vi.fn(() => ({ recordRun: vi.fn(), summary: vi.fn() })) }))
+vi.mock('./db', async () => {
+  const actual = await vi.importActual<typeof import('./db/settingsStore')>('./db/settingsStore')
+  return {
+    openDatabase,
+    createRunStore: vi.fn(() => ({ recordRun: vi.fn(), summary: vi.fn() })),
+    createSettingsStore: actual.createSettingsStore
+  }
+})
 vi.mock('./projects/store', () => ({ openJsonProjectStore: vi.fn() }))
 
-import { getWindowOptions, loadDevEnv, openRunStore } from './index'
+import { bootstrapStores, getWindowOptions, loadDevEnv, openRunStore } from './index'
 
 describe('loadDevEnv', () => {
   it('does nothing in a packaged app', () => {
@@ -59,6 +66,39 @@ describe('preload build output', () => {
     expect(out?.format).toBe('cjs')
     expect(out?.entryFileNames).toBe(PRELOAD_FILE_NAME)
     expect(PRELOAD_FILE_NAME).toMatch(/\.c?js$/)
+  })
+})
+
+describe('bootstrapStores', () => {
+  it('falls back to the unavailable settings store when the database cannot be opened', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    openDatabase.mockImplementation(() => {
+      throw new RangeError('cannot open')
+    })
+    const stores = bootstrapStores('/data')
+    expect(stores.db).toBeUndefined()
+    expect(stores.runStore).toBeUndefined()
+    expect(stores.settingsStore.get('p1')).toMatchObject({ notice: 'storage-unavailable' })
+    spy.mockRestore()
+  })
+
+  it('falls back to the unavailable settings store when preparing statements throws', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const db = {
+      prepare: vi.fn(() => {
+        throw new TypeError('no such table: /home/someone/x')
+      })
+    }
+    openDatabase.mockReset()
+    openDatabase.mockReturnValue(db)
+    const stores = bootstrapStores('/data')
+    expect(stores.db).toBe(db)
+    expect(stores.runStore).toBeDefined()
+    expect(stores.settingsStore.get('p1')).toMatchObject({ notice: 'storage-unavailable' })
+    expect(stores.settingsStore.set('p1', {} as never)).toEqual({ ok: false, error: 'storage-unavailable' })
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('someone')
+    expect(spy.mock.calls[0]![1]).toBe('TypeError')
+    spy.mockRestore()
   })
 })
 

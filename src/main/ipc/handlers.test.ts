@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Project } from '../../shared/ipc'
+import { createSettingsStore } from '../db/settingsStore'
+import { defaultSettings } from '../../shared/settings'
 import { createHandlers, type HandlerDeps } from './handlers'
 
 const ID = '3f2b8c1e-5d4a-4b6f-9a7e-1c2d3e4f5a6b'
@@ -28,6 +30,8 @@ function setup(over: Partial<HandlerDeps> = {}) {
       activityHistory: vi.fn(() => []),
       send: vi.fn(() => ({ ok: true as const, turnId: 't1' }))
     },
+    settingsStore: createSettingsStore(null),
+    readToolkitInfo: () => ({ status: 'unset', path: null, version: null }),
     ...over
   }
   return { deps, h: createHandlers(deps) }
@@ -215,5 +219,82 @@ describe('usage:summary', () => {
     })
     expect(await h.usageSummary({ projectId: null, days: 30 })).toEqual(empty(30))
     expect(console.error).toHaveBeenCalledWith('usage:summary failed:', 'TypeError')
+  })
+})
+
+describe('settings and app info', () => {
+  const stored = () => {
+    const get = vi.fn(() => ({ settings: defaultSettings(), notice: null as null | 'defaults-applied' }))
+    const set = vi.fn((_id: string, s: unknown) => ({ ok: true as const, settings: s as ReturnType<typeof defaultSettings> }))
+    return { get, set }
+  }
+
+  it('settings:get rejects invalid payloads and unknown projects without touching the store', async () => {
+    const settingsStore = stored()
+    const { h } = setup({ settingsStore })
+    expect(await h.settingsGet({ projectId: 'nope' })).toEqual({ ok: false, error: 'not-found' })
+    expect(await h.settingsGet({ projectId: OTHER })).toEqual({ ok: false, error: 'not-found' })
+    expect(settingsStore.get).not.toHaveBeenCalled()
+  })
+
+  it('settings:get returns the stored settings and notice', async () => {
+    const settingsStore = stored()
+    settingsStore.get.mockReturnValue({ settings: defaultSettings(), notice: 'defaults-applied' })
+    const { h } = setup({ settingsStore })
+    expect(await h.settingsGet({ projectId: ID })).toEqual({
+      ok: true,
+      settings: defaultSettings(),
+      notice: 'defaults-applied'
+    })
+  })
+
+  it('settings:get reports storage-unavailable when the database is missing', async () => {
+    const { h } = setup()
+    expect(await h.settingsGet({ projectId: ID })).toEqual({
+      ok: true,
+      settings: defaultSettings(),
+      notice: 'storage-unavailable'
+    })
+  })
+
+  it('settings:set validates, checks the project and never touches the store otherwise', async () => {
+    const settingsStore = stored()
+    const { h } = setup({ settingsStore })
+    expect(await h.settingsSet({ projectId: ID, settings: { version: 2 } })).toEqual({ ok: false, error: 'invalid' })
+    expect(await h.settingsSet(null)).toEqual({ ok: false, error: 'invalid' })
+    expect(await h.settingsSet({ projectId: OTHER, settings: defaultSettings() })).toEqual({
+      ok: false,
+      error: 'not-found'
+    })
+    expect(settingsStore.set).not.toHaveBeenCalled()
+  })
+
+  it('settings:set round-trips and computes sessionReset from the settings read before the save', async () => {
+    const settingsStore = stored()
+    const { h } = setup({ settingsStore })
+    const next = { ...defaultSettings(), protectedPaths: ['secrets/**'] }
+    const res = await h.settingsSet({ projectId: ID, settings: next })
+    expect(res).toEqual({ ok: true, settings: next, sessionReset: false })
+    expect(settingsStore.get.mock.invocationCallOrder[0]!).toBeLessThan(settingsStore.set.mock.invocationCallOrder[0]!)
+  })
+
+  it('settings:set maps store errors', async () => {
+    const { h } = setup()
+    expect(await h.settingsSet({ projectId: ID, settings: defaultSettings() })).toEqual({
+      ok: false,
+      error: 'storage-unavailable'
+    })
+  })
+
+  it('app:info returns the toolkit info and never throws', async () => {
+    const info = { status: 'valid' as const, path: '/t', version: '1.0.0' }
+    expect(await setup({ readToolkitInfo: () => info }).h.appInfo()).toEqual({ toolkit: info })
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { h } = setup({
+      readToolkitInfo: () => {
+        throw new Error('x')
+      }
+    })
+    expect(await h.appInfo()).toEqual({ toolkit: { status: 'invalid', path: null, version: null } })
   })
 })

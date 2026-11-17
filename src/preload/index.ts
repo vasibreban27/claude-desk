@@ -10,6 +10,9 @@ const api: DeskApi = {
   chatSend: (req) => ipcRenderer.invoke(IPC.chatSend, req),
   activityHistory: (req) => ipcRenderer.invoke(IPC.activityHistory, req),
   usageSummary: (req) => ipcRenderer.invoke(IPC.usageSummary, req),
+  settingsGet: (req) => ipcRenderer.invoke(IPC.settingsGet, req),
+  settingsSet: (req) => ipcRenderer.invoke(IPC.settingsSet, req),
+  appInfo: () => ipcRenderer.invoke(IPC.appInfo),
   onActivityEvent: (listener) => {
     const wrapped = (_e: IpcRendererEvent, event: ActivityEvent): void => listener(event)
     ipcRenderer.on(IPC.activityEvent, wrapped)

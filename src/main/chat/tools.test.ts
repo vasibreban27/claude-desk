@@ -666,3 +666,449 @@ describe('guardPreToolUse denies whitespace-padded and drive-rooted paths (S73, 
     expect(fsCalls.n).toBe(0)
   })
 })
+
+/* ---------- Phase 3: policy (T8) ---------- */
+
+import { linkSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { DEFAULT_PROTECTED_PATHS } from '../../shared/settings'
+import { protectedGrepExclusions, type ToolPolicy } from './tools'
+
+const policy = (over: Partial<ToolPolicy> = {}): ToolPolicy => ({
+  protectedPatterns: DEFAULT_PROTECTED_PATHS,
+  allowGitRead: false,
+  allowPlanWrites: false,
+  ...over
+})
+const gp = (p: unknown, tool_name: string, tool_input?: unknown, dir: string = cwd) =>
+  guardPreToolUse({ hook_event_name: 'PreToolUse', tool_name, tool_input }, dir, p as ToolPolicy)
+
+describe('guardPreToolUse protected paths (T8)', () => {
+  beforeAll(() => {
+    writeFileSync(path.join(cwd, '.env'), 's')
+    writeFileSync(path.join(cwd, '.env.example'), 's')
+    writeFileSync(path.join(cwd, 'k.pem'), 's')
+    mkdirSync(path.join(cwd, 'a'), { recursive: true })
+    writeFileSync(path.join(cwd, 'a', '.env.local'), 's')
+    mkdirSync(path.join(cwd, '.git'), { recursive: true })
+    writeFileSync(path.join(cwd, '.git', 'config'), 's')
+    mkdirSync(path.join(cwd, 'vault.key'), { recursive: true })
+    writeFileSync(path.join(cwd, 'vault.key', 'x.txt'), 's')
+  })
+
+  it('applies the default list without a policy argument and keeps Grep unrewritten', () => {
+    expect(isDenied(g('Read', { file_path: '.env' }))).toBe(true)
+    expect(g('Read', { file_path: '.env.example' })).toEqual({})
+    expect(g('Grep', { pattern: 'x' })).toEqual({})
+  })
+
+  it.each(['.env', 'a/.env.local', 'k.pem', '.git/config', '.git', 'vault.key/x.txt'])('denies Read of %s', (file) => {
+    for (const target of [file, path.join(cwd, file)]) {
+      const out = gp(policy(), 'Read', { file_path: target })
+      expect(isDenied(out)).toBe(true)
+      expect(out.hookSpecificOutput?.permissionDecisionReason).toContain('protected')
+    }
+  })
+
+  it('allows .env.example and unrelated files', () => {
+    expect(gp(policy(), 'Read', { file_path: '.env.example' })).toEqual({})
+    expect(gp(policy(), 'Read', { file_path: 'a.txt' })).toEqual({})
+  })
+
+  it('denies a protected Grep path or Glob prefix, and a literal protected glob', () => {
+    expect(isDenied(gp(policy(), 'Grep', { pattern: 'x', path: '.git' }))).toBe(true)
+    expect(isDenied(gp(policy(), 'Grep', { pattern: 'x', path: 'vault.key' }))).toBe(true)
+    expect(isDenied(gp(policy(), 'Glob', { pattern: '.git/**' }))).toBe(true)
+    expect(isDenied(gp(policy(), 'Glob', { pattern: '.env' }))).toBe(true)
+    expect(isDenied(gp(policy(), 'Glob', { pattern: '*', path: '.git' }))).toBe(true)
+    expect(gp(policy(), 'Glob', { pattern: 'src/**' })).toEqual({})
+  })
+
+  it('keeps the outside denial first', () => {
+    const out = gp(policy(), 'Read', { file_path: path.join(outside, 'data.txt') })
+    expect(out.hookSpecificOutput?.permissionDecisionReason).toContain('inside the project')
+  })
+
+  it('uses custom patterns and honours a re-allow', () => {
+    const p = policy({ protectedPatterns: ['a/', '!a/.env.local'] })
+    expect(isDenied(gp(p, 'Read', { file_path: 'a/.env.local' }))).toBe(true) // parent dir stays excluded
+    expect(gp(p, 'Read', { file_path: '.env' })).toEqual({})
+    expect(gp(policy({ protectedPatterns: [] }), 'Read', { file_path: '.env' })).toEqual({})
+  })
+
+  it('falls back to the defaults when the pattern list is unusable', () => {
+    const bad = policy({ protectedPatterns: ['ok', 'x\0y'] })
+    expect(isDenied(gp(bad, 'Read', { file_path: '.env' }))).toBe(true)
+    expect(gp(bad, 'Read', { file_path: 'a.txt' })).toEqual({})
+  })
+
+  it('denies a link whose real path is protected (junction)', (ctx) => {
+    makeLink(ctx, path.join(cwd, 'vault.key'), path.join(cwd, 'vault-link'))
+    try {
+      expect(isDenied(gp(policy(), 'Read', { file_path: 'vault-link/x.txt' }))).toBe(true)
+      expect(isDenied(gp(policy(), 'Glob', { pattern: 'vault-link/*' }))).toBe(true)
+    } finally {
+      rmSync(path.join(cwd, 'vault-link'), { recursive: true, force: true })
+    }
+  })
+
+  it('matches a case variant on win32 (case-insensitive matcher)', (ctx) => {
+    if (process.platform !== 'win32') return ctx.skip()
+    expect(isDenied(gp(policy(), 'Read', { file_path: '.ENV' }))).toBe(true)
+    expect(isDenied(gp(policy(), 'Read', { file_path: 'K.PEM' }))).toBe(true)
+  })
+
+  it('denies the 8.3 short name of a protected file on win32', (ctx) => {
+    if (process.platform !== 'win32') return ctx.skip()
+    const short = execFileSync('cmd.exe', ['/d', '/c', `for %I in ("${path.join(cwd, '.env')}") do @echo %~sI`], {
+      encoding: 'utf8'
+    }).trim()
+    if (!short.includes('~')) return ctx.skip()
+    expect(isDenied(gp(policy(), 'Read', { file_path: short }))).toBe(true)
+  })
+})
+
+describe('guardPreToolUse malformed policy (T8)', () => {
+  it.each([
+    null,
+    5,
+    'x',
+    {},
+    { protectedPatterns: 'x', allowGitRead: false, allowPlanWrites: false },
+    { protectedPatterns: [1], allowGitRead: false, allowPlanWrites: false },
+    { protectedPatterns: [], allowGitRead: 'yes', allowPlanWrites: false }
+  ])('denies everything for %j', (bad) => {
+    expect(isDenied(gp(bad, 'Read', { file_path: 'a.txt' }))).toBe(true)
+    expect(isDenied(gp(bad, 'Skill'))).toBe(true)
+  })
+
+  it('never throws on a hostile policy object', () => {
+    const hostile = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error('boom')
+        }
+      }
+    )
+    expect(isDenied(gp(hostile, 'Read', { file_path: 'a.txt' }))).toBe(true)
+  })
+})
+
+describe('guardPreToolUse git tools (T8)', () => {
+  const [STATUS, LOG, DIFF] = ['mcp__git__git_status', 'mcp__git__git_log', 'mcp__git__git_diff'] as [string, string, string]
+
+  it.each([STATUS, LOG, DIFF])('denies %s unless allowGitRead', (tool) => {
+    expect(isDenied(gp(policy(), tool, {}))).toBe(true)
+    expect(isDenied(guardPreToolUse({ tool_name: tool, tool_input: {} }, cwd))).toBe(true)
+    expect(gp(policy({ allowGitRead: true }), tool, {})).toEqual({})
+  })
+
+  it('allows ToolSearch only with allowGitRead', () => {
+    expect(isDenied(gp(policy(), 'ToolSearch', { query: 'git' }))).toBe(true)
+    expect(gp(policy({ allowGitRead: true }), 'ToolSearch', { query: 'git', max_results: 3 })).toEqual({})
+    expect(isDenied(gp(policy({ allowGitRead: true }), 'ToolSearch', 'git'))).toBe(true)
+  })
+
+  it('keeps every other MCP tool, shell and edit tool denied', () => {
+    const on = policy({ allowGitRead: true, allowPlanWrites: true })
+    for (const tool of ['mcp__git__git_push', 'mcp__x__git_status', 'mcp__git__', 'Bash', 'PowerShell', 'Edit', 'NotebookEdit']) {
+      expect(isDenied(gp(on, tool, {})), tool).toBe(true)
+    }
+  })
+
+  it('checks the path argument like Read, including protected and outside paths', () => {
+    const on = policy({ allowGitRead: true })
+    expect(gp(on, LOG, { maxCount: 5, path: 'src' })).toEqual({})
+    expect(gp(on, DIFF, { staged: true, path: 'a.txt' })).toEqual({})
+    expect(isDenied(gp(on, DIFF, { path: '.env' }))).toBe(true)
+    expect(isDenied(gp(on, LOG, { path: '.git/config' }))).toBe(true)
+    expect(isDenied(gp(on, LOG, { path: '..' }))).toBe(true)
+    expect(isDenied(gp(on, DIFF, { path: path.join(outside, 'data.txt') }))).toBe(true)
+    expect(isDenied(gp(on, DIFF, { path: 5 }))).toBe(true)
+  })
+
+  it('denies unexpected input keys and non-object input', () => {
+    const on = policy({ allowGitRead: true })
+    expect(isDenied(gp(on, STATUS, { path: 'a' }))).toBe(true)
+    expect(isDenied(gp(on, LOG, { args: ['--output=x'] }))).toBe(true)
+    expect(isDenied(gp(on, DIFF, []))).toBe(true)
+  })
+})
+
+describe('guardPreToolUse plan writes (T8)', () => {
+  let wcwd: string
+  const on = policy({ allowPlanWrites: true })
+  const abs = (slug: string, dir = wcwd) => path.join(dir, 'docs', 'plans', `${slug}.md`)
+  const w = (file_path: unknown, extra: Record<string, unknown> = {}, p: ToolPolicy = on) =>
+    gp(p, 'Write', { file_path, content: 'hello', ...extra }, wcwd)
+  let n = 0
+  beforeEach(() => {
+    wcwd = path.join(root, `wproj-${n++}`)
+    mkdirSync(wcwd)
+    fsCalls.n = 0
+  })
+
+  it('is denied unless allowPlanWrites', () => {
+    expect(isDenied(w(abs('x'), {}, policy()))).toBe(true)
+    expect(isDenied(guardPreToolUse({ tool_name: 'Write', tool_input: { file_path: 'docs/plans/x.md', content: 'a' } }, wcwd))).toBe(true)
+  })
+
+  it('allows the absolute and relative exact shapes when the folders do not exist yet', () => {
+    expect(w(abs('my-plan-2'))).toEqual({})
+    expect(w('docs/plans/my-plan-2.md')).toEqual({})
+  })
+
+  it('denies every non-exact shape with zero filesystem calls', () => {
+    const bad: unknown[] = [
+      'docs/plans/../x.md',
+      'docs/plans/x.md.',
+      'docs\\plans\\x.md',
+      './docs/plans/x.md',
+      'Docs/plans/x.md',
+      'docs/plans/X.md',
+      'docs/plans/sub/x.md',
+      'docs/plans/x.txt',
+      'docs/plans/x.md ',
+      'docs/plans/-x.md',
+      'docs/plans/x--y.md',
+      'docs/plans/x_y.md',
+      `docs/plans/${'a'.repeat(65)}.md`,
+      'docs/plans/.md',
+      'x.md',
+      '',
+      7,
+      null,
+      abs('x').replace('docs', 'DOCS'),
+      abs('x') + '.',
+      abs('sub/x'),
+      [wcwd, 'docs', 'plans', '..', 'plans', 'x.md'].join(path.sep),
+      path.join(wcwd, 'x.md'),
+      path.join(outside, 'docs', 'plans', 'x.md'),
+      '//host/share/docs/plans/x.md'
+    ]
+    for (const file_path of bad) {
+      expect(isDenied(w(file_path)), String(file_path)).toBe(true)
+    }
+    expect(isDenied(w(abs('x'), { extra: 1 }))).toBe(true)
+    expect(isDenied(w(abs('x'), { content: 'x'.repeat(200_001) }))).toBe(true)
+    expect(isDenied(w(abs('x'), { content: 5 }))).toBe(true)
+    expect(isDenied(gp(on, 'Write', { file_path: abs('x') }, wcwd))).toBe(true)
+    expect(isDenied(gp(on, 'Write', undefined, wcwd))).toBe(true)
+    expect(fsCalls.n).toBe(0)
+    expect(w(abs('a'.repeat(64)))).toEqual({})
+  })
+
+  it('allows a new or existing regular file', () => {
+    mkdirSync(path.join(wcwd, 'docs', 'plans'), { recursive: true })
+    expect(w(abs('new'))).toEqual({})
+    writeFileSync(abs('old'), 'x')
+    expect(w(abs('old'))).toEqual({})
+    expect(w('docs/plans/old.md')).toEqual({})
+    expect(w(abs('x'), { content: 'x'.repeat(200_000) })).toEqual({})
+  })
+
+  it('denies when docs or docs/plans is a link or junction', (ctx) => {
+    mkdirSync(path.join(outside, 'plans'), { recursive: true })
+    makeLink(ctx, outside, path.join(wcwd, 'docs'))
+    expect(isDenied(w(abs('x')))).toBe(true)
+    rmSync(path.join(wcwd, 'docs'), { recursive: true, force: true })
+    mkdirSync(path.join(wcwd, 'docs'))
+    makeLink(ctx, path.join(outside, 'plans'), path.join(wcwd, 'docs', 'plans'))
+    expect(isDenied(w(abs('x')))).toBe(true)
+    expect(isDenied(w('docs/plans/x.md'))).toBe(true)
+  })
+
+  it('denies a symlink target', (ctx) => {
+    mkdirSync(path.join(wcwd, 'docs', 'plans'), { recursive: true })
+    writeFileSync(path.join(outside, 'victim.txt'), 'v')
+    makeLink(ctx, path.join(outside, 'victim.txt'), abs('lnk'), 'dir')
+    expect(isDenied(w(abs('lnk')))).toBe(true)
+  })
+
+  it('denies a hard link and a directory target', () => {
+    mkdirSync(path.join(wcwd, 'docs', 'plans'), { recursive: true })
+    writeFileSync(path.join(outside, 'victim2.txt'), 'v')
+    linkSync(path.join(outside, 'victim2.txt'), abs('hard'))
+    expect(isDenied(w(abs('hard')))).toBe(true)
+    mkdirSync(abs('dir'))
+    expect(isDenied(w(abs('dir')))).toBe(true)
+  })
+
+  it('denies when docs is a file', () => {
+    writeFileSync(path.join(wcwd, 'docs'), 'x')
+    expect(isDenied(w(abs('x')))).toBe(true)
+  })
+
+  it('lets a protected pattern deny the target', () => {
+    const p = policy({ allowPlanWrites: true, protectedPatterns: ['docs/plans/secret*.md'] })
+    expect(isDenied(w(abs('secret-one'), {}, p))).toBe(true)
+    expect(isDenied(w('docs/plans/secret-one.md', {}, p))).toBe(true)
+    expect(w(abs('open'), {}, p)).toEqual({})
+    mkdirSync(path.join(wcwd, 'docs', 'plans'), { recursive: true })
+    expect(isDenied(w(abs('secret-one'), {}, p))).toBe(true)
+  })
+})
+
+describe('guardPreToolUse Grep exclusions (T8)', () => {
+  it('rewrites glob through updatedInput with the user glob first', () => {
+    const out = gp(policy(), 'Grep', { pattern: 'x', glob: '*.ts', path: 'src' })
+    const h = out.hookSpecificOutput
+    expect(h?.permissionDecision).toBe('allow')
+    const glob = h?.updatedInput?.['glob'] as string
+    expect(glob.startsWith('*.ts !**/')).toBe(true)
+    for (const e of protectedGrepExclusions(['.env.*', '.git/'])) expect(glob).toContain(e)
+    expect(h?.updatedInput?.['pattern']).toBe('x')
+    expect(h?.updatedInput?.['path']).toBe('src')
+  })
+
+  it('sets glob when absent and leaves input alone with no convertible patterns', () => {
+    const out = gp(policy(), 'Grep', { pattern: 'x' })
+    expect(typeof out.hookSpecificOutput?.updatedInput?.['glob']).toBe('string')
+    expect(gp(policy({ protectedPatterns: [] }), 'Grep', { pattern: 'x' })).toEqual({})
+    expect(gp(policy({ protectedPatterns: ['!keep'] }), 'Grep', { pattern: 'x' })).toEqual({})
+  })
+
+  it('still denies a protected path before rewriting', () => {
+    expect(isDenied(gp(policy(), 'Grep', { pattern: 'x', path: '.env' }))).toBe(true)
+  })
+
+  it('converts patterns to ripgrep exclusions (posix)', () => {
+    expect(protectedGrepExclusions(['.env', '*.pem', '.git/', '!.env.example', '#c', '', '/root.txt', 'a b'], 'linux')).toEqual([
+      '!**/.env',
+      '!**/.env/**',
+      '!**/*.pem',
+      '!**/*.pem/**',
+      '!**/.git/**',
+      '!**/root.txt',
+      '!**/root.txt/**',
+      '!**/a?b',
+      '!**/a?b/**'
+    ])
+  })
+
+  it('folds case on win32 outside character classes', () => {
+    expect(protectedGrepExclusions(['.env', '[A-C]x/'], 'win32')).toEqual([
+      '!**/.[eE][nN][vV]',
+      '!**/.[eE][nN][vV]/**',
+      '!**/[A-Ca-c][xX]/**'
+    ])
+  })
+
+  it('folds case inside character classes on win32 (F1)', () => {
+    expect(protectedGrepExclusions(['[a-z]x.pem'], 'win32')[0]).toBe('!**/[a-zA-Z][xX].[pP][eE][mM]')
+    expect(protectedGrepExclusions(['[!ab]'], 'win32')[0]).toBe('!**/[!aAbB]')
+    expect(protectedGrepExclusions(['[a-z]x.pem'], 'linux')[0]).toBe('!**/[a-z]x.pem')
+  })
+
+  it('converts escapes instead of skipping the pattern (F1)', () => {
+    expect(protectedGrepExclusions(['\\#secret.txt'], 'linux')).toEqual(['!**/#secret.txt', '!**/#secret.txt/**'])
+    expect(protectedGrepExclusions(['\\!bang', 'a\\ b', 'x\\*y', 'z\\'], 'linux')).toEqual([
+      '!**/!bang',
+      '!**/!bang/**',
+      '!**/a?b',
+      '!**/a?b/**',
+      '!**/x[*]y',
+      '!**/x[*]y/**',
+      '!**/z',
+      '!**/z/**'
+    ])
+    // An unescaped leading "#" is a comment and still protects nothing.
+    expect(protectedGrepExclusions(['#comment'], 'linux')).toEqual([])
+  })
+})
+
+describe('guardPreToolUse denies NTFS stream syntax on win32 (S1)', () => {
+  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor
+  afterEach(() => Object.defineProperty(process, 'platform', realPlatform))
+  const as = (platform: NodeJS.Platform) => Object.defineProperty(process, 'platform', { ...realPlatform, value: platform })
+  const suffixes = ['::$DATA', ':$DATA', '::$INDEX_ALLOCATION', ':$I30:$INDEX_ALLOCATION']
+  const full = policy({ allowGitRead: true, allowPlanWrites: true })
+
+  for (const suffix of suffixes) {
+    it(`denies "${suffix}" in every tool with no fs calls`, () => {
+      as('win32')
+      fsCalls.n = 0
+      const abs = `C:\\proj\\.env${suffix}`
+      const calls: GuardOutputLike[] = [
+        g('Read', { file_path: `.env${suffix}` }),
+        g('Read', { file_path: abs }),
+        g('Read', { file_path: `.git${suffix}/config` }),
+        g('Grep', { pattern: 'x', path: `.env${suffix}` }),
+        g('Grep', { pattern: 'x', path: abs }),
+        g('Grep', { pattern: 'x', glob: `.env${suffix}` }),
+        g('Grep', { pattern: 'x', glob: `{a,.env${suffix}}` }),
+        g('Glob', { pattern: `.env${suffix}` }),
+        g('Glob', { pattern: `.git${suffix}/*` }),
+        g('Glob', { pattern: `src/*${suffix}` }),
+        g('Glob', { pattern: `{a,.env${suffix}}` }),
+        g('Glob', { pattern: '*', path: `.git${suffix}` }),
+        gp(full, 'mcp__git__git_log', { path: `.env${suffix}` }),
+        gp(full, 'mcp__git__git_diff', { path: `.git${suffix}` })
+      ]
+      calls.forEach((c, i) => expect(isDenied(c), `call ${i}`).toBe(true))
+      expect(fsCalls.n).toBe(0)
+    })
+
+    it(`denies "${suffix}" in a plan file name through the slug grammar (not the colon rule)`, () => {
+      as('win32')
+      expect(isDenied(gp(full, 'Write', { file_path: `docs/plans/x${suffix}.md`, content: 'a' }))).toBe(true)
+      expect(isDenied(gp(full, 'Write', { file_path: `docs/plans/x.md${suffix}`, content: 'a' }))).toBe(true)
+    })
+  }
+
+  it('keeps allowing ordinary names and drive-absolute paths', () => {
+    as('win32')
+    expect(g('Read', { file_path: 'a-b' })).toEqual({})
+    expect(g('Glob', { pattern: 'a-b/*.ts' })).toEqual({})
+    expect(g('Read', { file_path: path.join(cwd, 'a.txt') })).toEqual({})
+  })
+
+  it.runIf(process.platform !== 'win32')('does not apply on POSIX, where ":" is a legal name character', () => {
+    as('linux')
+    expect(g('Read', { file_path: 'a:b' })).toEqual({})
+    expect(g('Glob', { pattern: 'a:b/*' })).toEqual({})
+  })
+
+  it.runIf(process.platform === 'win32')('denies reading a real protected file through the stream syntax', () => {
+    const dir = path.join(root, 'stream-proj')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, '.env'), 'SECRET=1')
+    const call = (file_path: string) => guardPreToolUse({ tool_name: 'Read', tool_input: { file_path } }, dir)
+    expect(isDenied(call('.env'))).toBe(true)
+    expect(isDenied(call('.env::$DATA'))).toBe(true)
+    expect(isDenied(call(path.join(dir, '.env::$DATA')))).toBe(true)
+  })
+})
+
+type GuardOutputLike = ReturnType<typeof guardPreToolUse>
+
+describe('guardPreToolUse plan writes: device names and canonical target (F2, F3)', () => {
+  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor
+  afterEach(() => Object.defineProperty(process, 'platform', realPlatform))
+  const as = (platform: NodeJS.Platform) => Object.defineProperty(process, 'platform', { ...realPlatform, value: platform })
+  const on = policy({ allowPlanWrites: true })
+
+  it('denies Windows device names as slugs on win32 with no fs calls', () => {
+    as('win32')
+    fsCalls.n = 0
+    for (const slug of ['nul', 'con', 'prn', 'aux', 'com1', 'lpt9', 'com0']) {
+      expect(isDenied(gp(on, 'Write', { file_path: `docs/plans/${slug}.md`, content: 'a' }, cwd)), slug).toBe(true)
+    }
+    expect(fsCalls.n).toBe(0)
+    expect(gp(on, 'Write', { file_path: 'docs/plans/nul-x.md', content: 'a' }, cwd)).toEqual({})
+    expect(gp(on, 'Write', { file_path: 'docs/plans/com10.md', content: 'a' }, cwd)).toEqual({})
+  })
+
+  it.runIf(process.platform !== 'win32')('allows such slugs on POSIX', () => {
+    as('linux')
+    expect(gp(on, 'Write', { file_path: 'docs/plans/nul.md', content: 'a' }, cwd)).toEqual({})
+  })
+
+  it.runIf(process.platform === 'darwin')('matches protected patterns by the on-disk case on macOS', () => {
+    const dir = path.join(root, 'mac-proj')
+    mkdirSync(path.join(dir, 'Docs', 'plans'), { recursive: true })
+    const p = policy({ allowPlanWrites: true, protectedPatterns: ['Docs/plans/secret*.md'] })
+    expect(isDenied(gp(p, 'Write', { file_path: 'docs/plans/secret-one.md', content: 'a' }, dir))).toBe(true)
+  })
+})

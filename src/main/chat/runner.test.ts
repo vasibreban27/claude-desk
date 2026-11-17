@@ -1,7 +1,12 @@
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Options } from '@anthropic-ai/claude-agent-sdk'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { DEFAULT_PROTECTED_PATHS, defaultSettings, type ProjectSettings } from '../../shared/settings'
 import type { ActivityDraft } from './activity'
-import { ALLOWED_TOOLS } from './tools'
+import { GIT_ALLOWED_TOOLS, GIT_SERVER_NAME } from './gitTools'
+import { ALLOWED_TOOLS, guardPreToolUse } from './tools'
 
 type Hooks = NonNullable<Options['hooks']>
 interface Captured {
@@ -13,6 +18,12 @@ const state = vi.hoisted(() => ({
   script: (async function* () {}) as (options: unknown) => AsyncGenerator<unknown>
 }))
 
+interface GitDeps {
+  cwd: string
+  isProtected: (p: string) => boolean
+}
+const gitState = vi.hoisted(() => ({ deps: null as null | GitDeps }))
+
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (params: { options: unknown }) => {
     state.captured = params
@@ -20,7 +31,18 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   }
 }))
 
-import { buildHooks, createSdkRunner, sdkRunner, type RunnerItem } from './runner'
+vi.mock('./gitTools', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./gitTools')>()
+  return {
+    ...actual,
+    createGitMcpServer: (deps: unknown) => {
+      gitState.deps = deps as GitDeps
+      return { type: 'sdk', name: 'git', marker: 'fake-git-server' }
+    }
+  }
+})
+
+import { buildHooks, createGitIsProtected, createSdkRunner, policyFromSettings, sdkRunner, type RunnerItem } from './runner'
 
 const run = (args: Partial<Parameters<typeof sdkRunner>[0]> = {}) =>
   sdkRunner({ prompt: 'p', cwd: '/w', pluginPath: '/plug', ...args })
@@ -52,6 +74,7 @@ const resultMsg = (extra: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   state.captured = null
+  gitState.deps = null
 })
 
 describe('sdkRunner options', () => {
@@ -116,6 +139,139 @@ describe('sdkRunner options', () => {
     const { options } = state.captured as unknown as Captured
     ctrl.abort()
     expect(options.abortController?.signal.aborted).toBe(true)
+  })
+})
+
+describe('sdkRunner per-turn settings', () => {
+  const opts = () => (state.captured as unknown as Captured).options
+  const withSettings = (over: Partial<ProjectSettings>) => ({ ...defaultSettings(), ...over })
+
+  it.each(['haiku', 'sonnet', 'opus'] as const)('passes model alias %s', async (model) => {
+    await collect(run({ settings: withSettings({ model }) }))
+    expect(opts().model).toBe(model)
+  })
+
+  it('has no model key for auto, and equals the Phase 2 options with both toggles off', async () => {
+    await collect(run({ settings: defaultSettings() }))
+    expect('model' in opts()).toBe(false)
+    expect('mcpServers' in opts()).toBe(false)
+    expect(opts().allowedTools).toEqual([...ALLOWED_TOOLS])
+    const withoutSettings = opts()
+    await collect(run())
+    expect(Object.keys(opts()).sort()).toEqual(Object.keys(withoutSettings).sort())
+    expect(opts().allowedTools).toEqual([...ALLOWED_TOOLS])
+  })
+
+  it('allowPlanWrites adds exactly Write and no MCP server', async () => {
+    await collect(run({ settings: withSettings({ allowPlanWrites: true }) }))
+    expect(opts().allowedTools).toEqual([...ALLOWED_TOOLS, 'Write'])
+    expect('mcpServers' in opts()).toBe(false)
+    expect(gitState.deps).toBeNull()
+  })
+
+  it('allowGitRead adds exactly the git server and its three tool names', async () => {
+    await collect(run({ settings: withSettings({ allowGitRead: true }) }))
+    expect(opts().allowedTools).toEqual([...ALLOWED_TOOLS, ...GIT_ALLOWED_TOOLS])
+    expect(GIT_ALLOWED_TOOLS).toHaveLength(3)
+    expect(Object.keys(opts().mcpServers ?? {})).toEqual([GIT_SERVER_NAME])
+    expect(gitState.deps?.cwd).toBe('/w')
+  })
+
+  it('both toggles add both capabilities and nothing else', async () => {
+    await collect(run({ settings: withSettings({ allowGitRead: true, allowPlanWrites: true }) }))
+    expect(opts().allowedTools).toEqual([...ALLOWED_TOOLS, 'Write', ...GIT_ALLOWED_TOOLS])
+  })
+})
+
+describe('per-turn policy in the hooks', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'runner-policy-')))
+    writeFileSync(join(dir, '.env'), 'x')
+    writeFileSync(join(dir, 'notes.txt'), 'x')
+    writeFileSync(join(dir, 'secret.dat'), 'x')
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  const read = (file_path: string) => ({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'u', tool_input: { file_path } })
+
+  it('denies a protected path in the run it was configured for, using the configured patterns', async () => {
+    await collect(
+      sdkRunner({ prompt: 'p', cwd: dir, pluginPath: '/plug', settings: { ...defaultSettings(), protectedPaths: ['*.dat'] } })
+    )
+    const hooks = (state.captured as unknown as Captured).options.hooks as Hooks
+    expect(await call(hooks, 'PreToolUse', read('secret.dat'))).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } })
+    expect(isDeniedOutput(await call(hooks, 'PreToolUse', read('.env')))).toBe(false)
+  })
+
+  it('denies .env with the default patterns', async () => {
+    await collect(sdkRunner({ prompt: 'p', cwd: dir, pluginPath: '/plug', settings: defaultSettings() }))
+    const hooks = (state.captured as unknown as Captured).options.hooks as Hooks
+    expect(await call(hooks, 'PreToolUse', read('.env'))).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } })
+    expect(isDeniedOutput(await call(hooks, 'PreToolUse', read('notes.txt')))).toBe(false)
+  })
+
+  it('allows the exact Write absolute form only when allowPlanWrites is on, and returns the guard output unchanged', async () => {
+    const policy = { protectedPatterns: [...DEFAULT_PROTECTED_PATHS], allowGitRead: false, allowPlanWrites: true }
+    const target = join(dir, 'docs', 'plans', 'x.md')
+    const input = { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_use_id: 'u', tool_input: { file_path: target, content: 'c' } }
+    const on = await call(buildHooks(() => {}, dir, policy), 'PreToolUse', input)
+    expect(on).toEqual(guardPreToolUse(input, dir, policy))
+    expect(isDeniedOutput(on)).toBe(false)
+    const off = await call(buildHooks(() => {}, dir, { ...policy, allowPlanWrites: false }), 'PreToolUse', input)
+    expect(isDeniedOutput(off)).toBe(true)
+  })
+
+  it('keeps emitting the denied tool-finished through isDenied', async () => {
+    const list: ActivityDraft[] = []
+    const hooks = buildHooks((d) => list.push(d), dir, policyFromSettings(defaultSettings()))
+    await call(hooks, 'PreToolUse', read('.env'))
+    expect(list.map((d) => d.type)).toEqual(['tool-started', 'tool-finished'])
+    expect(list[1]).toMatchObject({ denied: true })
+  })
+})
+
+function isDeniedOutput(o: unknown): boolean {
+  return (o as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision === 'deny'
+}
+
+describe('createGitIsProtected', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'runner-git-')))
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('joins the relative forward-slash path onto the real root and uses the matcher', () => {
+    const isProtected = createGitIsProtected(dir, DEFAULT_PROTECTED_PATHS)
+    expect(isProtected('.env')).toBe(true)
+    expect(isProtected('sub/.env')).toBe(true)
+    expect(isProtected('.env.example')).toBe(false)
+    expect(isProtected('src/a.ts')).toBe(false)
+    expect(isProtected('../x.ts')).toBe(true) // outside the root fails closed
+  })
+
+  it('uses the configured patterns, and the defaults when the list is unusable', () => {
+    expect(createGitIsProtected(dir, ['*.dat'])('a.dat')).toBe(true)
+    expect(createGitIsProtected(dir, ['*.dat'])('.env')).toBe(false)
+    const bad = createGitIsProtected(dir, ['x'.repeat(201)])
+    expect(bad('.env')).toBe(true)
+    expect(bad('src/a.ts')).toBe(false)
+  })
+
+  it('fails closed (everything protected) when the real root cannot be resolved', () => {
+    const isProtected = createGitIsProtected('/does/not/exist-anywhere', DEFAULT_PROTECTED_PATHS)
+    expect(isProtected('src/a.ts')).toBe(true)
+    const thrown = createGitIsProtected(dir, DEFAULT_PROTECTED_PATHS, () => {
+      throw new Error('EIO')
+    })
+    expect(thrown('src/a.ts')).toBe(true)
+  })
+
+  it('is the adapter handed to the git server', async () => {
+    await collect(sdkRunner({ prompt: 'p', cwd: dir, pluginPath: '/plug', settings: { ...defaultSettings(), allowGitRead: true } }))
+    expect(gitState.deps?.isProtected('.env')).toBe(true)
+    expect(gitState.deps?.isProtected('src/a.ts')).toBe(false)
   })
 })
 
