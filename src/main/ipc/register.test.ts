@@ -6,9 +6,11 @@ const handlers = new Map<string, Handler>()
 let capturedEmitActivity: ((e: ActivityEvent) => void) | undefined
 let capturedSettings: unknown
 let chatSendRegister: ((projectId: string) => () => void) | undefined
+let windows: unknown[] = []
+let capturedStoreEmit: ((e: { projectId: string; runId: string }) => void) | undefined
 
 vi.mock('electron', () => ({
-  BrowserWindow: { fromWebContents: vi.fn() },
+  BrowserWindow: { fromWebContents: vi.fn(), getAllWindows: () => windows },
   dialog: { showOpenDialog: vi.fn() },
   ipcMain: {
     handle: vi.fn((channel: string, fn: Handler) => {
@@ -29,6 +31,13 @@ vi.mock('../chat/service', () => ({
     }
   }
 }))
+vi.mock('../db/pipelineStore', () => ({
+  withChangeEvents: (inner: unknown, emit: (e: { projectId: string; runId: string }) => void) => {
+    capturedStoreEmit = emit
+    return inner
+  }
+}))
+vi.mock('../pipeline/workerRunner', () => ({ createWorkerRunner: vi.fn(() => vi.fn()) }))
 vi.mock('../chat/runner', () => ({ sdkRunner: vi.fn() }))
 vi.mock('../git/status', () => ({ readGitStatus: vi.fn() }))
 vi.mock('./handlers', () => ({
@@ -42,6 +51,7 @@ vi.mock('./handlers', () => ({
 }))
 
 import { IPC } from '../../shared/ipc'
+import type { PipelineStore } from '../db'
 import type { ProjectStore } from '../projects/store'
 import { registerIpc } from './register'
 
@@ -92,6 +102,24 @@ describe('registerIpc', () => {
     const dispose = registerIpc(store)
     expect(capturedSettings).toBeDefined()
     dispose()
+  })
+
+  it('registers the pipeline channels, removes them on dispose and broadcasts ids only to live windows', () => {
+    const live = { isDestroyed: () => false, webContents: sender() }
+    const deadWin = { isDestroyed: () => true, webContents: sender() }
+    const deadContents = { isDestroyed: () => false, webContents: sender(true) }
+    windows = [live, deadWin, deadContents]
+    const dispose = registerIpc(store, undefined, undefined, {} as unknown as PipelineStore)
+    for (const c of [IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineDiscard]) {
+      expect(handlers.has(c)).toBe(true)
+    }
+    capturedStoreEmit?.({ projectId: 'p1', runId: 'r1', extra: 'x' } as never)
+    expect(live.webContents.send).toHaveBeenCalledWith(IPC.pipelineEvent, { projectId: 'p1', runId: 'r1' })
+    expect(deadWin.webContents.send).not.toHaveBeenCalled()
+    expect(deadContents.webContents.send).not.toHaveBeenCalled()
+    dispose()
+    expect(handlers.size).toBe(0)
+    windows = []
   })
 
   it('skips destroyed WebContents', async () => {

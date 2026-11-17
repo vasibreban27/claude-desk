@@ -14,7 +14,8 @@ vi.mock('./db', async () => {
   return {
     openDatabase,
     createRunStore: vi.fn(() => ({ recordRun: vi.fn(), summary: vi.fn() })),
-    createSettingsStore: actual.createSettingsStore
+    createSettingsStore: actual.createSettingsStore,
+    createPipelineStore: vi.fn((db: unknown) => ({ marker: 'pipeline', db }))
   }
 })
 vi.mock('./projects/store', () => ({ openJsonProjectStore: vi.fn() }))
@@ -98,6 +99,21 @@ describe('bootstrapStores', () => {
     expect(stores.settingsStore.set('p1', {} as never)).toEqual({ ok: false, error: 'storage-unavailable' })
     expect(JSON.stringify(spy.mock.calls)).not.toContain('someone')
     expect(spy.mock.calls[0]![1]).toBe('TypeError')
+    spy.mockRestore()
+  })
+})
+
+describe('bootstrapStores pipeline store', () => {
+  it('returns a pipeline store over the same database, and an unavailable one without a database', () => {
+    const db = { prepare: vi.fn() }
+    openDatabase.mockReset()
+    openDatabase.mockReturnValue(db)
+    expect(bootstrapStores('/data').pipelineStore).toMatchObject({ marker: 'pipeline', db })
+    openDatabase.mockImplementation(() => {
+      throw new RangeError('x')
+    })
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    expect(bootstrapStores('/data').pipelineStore).toMatchObject({ marker: 'pipeline', db: null })
     spy.mockRestore()
   })
 })

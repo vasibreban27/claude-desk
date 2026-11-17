@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { PRELOAD_FILE_NAME } from '../shared/build-output'
 import { app, BrowserWindow, type BrowserWindowConstructorOptions } from 'electron'
-import { openDatabase, createRunStore, createSettingsStore, type RunStore, type SettingsStore } from './db'
+import { openDatabase, createRunStore, createSettingsStore, createPipelineStore, type PipelineStore, type RunStore, type SettingsStore } from './db'
 import type Database from 'better-sqlite3'
 import { registerIpc } from './ipc/register'
 import { openJsonProjectStore } from './projects/store'
@@ -69,14 +69,31 @@ function openSettingsStore(db: Database.Database | null): SettingsStore {
   }
 }
 
+/** Pipeline store over the database; on failure logs the error name only and falls back to the unavailable store. */
+function openPipelineStore(db: Database.Database | null): PipelineStore {
+  if (db === null) return createPipelineStore(null)
+  try {
+    return createPipelineStore(db)
+  } catch (err) {
+    console.error('opening pipeline store failed:', err instanceof Error ? err.name : 'unknown')
+    return createPipelineStore(null)
+  }
+}
+
 /** Opens the database-backed stores; a database problem never stops the app, it only makes those stores unavailable. */
 export function bootstrapStores(dataDir: string): {
   db: Database.Database | undefined
   runStore: RunStore | undefined
   settingsStore: SettingsStore
+  pipelineStore: PipelineStore
 } {
   const opened = openRunStore(dataDir)
-  return { db: opened?.db, runStore: opened?.store, settingsStore: openSettingsStore(opened?.db ?? null) }
+  return {
+    db: opened?.db,
+    runStore: opened?.store,
+    settingsStore: openSettingsStore(opened?.db ?? null),
+    pipelineStore: openPipelineStore(opened?.db ?? null)
+  }
 }
 
 loadDevEnv(app.isPackaged, app.getAppPath())
@@ -88,7 +105,7 @@ app
     const store = await openJsonProjectStore(dataDir)
     const stores = bootstrapStores(dataDir)
     database = stores.db
-    disposeIpc = registerIpc(store, stores.runStore, stores.settingsStore)
+    disposeIpc = registerIpc(store, stores.runStore, stores.settingsStore, stores.pipelineStore)
     createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
