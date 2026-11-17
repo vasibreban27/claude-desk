@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -13,6 +13,11 @@ import {
 
 const PREFIX = [
   '--no-pager',
+  '--no-lazy-fetch',
+  '-c',
+  'core.sshCommand=',
+  '-c',
+  'core.gitProxy=',
   '-c',
   'core.fsmonitor=false',
   '-c',
@@ -103,8 +108,33 @@ describe('argv', () => {
         GIT_TERMINAL_PROMPT: '0',
         GIT_CONFIG_NOSYSTEM: '1',
         GIT_PAGER: 'cat',
-        GIT_EXTERNAL_DIFF: ''
+        GIT_EXTERNAL_DIFF: '',
+        GIT_NO_LAZY_FETCH: '1'
       })
+    }
+  })
+
+  it('computes the filter overrides once per handler call (F11)', async () => {
+    const config = 'filter.evil.clean\nsh x\0'
+    const exec = mockExec(['a.txt\0', 'diff --git a/a.txt b/a.txt\n'], { config })
+    await createGitHandlers({ cwd: '/p', isProtected, exec }).git_diff({})
+    const listings = exec.mock.calls.filter((c) => c[1].includes('config'))
+    expect(listings).toHaveLength(1)
+    const calls = mainCalls(exec)
+    expect(calls).toHaveLength(2)
+    for (const c of calls) {
+      expect(c.slice(0, PREFIX.length + 8)).toEqual([...PREFIX, ...filterOverrides('evil')])
+    }
+    expect(exec).toHaveBeenCalledTimes(3)
+  })
+
+  it('maps an old git that does not know --no-lazy-fetch to a short error', async () => {
+    const exec = vi.fn<GitExec>(async () => {
+      throw Object.assign(new Error('x'), { code: 129, stderr: 'unknown option: --no-lazy-fetch\nusage: git ...' })
+    })
+    for (const tool of ['git_status', 'git_log', 'git_diff'] as const) {
+      const r = await createGitHandlers({ cwd: '/p', isProtected, exec })[tool]({})
+      expect(r).toMatchObject({ isError: true, content: [{ text: 'git is too old (2.45 or newer is required)' }] })
     }
   })
 
@@ -268,7 +298,7 @@ describe('git_log input', () => {
 })
 
 describe('path validation', () => {
-  it.each([['../x'], ['a/../b'], ['a\\..\\b'], ['/etc/passwd'], ['C:\\x'], ['-rf'], [':(top)x'], [''], ['a\0b']])(
+  it.each([['../x'], ['a/../b'], ['a\\..\\b'], ['/etc/passwd'], ['C:\\x'], ['d:x'], ['C:.env'], ['-rf'], [':(top)x'], [''], ['a\0b']])(
     'rejects %j before execFile runs',
     async (path) => {
       for (const tool of ['git_log', 'git_diff'] as const) {
@@ -419,21 +449,41 @@ describe('real temp repo', () => {
   describe('hostile config', () => {
     const marker = (name: string): string => join(extra, name)
 
-    function setupFilter(): void {
+    let tick = 0
+    /** Rewrites a file with same-size content and a fresh mtime, so the index stat data is stale. */
+    function makeStale(file: string, content: string): void {
+      writeFileSync(file, content)
+      tick += 10
+      const t = new Date(Date.now() + tick * 1000)
+      utimesSync(file, t, t)
+    }
+
+    /** a.txt is 'one\n' in the index; the working copy gets same-size, stat-stale content. */
+    function setupFilter(): () => void {
       initRepo()
       extra = mkdtempSync(join(tmpdir(), 'gittools-m-'))
       const git = gitIn(dir)
       writeFileSync(join(dir, '.gitattributes'), '* filter=evil\n')
       git('config', 'filter.evil.clean', `echo x > "${fwd(marker('filter'))}"; cat`)
       git('config', 'filter.evil.smudge', `echo x > "${fwd(marker('filter'))}"; cat`)
-      writeFileSync(join(dir, 'a.txt'), 'changed contents here\n')
+      return () => makeStale(join(dir, 'a.txt'), 'two\n')
+    }
+
+    /** Proves the scenario is live: a plain git command runs the clean filter. */
+    function control(args: string[], stale: () => void): void {
+      stale()
+      execFileSync('git', args, { cwd: dir, encoding: 'utf8', input: '' })
+      expect(existsSync(marker('filter')), `control: git ${args.join(' ')}`).toBe(true)
+      rmSync(marker('filter'), { force: true })
+      stale()
     }
 
     it('does not run a filter driver in git_diff (S1)', { timeout: REAL }, async () => {
-      setupFilter()
+      const stale = setupFilter()
+      control(['diff'], stale)
       const r = await createGitHandlers({ cwd: dir, isProtected }).git_diff({})
       expect(r.isError).toBeUndefined()
-      expect(r.content[0]!.text).toContain('+changed contents here')
+      expect(r.content[0]!.text).toContain('+two')
       expect(existsSync(marker('filter'))).toBe(false)
       const r2 = await createGitHandlers({ cwd: dir, isProtected }).git_diff({ path: 'a.txt' })
       expect(r2.isError).toBeUndefined()
@@ -441,17 +491,11 @@ describe('real temp repo', () => {
     })
 
     it('does not run a filter driver in git_status (S1)', { timeout: REAL }, async () => {
-      setupFilter()
+      const stale = setupFilter()
+      control(['status', '--porcelain'], stale)
       const r = await createGitHandlers({ cwd: dir, isProtected }).git_status({})
       expect(r.isError).toBeUndefined()
       expect(r.content[0]!.text).toContain('a.txt')
-      expect(existsSync(marker('filter'))).toBe(false)
-    })
-
-    it('does not run a filter driver in git_log (S1)', { timeout: REAL }, async () => {
-      setupFilter()
-      const r = await createGitHandlers({ cwd: dir, isProtected }).git_log({})
-      expect(r.isError).toBeUndefined()
       expect(existsSync(marker('filter'))).toBe(false)
     })
 
@@ -487,6 +531,72 @@ describe('real temp repo', () => {
       for (const n of ['fsmonitor', 'ext', 'drvcmd', 'textconv']) expect(existsSync(marker(n))).toBe(false)
     })
 
+    /**
+     * A repo that declares origin a promisor remote and lacks objects it references. Any transport
+     * use (lazy fetch) runs remote.origin.uploadpack, which writes the marker.
+     */
+    function setupPromisor(): { git: (...a: string[]) => string; blob: string; rootTree: string } {
+      initRepo()
+      extra = mkdtempSync(join(tmpdir(), 'gittools-m-'))
+      const git = gitIn(dir)
+      writeFileSync(join(dir, 'f.txt'), 'first\n')
+      git('add', '.')
+      git('commit', '-q', '-m', 'second')
+      writeFileSync(join(dir, 'f.txt'), 'later\n')
+      git('add', '.')
+      git('commit', '-q', '-m', 'third')
+      const blob = git('rev-parse', 'HEAD~1:f.txt').trim()
+      const rootTree = git('rev-parse', 'HEAD~1^{tree}').trim()
+      // One file append instead of many `git config` spawns (each spawn is slow on Windows).
+      const quote = (s: string): string => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+      appendFileSync(
+        join(dir, '.git', 'config'),
+        [
+          '[core]',
+          '\trepositoryformatversion = 1',
+          `\tsshCommand = ${quote(`echo x > "${fwd(marker('ssh'))}"; exit 1 #`)}`,
+          '[extensions]',
+          '\tpartialClone = origin',
+          '[remote "origin"]',
+          `\turl = ${quote(fwd(dir))}`,
+          '\tpromisor = true',
+          `\tuploadpack = ${quote(`echo x > "${fwd(marker('lazy'))}"; exit 1 #`)}`,
+          ''
+        ].join('\n')
+      )
+      for (const oid of [blob, rootTree]) {
+        const p = join(dir, '.git', 'objects', oid.slice(0, 2), oid.slice(2))
+        chmodSync(p, 0o666)
+        rmSync(p, { force: true })
+      }
+      // The working copy now differs from the index blob that is missing (HEAD~1 blob is also what
+      // the index would reference after a reset), so diff needs its content.
+      git('update-index', '--cacheinfo', `100644,${blob},f.txt`)
+      return { git, blob, rootTree }
+    }
+
+    it('does not lazy-fetch missing objects in a partial clone (S3)', { timeout: REAL }, async () => {
+      setupPromisor()
+      // Controls: plain git does use the transport and so runs the configured command.
+      for (const args of [['diff'], ['log', '--no-patch', '--format=%h', '--', 'f.txt']]) {
+        try {
+          execFileSync('git', args, { cwd: dir, encoding: 'utf8', input: '', stdio: 'pipe' })
+        } catch {
+          // the fake transport fails on purpose
+        }
+        expect(existsSync(marker('lazy')) || existsSync(marker('ssh')), `control: git ${args.join(' ')}`).toBe(true)
+        rmSync(marker('lazy'), { force: true })
+        rmSync(marker('ssh'), { force: true })
+      }
+      const h = createGitHandlers({ cwd: dir, isProtected })
+      // Results may be errors (the objects are really missing); only the absence of side effects matters.
+      await h.git_diff({})
+      await h.git_log({ path: 'f.txt' })
+      await h.git_status({})
+      expect(existsSync(marker('lazy'))).toBe(false)
+      expect(existsSync(marker('ssh'))).toBe(false)
+    })
+
     it('does not run gpg.program for a forged gpgsig commit (S2)', { timeout: REAL }, async () => {
       initRepo()
       extra = mkdtempSync(join(tmpdir(), 'gittools-m-'))
@@ -516,7 +626,7 @@ describe('real temp repo', () => {
       expect(existsSync(marker('gpg'))).toBe(false)
     })
 
-    it('does not run fsmonitor or filters of a submodule (status and diff)', { timeout: REAL }, async () => {
+    it('does not run the fsmonitor of a submodule (status and diff)', { timeout: REAL }, async () => {
       dir = mkdtempSync(join(tmpdir(), 'gittools-'))
       extra = mkdtempSync(join(tmpdir(), 'gittools-m-'))
       const sub = join(extra, 'subsrc')
@@ -531,20 +641,20 @@ describe('real temp repo', () => {
       git('submodule', 'add', '-q', fwd(sub), 'mod')
       git('commit', '-q', '-m', 'add sub')
       const inner = join(dir, 'mod')
-      gitIn(inner)('config', 'core.fsmonitor', `echo x > "${fwd(marker('subfsm'))}"`)
+      const gi = gitIn(inner)
+      gi('config', 'core.fsmonitor', `echo x > "${fwd(marker('subfsm'))}"`)
       writeFileSync(join(inner, 's.txt'), 'modified\n')
       writeFileSync(join(inner, 'new.txt'), 'untracked\n')
-      // Control: the naive command does reach the submodule's own config.
+      // Control: the naive command does reach the submodule's own config. (A submodule-local filter
+      // marker could not be reproduced through the parent on git 2.55, so only fsmonitor is asserted.)
       git('status', '--porcelain')
-      expect(existsSync(marker('subfilter')) || existsSync(marker('subfsm'))).toBe(true)
-      rmSync(marker('subfilter'), { force: true })
+      expect(existsSync(marker('subfsm')), 'control: submodule fsmonitor').toBe(true)
       rmSync(marker('subfsm'), { force: true })
 
       const h = createGitHandlers({ cwd: dir, isProtected })
       await h.git_status({})
       await h.git_diff({})
       expect(existsSync(marker('subfsm'))).toBe(false)
-      expect(existsSync(marker('subfilter'))).toBe(false)
     })
   })
 })

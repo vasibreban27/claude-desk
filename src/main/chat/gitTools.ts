@@ -18,6 +18,13 @@ const DEFAULT_LOG_COUNT = 20
 
 const COMMON_PREFIX = [
   '--no-pager',
+  // Partial clones fetch missing objects lazily, which runs the transport and with it commands from
+  // repo config (remote.<n>.uploadpack, core.sshCommand, core.gitProxy). Needs git >= 2.45.
+  '--no-lazy-fetch',
+  '-c',
+  'core.sshCommand=',
+  '-c',
+  'core.gitProxy=',
   '-c',
   'core.fsmonitor=false',
   '-c',
@@ -53,6 +60,7 @@ const ENV_ADDITIONS: Record<string, string> = {
   GIT_CONFIG_NOSYSTEM: '1',
   GIT_PAGER: 'cat',
   GIT_EXTERNAL_DIFF: '',
+  GIT_NO_LAZY_FETCH: '1',
   // Not in the spike list: pathspecs built from file names are never magic or globs.
   GIT_LITERAL_PATHSPECS: '1'
 }
@@ -99,6 +107,8 @@ export function validatePathspec(p: string): string | null {
   if (p.includes('\0')) return 'path contains a NUL character'
   if (p.startsWith('-')) return 'path must not start with "-"'
   if (p.startsWith(':')) return 'path must not start with ":"'
+  // Drive-relative (`d:x`, `C:.env`) is not "absolute" for win32.isAbsolute but still leaves the project.
+  if (/^[A-Za-z]:/.test(p)) return 'path must be relative'
   if (posix.isAbsolute(p) || win32.isAbsolute(p) || p.startsWith('\\')) return 'path must be relative'
   if (p.split(/[\\/]/).includes('..')) return 'path must not contain ".."'
   return null
@@ -149,6 +159,9 @@ export function createGitHandlers(deps: GitToolsDeps): GitHandlers {
     }
     if (err.code === 'ENOENT') return { error: 'git is not installed' }
     const stderr = typeof err.stderr === 'string' ? err.stderr : ''
+    if (/unknown option:? .*--no-lazy-fetch/i.test(stderr) || /unknown option:? .*--no-lazy-fetch/i.test(err.message ?? '')) {
+      return { error: 'git is too old (2.45 or newer is required)' }
+    }
     if (/not a git repository/i.test(stderr) || /not a git repository/i.test(err.message ?? '')) {
       return { error: 'not a git repo' }
     }
@@ -199,9 +212,7 @@ export function createGitHandlers(deps: GitToolsDeps): GitHandlers {
   }
 
   /** Every call that can touch the working tree goes through here. Fails closed. */
-  async function run(subcommand: string[]): Promise<RunResult> {
-    const overrides = await filterOverrides()
-    if (!Array.isArray(overrides)) return overrides
+  async function run(subcommand: string[], overrides: string[]): Promise<RunResult> {
     try {
       const { stdout } = await exec('git', [...COMMON_PREFIX, ...overrides, ...subcommand], options)
       return { stdout, overflow: false }
@@ -235,6 +246,8 @@ export function createGitHandlers(deps: GitToolsDeps): GitHandlers {
       const pre = await runPlain(['rev-parse', '--show-prefix'])
       if ('error' in pre) return fail(pre.error)
       const prefix = pre.stdout.replace(/\r?\n$/, '')
+      const overrides = await filterOverrides()
+      if (!Array.isArray(overrides)) return fail(overrides.error)
       const r = await run([
         'status',
         '--porcelain=v1',
@@ -244,7 +257,7 @@ export function createGitHandlers(deps: GitToolsDeps): GitHandlers {
         '--ignore-submodules=all',
         '--',
         '.'
-      ])
+      ], overrides)
       if ('error' in r) return fail(r.error)
       let hidden = 0
       const kept: string[] = []
@@ -275,7 +288,9 @@ export function createGitHandlers(deps: GitToolsDeps): GitHandlers {
         String(parsed.data.maxCount ?? DEFAULT_LOG_COUNT)
       ]
       if (parsed.data.path !== undefined) args.push('--', parsed.data.path)
-      const r = await run(args)
+      const overrides = await filterOverrides()
+      if (!Array.isArray(overrides)) return fail(overrides.error)
+      const r = await run(args, overrides)
       if ('error' in r) return fail(r.error)
       return finish(r.stdout, r.overflow, 'No commits.')
     },
@@ -297,7 +312,9 @@ export function createGitHandlers(deps: GitToolsDeps): GitHandlers {
         ...cached
       ]
       if (parsed.data.path !== undefined) listArgs.push('--', parsed.data.path)
-      const listed = await run(listArgs)
+      const overrides = await filterOverrides()
+      if (!Array.isArray(overrides)) return fail(overrides.error)
+      const listed = await run(listArgs, overrides)
       if ('error' in listed) return fail(listed.error)
       if (listed.overflow) return fail('too many files')
       const names = listed.stdout.split('\0').filter((n) => n.length > 0)
@@ -318,7 +335,7 @@ export function createGitHandlers(deps: GitToolsDeps): GitHandlers {
         ...cached,
         '--',
         ...allowed
-      ])
+      ], overrides)
       if ('error' in r) return fail(r.error)
       return finish(r.stdout, r.overflow, 'No changes.', hidden ? [omitted(hidden)] : [])
     }

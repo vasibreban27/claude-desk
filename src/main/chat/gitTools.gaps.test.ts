@@ -104,12 +104,14 @@ describe('git tools gaps: handler input validation', () => {
     ['--output=x'],
     [':!x'],
     ['D:/x'],
-    ['d:x']
+    ['d:x'],
+    ['C:.env'],
+    ['a:b']
   ])('validatePathspec rejects %j', (p) => {
     expect(validatePathspec(p)).not.toBeNull()
   })
 
-  it.each([['.'], ['a b/c d.txt'], ['..hidden'], ['a/..b/c'], ['é/ü.ts'], ['src/*.ts'], ['a:b']])(
+  it.each([['.'], ['a b/c d.txt'], ['..hidden'], ['a/..b/c'], ['é/ü.ts'], ['src/*.ts'], ['ab:c'], ['a/b:c']])(
     'validatePathspec accepts %j',
     (p) => {
       expect(validatePathspec(p)).toBeNull()
