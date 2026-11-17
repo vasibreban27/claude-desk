@@ -2,7 +2,7 @@
 
 The automated flow (`tests/phase-4b-1-flow.test.ts`) drives the real IPC handlers, service, store and orchestrator over a temp git repo with a fake worker. This note covers what only the launched app and the live Agent SDK can show. A live run costs real money (haiku, a few cents) and needs the Claude login.
 
-Status: **not yet run**.
+Status: steps 1-12 run and passed on 2026-11-17 (see Results); steps 13-15 (`acceptEdits`) not run.
 
 ## Setup
 
@@ -45,4 +45,31 @@ Result line to fill in: `acceptEdits` with: <pass/fail>; without: <pass/fail>; d
 
 ## Results
 
-Not recorded yet. Fill in date, model, outcome per step, and any follow-ups.
+### Steps 1-12: run on 2026-11-17
+
+Driven through Playwright against the built app (`out/`, launched with `electron .`), on Windows, with a throwaway git repo as the project and a temp `--user-data-dir` (the real project list and database were not touched). The native folder picker was stubbed in main. Model: Haiku (set in Settings). Real SDK runs; total cost about $0.02.
+
+| Step | Result | Observed |
+|---|---|---|
+| 1 | pass | Three-panel window, no console errors. |
+| 2 | pass | Project listed as `proj`, `main`, `clean`. Note: a Windows short (8.3) path `SERGIU~1` was rejected with "That folder could not be read"; the long path works (the real picker returns long paths). |
+| 3 | pass | Check `verify` / `node` / `check.mjs` saved, kept after leaving and reopening Settings; the "run as you, no shell, not a sandbox" hint is shown. Toolkit status Valid, plugin 0.9.0. |
+| 4 | pass | Plans listed with file name or title, `flow-plan/1` badge, task and wave counts. |
+| 5 | pass | `broken.md`: "4 errors" with line numbers, Start disabled. |
+| 6 | pass | Run appeared as `running` within 2 s; T1 `queued`, `running`, `done`; T2 started after T1; no manual refresh. Whole run about 35 s. |
+| 7 | pass | "Committed, not reviewed" on each done task, run badge "tasks committed, not reviewed", "Nothing is merged into main or pushed"; checks passed, duration and cost (about $0.003-0.007 per task) shown. |
+| 8 | pass | `run/<id8>` and both task branches exist; `src/one.txt` = `one`, `src/two.txt` = `two` on the run branch; merges by `claude-desk`; `main` unchanged, working tree clean. |
+| 9 | pass | Cancel visible; "Cancelling..." at once; task and run `cancelled` about 2.1 s after the click; no task left `running`; button gone. |
+| 10 | pass | All Start buttons are disabled while a run is active, so the "busy" message cannot be reached by clicking; calling the bridge directly returns `{ok:false, error:"busy"}` and no second run exists. |
+| 11 | pass | App killed mid-run (real main process, whole tree); after relaunch the run is `failed`, the task reason is `interrupted`, no Cancel button, Start enabled. This also confirms the wave 3 F1 crash-recovery fix in the real app. |
+| 12 | pass | `main` still `f7f7d4a` (reflog shows only the initial commit), `git status` clean, no remote, nothing pushed. |
+
+Observations for Follow-ups (none blocks):
+- `broken.md` has `Size: L` but the error list shows only the four missing fields: the parser skips the other field checks for a task that is missing fields, so the Size error appears only after those are fixed.
+- Step 10's "busy message" is not visible in the UI because Start is disabled; the contract value is only reachable through the bridge.
+- Killing only the launcher process (as a first attempt did) leaves the app running and the run finishing; a crash test must kill the process whose command line has the app's flags and no `--type=`.
+- Each run leaves its worktrees and branches (`run/*`, `task/*`, `.worktrees/`); discard comes in 4b-2.
+
+### Steps 13-15 (`acceptEdits` live check)
+
+Not run. Result line still to fill in: `acceptEdits` with: <pass/fail>; without: <pass/fail>; decision: <keep | remove in a follow-up>; date: <date>.
