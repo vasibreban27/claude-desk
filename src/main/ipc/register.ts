@@ -33,6 +33,13 @@ function buildPipeline(
   settings: SettingsStore,
   projects: ProjectStore
 ): PipelineService {
+  // 4a crash recovery: runs left `running` by a killed app are failed at registration, not on first start.
+  try {
+    const r = rawStore.markInterrupted()
+    if (!r.ok) console.error('pipeline: crash recovery failed')
+  } catch {
+    console.error('pipeline: crash recovery failed')
+  }
   const store = withChangeEvents(rawStore, broadcastPipelineEvent)
   const runner = createWorkerRunner()
   let orchestrator: Orchestrator | undefined

@@ -122,6 +122,25 @@ describe('registerIpc', () => {
     windows = []
   })
 
+  it('marks interrupted runs once at registration, without any start, and never throws', () => {
+    const ok = { markInterrupted: vi.fn(() => ({ ok: true as const, value: 1 })) }
+    registerIpc(store, undefined, undefined, ok as unknown as PipelineStore)()
+    expect(ok.markInterrupted).toHaveBeenCalledTimes(1)
+
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const failing = { markInterrupted: vi.fn(() => ({ ok: false as const, error: 'storage-error' })) }
+    expect(() => registerIpc(store, undefined, undefined, failing as unknown as PipelineStore)()).not.toThrow()
+    const throwing = {
+      markInterrupted: vi.fn(() => {
+        throw new Error('C:\\secret\\path')
+      })
+    }
+    expect(() => registerIpc(store, undefined, undefined, throwing as unknown as PipelineStore)()).not.toThrow()
+    expect(err).toHaveBeenCalledTimes(2)
+    expect(err).toHaveBeenCalledWith('pipeline: crash recovery failed')
+    err.mockRestore()
+  })
+
   it('skips destroyed WebContents', async () => {
     const dispose = registerIpc(store)
     const dead = sender(true)
