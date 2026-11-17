@@ -39,6 +39,13 @@ export const MIGRATIONS: readonly string[] = [
     approximate INTEGER NOT NULL CHECK (approximate IN (0, 1))
   );
   CREATE INDEX idx_usage_agents_run ON usage_agents (run_id);
+  `,
+  `
+  CREATE TABLE project_settings (
+    project_id TEXT PRIMARY KEY,
+    settings TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
   `
 ]
 
