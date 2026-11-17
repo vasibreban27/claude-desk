@@ -145,7 +145,7 @@ DeskApi additions: `pipelinePlans`, `pipelineStart`, `pipelineStatus`, `pipeline
 ## Wave 2: service, tab, engine fixes, checks editor
 
 ### T3: PipelineService and store queries
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: M
 - Sensitive: yes
@@ -167,7 +167,7 @@ DeskApi additions: `pipelinePlans`, `pipelineStart`, `pipelineStatus`, `pipeline
   - Given the store When `latestRunForProject` and `deleteRun` run Then they use parameterized statements, delete the run and its tasks in one transaction, and return `storage-unavailable` when the database is null.
 
 ### T4: Pipeline tab (pick, parse errors, start, live status, cancel)
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Size: M
 - Sensitive: no
@@ -187,7 +187,7 @@ DeskApi additions: `pipelinePlans`, `pipelineStart`, `pipelineStatus`, `pipeline
   - Given the tab When it renders Then tab semantics and the focus order stay accessible (buttons have names, errors use `role="alert"`, status uses `role="status"`), and `App.test.tsx` is not edited.
 
 ### T6: Engine fixes (F3, F6) and real-vitest verification of testPath and env
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: M
 - Sensitive: yes
@@ -208,7 +208,7 @@ DeskApi additions: `pipelinePlans`, `pipelineStart`, `pipelineStatus`, `pipeline
   - Given the changes When `npm run lint` and `npm run typecheck` run Then they pass.
 
 ### T7: Checks editor in the Settings tab
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Size: M
 - Sensitive: no
@@ -272,3 +272,11 @@ DeskApi additions: `pipelinePlans`, `pipelineStart`, `pipelineStatus`, `pipeline
 - W1 auditor S1 `planParser.ts:436-447`: `readFirst` (no path-shape or protected check) and `doneWhen` (any string) come from repo-controlled plan files; unused so far. Before any later task gives `readFirst` to a worker or runs `doneWhen`, validate paths with `badPathShape` and `isDefaultProtected`, and never run `doneWhen` directly.
 - W1 T2: the 100-character `planFile` limit lives in the zod schema (`.max(100)`), not in `PLAN_FILE_PATTERN` alone; later code must use the schema.
 - W1 auditor note: the handler that resolves `planFile` against `docs/plans` (symlinks, junctions) is not in wave 1; audit it when T3 lands.
+- W2 auditor S1 `service.ts:103,70` (`resolvePlan`, `listEntries`): `docs/plans` itself is never checked for being a symlink or junction; a hostile repo could expose a `.md` outside the project to the parser (read-only, parse results only). Fix: reject if `lstat(docs/plans)` is a link, or require `realDir` inside `realpath(projectPath)`, and read via the resolved path.
+- W2 reviewer F1 `service.ts:~215`: `activeRuns` holds `''` until the run id is known, so the first event reports `active=false`; at the end `setRunStatus` emits before the active entry is released, so a fast re-fetch can show `active=true` for a finished run. Set the run id early or emit once more from release. Matters for the Cancel button.
+- W2 reviewer F2 `service.ts:~226`: start errors are classified by message prefix (`database error`, `settings could not`); make `startRun` return a typed error code.
+- W2 reviewer F3 `usePipeline.ts:~70`: status responses are applied in arrival order; an older response can overwrite a newer one. Drop stale responses with a request counter.
+- W2 reviewer F4 `ChecksEditor.tsx:~50`: `parseArgs` drops empty lines, so a saved empty-string argument is silently removed on save.
+- W2 reviewer F5 `service.ts:~192`: a git status failure puts the raw git error text in the start message; log it and show a generic message.
+- W2 T6: vitest accepted `./<rel>` and the env allowlist needed no change; `npm --version` starts through the tool on Windows (see `docs/notes/phase-4b-1-checks-verify.md`). The npm test only asserts a string result because the outcome is platform dependent.
+- W2 out-of-scope (accepted): `src/renderer/src/App.test.tsx` (585c752, R1: tab order now Activity, Pipeline, Usage, Settings); T7 also updated Workspace tab expectations inside its Settings test files (ea612b7).
