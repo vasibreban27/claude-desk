@@ -270,7 +270,7 @@ Tasks that touch the contract say `Contract: <channel or tool>`.
 ### Wave 6
 
 ### T11: Smoke - settings change the next run, end to end
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: settings:get, settings:set, app:info
 - Owns: `tests/phase-3-flow.test.ts`, `docs/notes/phase-3-manual-check.md`
@@ -326,3 +326,8 @@ Workers: `node-developer` for T1-T3, T5, T6, T8-T11 (`src/main`, `src/preload`, 
 - Out-of-scope files accepted in wave 5 (tests of owned files, minimal edits): `src/main/index.test.ts`, `src/preload/index.test.ts`.
 - T10 contract names: the plan's prose says getSettings/setSettings/getAppInfo; the real `DeskApi` methods are `settingsGet`, `settingsSet`, `appInfo` (channels `settings:get`, `settings:set`, `app:info`).
 - T10 note: `registerIpc(store, runStore?, settingsStore?)` takes the settings store as a third argument; handler deps for the settings store and `readToolkitInfo` are optional and default to the unavailable store and toolkit status `unset`, so Phase 2 tests keep compiling.
+- Wave 6 verify: 1 round, PASS. F1 (minor, docs/notes/phase-3-manual-check.md:11): the launch step runs `npm run build` then `npm run dev` (HMR, not `out/`); `package.json` has no start/preview script, so a problem only visible in the production bundle is not caught. Add `npx electron-vite preview` as the launch step or state that dev mode is the accepted substitute.
+- F2 (minor, tests/phase-3-flow.test.ts:263-275): `vi.restoreAllMocks()` is the last line of the "reads throw" test, so a failing assertion leaks the `console.error` spy into later tests; restore in `afterEach` and optionally assert the failure was logged.
+- F3 (minor, manual check step 17): it only tests `Bash` and a protected `Read` inside a subagent; add sub-checks for a subagent calling a `mcp__git__*` tool with git off and a subagent `Write` with plan writes off.
+- F4 (minor, manual check step 7): the database location is given as `.../data/`; it is `<userData>/data/claude-desk.db` (Electron per-user app-data folder; on Windows under `%APPDATA%`, exact folder name not checked).
+- Not automated: launching the built app (needs a display and the Claude login); covered by `docs/notes/phase-3-manual-check.md` steps 1-2.
