@@ -1,8 +1,9 @@
 import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import { IPC, type ChatEvent } from '../../shared/ipc'
+import { IPC, type ActivityEvent, type ChatEvent } from '../../shared/ipc'
 import { ChatService } from '../chat/service'
 import { sdkRunner } from '../chat/runner'
 import { readGitStatus } from '../git/status'
+import type { RunStore } from '../db'
 import type { ProjectStore } from '../projects/store'
 import { createHandlers } from './handlers'
 
@@ -12,7 +13,7 @@ type EventTarget = Pick<WebContents, 'send' | 'isDestroyed'>
  * Registers all IPC handlers. Chat events are routed only to the window that last
  * sent a message for that project. Returns a function that removes the handlers.
  */
-export function registerIpc(store: ProjectStore): () => void {
+export function registerIpc(store: ProjectStore, runStore?: RunStore): () => void {
   const targets = new Map<string, EventTarget>()
 
   const chat = new ChatService({
@@ -21,7 +22,12 @@ export function registerIpc(store: ProjectStore): () => void {
     emit: (event: ChatEvent) => {
       const target = targets.get(event.projectId)
       if (target && !target.isDestroyed()) target.send(IPC.chatEvent, event)
-    }
+    },
+    emitActivity: (event: ActivityEvent) => {
+      const target = targets.get(event.projectId)
+      if (target && !target.isDestroyed()) target.send(IPC.activityEvent, event)
+    },
+    ...(runStore ? { runStore } : {})
   })
 
   // The chat service resolves paths synchronously, so keep a cache fed from the store.
@@ -39,7 +45,7 @@ export function registerIpc(store: ProjectStore): () => void {
   }
 
   const make = (event: IpcMainInvokeEvent) =>
-    createHandlers({ store, readGitStatus, pickFolder: () => pickFolder(event), chat })
+    createHandlers({ store, readGitStatus, pickFolder: () => pickFolder(event), chat, ...(runStore ? { runStore } : {}) })
 
   ipcMain.handle(IPC.projectsList, async (event) => {
     const list = await make(event).listProjects()
@@ -53,6 +59,8 @@ export function registerIpc(store: ProjectStore): () => void {
   })
   ipcMain.handle(IPC.projectsRefresh, (event, payload: unknown) => make(event).refresh(payload))
   ipcMain.handle(IPC.chatHistory, (event, payload: unknown) => make(event).chatHistory(payload))
+  ipcMain.handle(IPC.activityHistory, (event, payload: unknown) => make(event).activityHistory(payload))
+  ipcMain.handle(IPC.usageSummary, (event, payload: unknown) => make(event).usageSummary(payload))
   ipcMain.handle(IPC.chatSend, async (event, payload: unknown) => {
     try {
       await refreshPaths()
@@ -70,7 +78,7 @@ export function registerIpc(store: ProjectStore): () => void {
   })
 
   return () => {
-    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend]) {
+    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary]) {
       ipcMain.removeHandler(channel)
     }
     targets.clear()

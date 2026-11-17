@@ -2,13 +2,16 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatService } from '../../src/main/chat/service'
 import type { ChatRunner } from '../../src/main/chat/runner'
 import { readGitStatus } from '../../src/main/git/status'
 import { createHandlers } from '../../src/main/ipc/handlers'
 import { openJsonProjectStore } from '../../src/main/projects/store'
 import type { ChatEvent } from '../../src/shared/ipc'
+
+// git is spawned here: allow more time than the global default, only for this file
+vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 })
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd })
@@ -28,7 +31,7 @@ describe('main-side flow (SDK mocked, real git and store)', () => {
     writeFileSync(join(repo, 'b.txt'), 'untracked')
   })
 
-  afterEach(() => rmSync(root, { recursive: true, force: true }))
+  afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }))
 
   it('adds a project, lists it, streams a chat turn and returns history', async () => {
     const store = await openJsonProjectStore(join(root, 'data'))

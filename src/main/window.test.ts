@@ -7,7 +7,8 @@ const loadFile = vi.fn(() => Promise.resolve())
 const loadURL = vi.fn(() => Promise.resolve())
 
 vi.mock('electron', () => ({
-  app: { whenReady: () => Promise.resolve(), on: vi.fn(), quit: vi.fn(), getPath: () => '/userdata' },
+  // isPackaged: true keeps loadDevEnv from reading this machine's project .env during tests.
+  app: { whenReady: () => Promise.resolve(), on: vi.fn(), quit: vi.fn(), getPath: () => '/userdata', isPackaged: true, getAppPath: () => '/app' },
   BrowserWindow: class {
     static getAllWindows(): unknown[] {
       return []

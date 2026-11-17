@@ -1,7 +1,22 @@
-import { query } from '@anthropic-ai/claude-agent-sdk'
+import { query, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk'
+import {
+  createUsageAccumulator,
+  mapDeniedToolUse,
+  mapHookInput,
+  parseResultMessage,
+  type ActivityDraft,
+  type AgentUsage,
+  type RunUsage
+} from './activity'
+import { frameProjectContext, loadProjectContext } from './projectContext'
+import { ALLOWED_TOOLS, guardPreToolUse, isDenied } from './tools'
 
 /** What the chat service needs from the SDK; the renderer never sees raw SDK objects. */
-export type RunnerItem = { kind: 'text'; text: string } | { kind: 'session'; sessionId: string }
+export type RunnerItem =
+  | { kind: 'text'; text: string }
+  | { kind: 'session'; sessionId: string }
+  | { kind: 'activity'; draft: ActivityDraft }
+  | { kind: 'usage'; usage: RunUsage; agents: AgentUsage[] }
 
 export interface RunnerArgs {
   prompt: string
@@ -34,34 +49,167 @@ export function extractSessionId(message: unknown): string | null {
   return typeof id === 'string' && id.length > 0 ? id : null
 }
 
-/** Real runner: Agent SDK `query()` using the existing Claude Code login. */
-export const sdkRunner: ChatRunner = async function* (args) {
+type Hooks = NonNullable<Options['hooks']>
+
+/**
+ * Hooks for one run. The single PreToolUse matcher is the guard (`onFailure: "block"`, fails closed):
+ * it first reports `tool-started` (try/catch, never throws), then decides, and reports a denied
+ * `tool-finished` itself because a denied tool never reaches PostToolUse. Doing both in one callback
+ * keeps start before finish. Tracking-only hooks use `onFailure: "continue"`.
+ */
+export function buildHooks(emit: (draft: ActivityDraft) => void, cwd: string): Hooks {
+  const safeEmit = (draft: ActivityDraft | null): void => {
+    if (!draft) return
+    try {
+      emit(draft)
+    } catch {
+      // Tracking must never break the run.
+    }
+  }
+
+  const guard: HookCallback = async (input) => {
+    safeEmit(mapHookInput(input))
+    const output = guardPreToolUse(input, cwd)
+    if (isDenied(output)) safeEmit(mapDeniedToolUse(input))
+    return output
+  }
+
+  const track: HookCallback = async (input) => {
+    safeEmit(mapHookInput(input))
+    return {}
+  }
+
+  return {
+    PreToolUse: [{ hooks: [guard], onFailure: 'block' }],
+    PostToolUse: [{ hooks: [track], onFailure: 'continue' }],
+    PostToolUseFailure: [{ hooks: [track], onFailure: 'continue' }],
+    SubagentStop: [{ hooks: [track], onFailure: 'continue' }]
+  }
+}
+
+/**
+ * Minimal push queue: hook callbacks and the message pump feed one async iterable.
+ * The queue is unbounded by design: items are small and one run is short-lived; the consumer
+ * (the chat service) drains it as fast as the SDK produces.
+ */
+function createQueue<T>() {
+  const items: T[] = []
+  let closed = false
+  let failure: { error: unknown } | null = null
+  let wake: (() => void) | null = null
+  const notify = (): void => {
+    const w = wake
+    wake = null
+    w?.()
+  }
+  return {
+    push(item: T): void {
+      if (closed) return
+      items.push(item)
+      notify()
+    },
+    close(error?: { error: unknown }): void {
+      if (closed) return
+      closed = true
+      failure = error ?? null
+      notify()
+    },
+    async *iterate(): AsyncGenerator<T> {
+      for (;;) {
+        const next = items.shift()
+        if (next !== undefined) {
+          yield next
+          continue
+        }
+        if (closed) {
+          if (failure) throw failure.error
+          return
+        }
+        await new Promise<void>((resolve) => {
+          wake = resolve
+        })
+      }
+    }
+  }
+}
+
+export interface SdkRunnerDeps {
+  loadProjectContext: (cwd: string) => Promise<string | null>
+}
+
+/**
+ * Real runner: Agent SDK `query()` using the existing Claude Code login. The project's CLAUDE.md is read
+ * by the main process (settingSources stays []) and appended to Claude Code's default system prompt only
+ * when it exists; the full `claude_code` preset is used either way.
+ */
+export function createSdkRunner(deps: SdkRunnerDeps = { loadProjectContext }): ChatRunner {
+  return (args) => runSdk(args, deps)
+}
+
+export const sdkRunner: ChatRunner = createSdkRunner()
+
+async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<RunnerItem> {
+  const context = await deps.loadProjectContext(args.cwd).catch(() => null)
   const abortController = new AbortController()
-  args.signal?.addEventListener('abort', () => abortController.abort(), { once: true })
+  if (args.signal?.aborted) abortController.abort()
+  else args.signal?.addEventListener('abort', () => abortController.abort(), { once: true })
+  const queue = createQueue<RunnerItem>()
   const stream = query({
     prompt: args.prompt,
     options: {
       cwd: args.cwd,
+      // Deliberately []: project, user and local settings are never loaded. A cloned untrusted repo's
+      // .claude/settings.json could run command hooks, apiKeyHelper, env and skill shell injections as the
+      // user with no trust prompt and outside our PreToolUse guard (S50). The toolkit comes from `plugins`.
+      // Revisiting this is a Phase 3/6 decision that needs a per-project trust setting.
+      settingSources: [],
+      // Always the full Claude Code prompt, so a project with a CLAUDE.md and one without behave alike;
+      // the project's CLAUDE.md is only appended when it exists.
+      systemPrompt: {
+        type: 'preset' as const,
+        preset: 'claude_code' as const,
+        ...(context ? { append: frameProjectContext(context) } : {})
+      },
       plugins: [{ type: 'local', path: args.pluginPath }],
       includePartialMessages: true,
-      allowedTools: [],
+      allowedTools: [...ALLOWED_TOOLS],
+      hooks: buildHooks((draft) => queue.push({ kind: 'activity', draft }), args.cwd),
       abortController,
       ...(args.resume ? { resume: args.resume } : {})
     }
   })
-  let sessionSent = false
-  for await (const message of stream) {
-    if (!sessionSent) {
-      const sessionId = extractSessionId(message)
-      if (sessionId) {
-        sessionSent = true
-        yield { kind: 'session', sessionId }
+
+  const accumulator = createUsageAccumulator()
+  const pump = (async (): Promise<void> => {
+    try {
+      let sessionSent = false
+      for await (const message of stream) {
+        if (!sessionSent) {
+          const sessionId = extractSessionId(message)
+          if (sessionId) {
+            sessionSent = true
+            queue.push({ kind: 'session', sessionId })
+          }
+        }
+        const text = extractTextDelta(message)
+        if (text !== null) queue.push({ kind: 'text', text })
+        accumulator.add(message)
+        const usage = parseResultMessage(message)
+        if (usage) {
+          queue.push({ kind: 'usage', usage, agents: accumulator.agents(usage.mainTokens) })
+          if (usage.isError) throw new Error('sdk-result-error')
+        }
       }
+      queue.close()
+    } catch (error) {
+      queue.close({ error })
     }
-    const text = extractTextDelta(message)
-    if (text !== null) yield { kind: 'text', text }
-    if (isRecord(message) && message['type'] === 'result' && message['is_error'] === true) {
-      throw new Error('sdk-result-error')
-    }
+  })()
+
+  try {
+    yield* queue.iterate()
+  } finally {
+    abortController.abort()
+    void pump
   }
 }

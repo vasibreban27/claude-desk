@@ -1,7 +1,11 @@
 import {
+  activityHistoryRequestSchema,
+  usageSummaryRequestSchema,
   chatHistoryRequestSchema,
   chatSendRequestSchema,
   projectsRefreshRequestSchema,
+  type ActivityHistoryResult,
+  type UsageSummaryResult,
   type ChatHistoryResult,
   type ChatSendResult,
   type ProjectsListResult,
@@ -11,13 +15,16 @@ import {
 import type { GitStatusResult } from '../git/status'
 import type { ProjectStore } from '../projects/store'
 import type { ChatService } from '../chat/service'
+import { emptySummary, type RunStore } from '../db'
 
 export interface HandlerDeps {
   store: ProjectStore
   readGitStatus: (path: string) => Promise<GitStatusResult>
   /** Opens the native folder picker; resolves to the chosen path or undefined when cancelled. */
   pickFolder: () => Promise<string | undefined>
-  chat: Pick<ChatService, 'getHistory' | 'send'>
+  chat: Pick<ChatService, 'getHistory' | 'send' | 'activityHistory'>
+  /** Undefined when the database could not be opened. */
+  runStore?: Pick<RunStore, 'summary'>
 }
 
 export interface Handlers {
@@ -25,11 +32,19 @@ export interface Handlers {
   pickAndAdd(): Promise<ProjectsPickAndAddResult>
   refresh(payload: unknown): Promise<ProjectsRefreshResult>
   chatHistory(payload: unknown): Promise<ChatHistoryResult>
+  activityHistory(payload: unknown): Promise<ActivityHistoryResult>
+  usageSummary(payload: unknown): Promise<UsageSummaryResult>
   /**
    * `route` runs before the turn starts (events may be emitted synchronously) and returns
    * an undo function that is called when the send is rejected.
    */
   chatSend(payload: unknown, route?: (projectId: string) => () => void): Promise<ChatSendResult>
+}
+
+/** Best-effort `days` for an invalid request so the empty summary still carries a sane window. */
+function requestedDays(payload: unknown): number {
+  const days = typeof payload === 'object' && payload !== null ? (payload as { days?: unknown }).days : undefined
+  return typeof days === 'number' && Number.isInteger(days) && days >= 1 && days <= 365 ? days : 30
 }
 
 /** Handlers never throw: every failure maps to the contract's error value (or an empty result). */
@@ -78,6 +93,29 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       const req = chatHistoryRequestSchema.safeParse(payload)
       if (!req.success) return []
       return deps.chat.getHistory(req.data.projectId)
+    },
+
+    async activityHistory(payload) {
+      const req = activityHistoryRequestSchema.safeParse(payload)
+      if (!req.success) return []
+      try {
+        return deps.chat.activityHistory(req.data.projectId)
+      } catch (err) {
+        console.error('activity:history failed:', err instanceof Error ? err.name : 'unknown')
+        return []
+      }
+    },
+
+    async usageSummary(payload) {
+      const req = usageSummaryRequestSchema.safeParse(payload)
+      if (!req.success) return emptySummary(requestedDays(payload))
+      if (!deps.runStore) return emptySummary(req.data.days)
+      try {
+        return deps.runStore.summary(req.data)
+      } catch (err) {
+        console.error('usage:summary failed:', err instanceof Error ? err.name : 'unknown')
+        return emptySummary(req.data.days)
+      }
     },
 
     async chatSend(payload, route) {

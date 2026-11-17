@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import type { ChatEvent, ChatMessage, DeskApi, Project } from '@shared/ipc'
+import type { ActivityEvent, ChatEvent, ChatMessage, DeskApi, Project, UsageSummary } from '@shared/ipc'
 import { App } from './App'
 
 const P1: Project = {
@@ -16,6 +16,15 @@ const P1: Project = {
 const P2: Project = { ...P1, id: '22222222-2222-4222-8222-222222222222', path: '/b', name: 'beta', branch: null, dirty: true }
 
 let emit: (e: ChatEvent) => void
+let emitActivity: (e: ActivityEvent) => void
+const SUMMARY: UsageSummary = {
+  days: 30,
+  estimated: true,
+  totals: { runs: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+  byDay: [],
+  byAgent: [],
+  byProject: []
+}
 let api: { [K in keyof DeskApi]: ReturnType<typeof vi.fn> }
 
 beforeEach(() => {
@@ -31,7 +40,18 @@ beforeEach(() => {
     onChatEvent: vi.fn().mockImplementation((l: (e: ChatEvent) => void) => {
       emit = l
       return () => undefined
+    }),
+    activityHistory: vi.fn().mockResolvedValue([] as ActivityEvent[]),
+    usageSummary: vi.fn().mockResolvedValue(SUMMARY),
+    onActivityEvent: vi.fn().mockImplementation((l: (e: ActivityEvent) => void) => {
+      emitActivity = l
+      return () => undefined
     })
+  }
+  try {
+    localStorage.clear()
+  } catch {
+    // ignore
   }
   window.api = api as unknown as DeskApi
 })
@@ -163,5 +183,129 @@ describe('chat panel', () => {
     await selectAlpha()
     act(() => emit({ projectId: P2.id, turnId: 'x', type: 'text-delta', text: 'secret' }))
     expect(screen.queryByText('secret')).toBeNull()
+  })
+})
+
+describe('workspace', () => {
+  async function selectAlpha() {
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /alpha/ }))
+    await screen.findByRole('tablist', { name: 'Workspace views' })
+  }
+
+  it('shows the empty state and no tabs when no project is selected', async () => {
+    render(<App />)
+    await screen.findByText('alpha')
+    expect(screen.queryByRole('tablist')).toBeNull()
+    expect(screen.getByText('Nothing running yet')).toBeInTheDocument()
+  })
+
+  it('shows Activity selected by default with a labelled tabpanel', async () => {
+    await selectAlpha()
+    const activity = screen.getByRole('tab', { name: 'Activity' })
+    expect(activity).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Usage' })).toHaveAttribute('aria-selected', 'false')
+    expect(screen.getByRole('tabpanel', { name: 'Activity' })).toBeInTheDocument()
+  })
+
+  it('switches tabs by click and arrow keys and remembers the choice', async () => {
+    await selectAlpha()
+    const activity = screen.getByRole('tab', { name: 'Activity' })
+    fireEvent.keyDown(activity, { key: 'ArrowRight' })
+    const usage = screen.getByRole('tab', { name: 'Usage' })
+    expect(usage).toHaveAttribute('aria-selected', 'true')
+    expect(usage).toHaveFocus()
+    expect(screen.getByRole('tabpanel', { name: 'Usage' })).toBeInTheDocument()
+    expect(localStorage.getItem('claude-desk:workspace-tab')).toBe('usage')
+    fireEvent.keyDown(usage, { key: 'ArrowLeft' })
+    expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('restores a stored tab and ignores an invalid stored value', async () => {
+    localStorage.setItem('claude-desk:workspace-tab', 'usage')
+    await selectAlpha()
+    expect(screen.getByRole('tab', { name: 'Usage' })).toHaveAttribute('aria-selected', 'true')
+    cleanup()
+    localStorage.setItem('claude-desk:workspace-tab', 'bogus')
+    await selectAlpha()
+    expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('shows a live activity event in the feed', async () => {
+    await selectAlpha()
+    await waitFor(() => expect(api.activityHistory).toHaveBeenCalledWith({ projectId: P1.id }))
+    act(() =>
+      emitActivity({
+        projectId: P1.id,
+        runId: 'r1',
+        seq: 0,
+        at: '2026-01-01T10:00:00.000+00:00',
+        agent: 'main',
+        agentId: null,
+        type: 'run-started'
+      })
+    )
+    expect(await screen.findByText('Run started')).toBeInTheDocument()
+  })
+
+  const finishedEvent = (seq: number, runId = 'r1'): ActivityEvent => ({
+    projectId: P1.id,
+    runId,
+    seq,
+    at: '2026-01-01T10:00:05.000+00:00',
+    agent: 'main',
+    agentId: null,
+    type: 'run-finished',
+    status: 'success',
+    costUsd: 0.01,
+    durationMs: 5000
+  })
+
+  it('refetches usage once per live run-finished, not on repeats or re-renders', async () => {
+    await selectAlpha()
+    await screen.findByText(/No activity yet/)
+    await waitFor(() => expect(api.usageSummary).toHaveBeenCalled())
+    const before = api.usageSummary.mock.calls.length
+    act(() => emitActivity(finishedEvent(1)))
+    await waitFor(() => expect(api.usageSummary.mock.calls.length).toBe(before + 1))
+    act(() => emitActivity(finishedEvent(1)))
+    act(() => emitActivity(finishedEvent(2)))
+    fireEvent.click(screen.getByRole('tab', { name: 'Usage' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(api.usageSummary.mock.calls.length).toBe(before + 1)
+    act(() => emitActivity(finishedEvent(1, 'r2')))
+    await waitFor(() => expect(api.usageSummary.mock.calls.length).toBe(before + 2))
+  })
+
+  it('does not refetch usage for a finished run loaded from history', async () => {
+    api.activityHistory.mockResolvedValue([finishedEvent(1)])
+    await selectAlpha()
+    await screen.findByText('Run finished')
+    await waitFor(() => expect(api.usageSummary).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 20))
+    expect(api.usageSummary).toHaveBeenCalledTimes(1)
+  })
+
+  it('refetches usage exactly once for a run-finished that arrives before history resolves', async () => {
+    let resolveHistory: (events: ActivityEvent[]) => void = () => {}
+    api.activityHistory.mockReturnValue(new Promise<ActivityEvent[]>((r) => (resolveHistory = r)))
+    await selectAlpha()
+    await waitFor(() => expect(api.usageSummary).toHaveBeenCalled())
+    const before = api.usageSummary.mock.calls.length
+    act(() => emitActivity(finishedEvent(1)))
+    await act(async () => resolveHistory([]))
+    await waitFor(() => expect(api.usageSummary.mock.calls.length).toBe(before + 1))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(api.usageSummary.mock.calls.length).toBe(before + 1)
+  })
+
+  it('links every tab to the single tabpanel, which is focusable', async () => {
+    await selectAlpha()
+    const panel = screen.getByRole('tabpanel')
+    expect(panel).toHaveAttribute('tabindex', '0')
+    for (const name of ['Activity', 'Usage']) {
+      expect(screen.getByRole('tab', { name })).toHaveAttribute('aria-controls', panel.id)
+    }
   })
 })
