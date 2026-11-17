@@ -1,0 +1,208 @@
+import { query, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk'
+import type { ProjectSettings } from '../../shared/settings'
+import { guardWorkerToolUse } from './workerGuard'
+import { WORK_ALLOWED_TOOLS, WORK_SERVER_NAME, createWorkerTools, type CheckResult } from './workerTools'
+import { buildWorkerPrompt, buildWorkerSystemPrompt } from './prompts'
+import type { PlanTask } from './planParser'
+
+/**
+ * Runs one worker session (Agent SDK `query()`), following docs/notes/phase-4a-spike.md:
+ * no `options.agent`, app-built prompt, built-in tools cut to Read/Grep/Glob/Write/Edit, `permissionMode: 'acceptEdits'`,
+ * stop by flagging the reason and calling `query.close()` (abort as backup), and catching the error the iterator
+ * throws after an error result. The guard in workerGuard.ts is the boundary; `tools` is a second layer.
+ */
+
+export const MAX_TURNS = 40
+export const TIME_CAP_MS = 20 * 60 * 1000
+export const WORKER_BUILTIN_TOOLS: readonly string[] = ['Read', 'Grep', 'Glob', 'Write', 'Edit']
+
+export type WorkerStatus = 'finished' | 'limit' | 'cancelled' | 'error'
+
+export interface WorkerOutcome {
+  status: WorkerStatus
+  /** The (capped) reason the worker gave through `report_blocked`, if any. */
+  blocked: string | null
+  turns: number | null
+  costUsd: number | null
+  checksResult: CheckResult
+  /** Short text for `error`. */
+  error?: string
+}
+
+export interface WorkerRunArgs {
+  task: PlanTask
+  worktree: string
+  /** The expected `task/<runId8>-<taskId>` branch. */
+  branch: string
+  settings: ProjectSettings
+  pluginPath: string
+  signal?: AbortSignal
+}
+
+export type WorkerRunner = (args: WorkerRunArgs) => Promise<WorkerOutcome>
+
+/** The part of the SDK `Query` the runner uses. */
+export interface QueryLike extends AsyncIterable<unknown> {
+  close(): void
+}
+export type QueryFn = (params: { prompt: string; options: Options }) => QueryLike
+
+export interface WorkerRunnerDeps {
+  queryFn?: QueryFn
+  timeCapMs?: number
+  maxTurns?: number
+}
+
+export interface BuiltWorker {
+  options: Options
+  prompt: string
+  getBlocked: () => string | null
+  getCheckResult: () => CheckResult
+}
+
+/** Builds the SDK options and prompt for one task (pure apart from creating the in-process MCP server). */
+export function buildWorkerOptions(
+  args: WorkerRunArgs,
+  abortController: AbortController,
+  maxTurns: number = MAX_TURNS
+): BuiltWorker {
+  let blocked: string | null = null
+  const tools = createWorkerTools({
+    taskId: args.task.id,
+    worktree: args.worktree,
+    branch: args.branch,
+    owns: args.task.owns,
+    checks: args.settings.checks ?? [],
+    onBlocked: (reason) => {
+      blocked = reason
+    }
+  })
+  const guard: HookCallback = async (input) =>
+    guardWorkerToolUse(input, {
+      worktree: args.worktree,
+      owns: args.task.owns,
+      protectedPatterns: args.settings.protectedPaths
+    })
+  const options: Options = {
+    cwd: args.worktree,
+    // Never load project/user settings: a worktree's .claude/settings.json is untrusted (see chat runner).
+    settingSources: [],
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: buildWorkerSystemPrompt(args.task) },
+    plugins: [{ type: 'local', path: args.pluginPath }],
+    tools: [...WORKER_BUILTIN_TOOLS],
+    allowedTools: [...WORKER_BUILTIN_TOOLS, ...WORK_ALLOWED_TOOLS],
+    permissionMode: 'acceptEdits',
+    maxTurns,
+    ...(args.settings.model !== 'auto' ? { model: args.settings.model } : {}),
+    mcpServers: { [WORK_SERVER_NAME]: tools.createServer() },
+    hooks: { PreToolUse: [{ hooks: [guard], onFailure: 'block' }] },
+    abortController
+  }
+  return {
+    options,
+    prompt: buildWorkerPrompt(args.task),
+    getBlocked: () => blocked,
+    getCheckResult: tools.getCheckResult
+  }
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
+const LIMIT_TEXT = /maximum number of turns/i
+
+export function createWorkerRunner(deps: WorkerRunnerDeps = {}): WorkerRunner {
+  const queryFn: QueryFn = deps.queryFn ?? ((p) => query(p))
+  const timeCap = deps.timeCapMs ?? TIME_CAP_MS
+  const maxTurns = deps.maxTurns ?? MAX_TURNS
+
+  return async (args) => {
+    const abortController = new AbortController()
+    let reason: 'cancelled' | 'limit' | null = null
+    let q: QueryLike | null = null
+    let timer: NodeJS.Timeout | null = null
+    let onAbort: (() => void) | null = null
+
+    const stop = (why: 'cancelled' | 'limit'): void => {
+      if (reason === null) reason = why
+      try {
+        q?.close()
+      } catch {
+        // already closed
+      }
+      abortController.abort()
+    }
+
+    let built: BuiltWorker
+    try {
+      built = buildWorkerOptions(args, abortController, maxTurns)
+    } catch (e) {
+      return outcome('error', null, null, null, 'none', `could not build the worker: ${errText(e)}`)
+    }
+
+    let turns: number | null = null
+    let costUsd: number | null = null
+    let assistantTurns = 0
+    let resultError: string | null = null
+    let hitTurnLimit = false
+    let thrown: unknown = null
+
+    try {
+      if (args.signal?.aborted) return outcome('cancelled', null, null, null, 'none')
+      q = queryFn({ prompt: built.prompt, options: built.options })
+      onAbort = () => stop('cancelled')
+      args.signal?.addEventListener('abort', onAbort, { once: true })
+      timer = setTimeout(() => stop('limit'), timeCap)
+      try {
+        for await (const message of q) {
+          if (!isRecord(message)) continue
+          if (message['type'] === 'assistant') assistantTurns += 1
+          if (message['type'] === 'result') {
+            if (typeof message['num_turns'] === 'number') turns = message['num_turns']
+            if (typeof message['total_cost_usd'] === 'number') costUsd = message['total_cost_usd']
+            if (message['subtype'] === 'error_max_turns') hitTurnLimit = true
+            if (message['is_error'] === true) {
+              const errors = message['errors']
+              resultError = Array.isArray(errors) ? errors.filter((x) => typeof x === 'string').join('; ') : String(message['subtype'])
+            }
+          }
+        }
+      } catch (e) {
+        // The iterator throws after an error result, after close() and after an abort.
+        thrown = e
+      }
+    } catch (e) {
+      thrown = e
+    } finally {
+      if (timer !== null) clearTimeout(timer)
+      if (onAbort !== null) args.signal?.removeEventListener('abort', onAbort)
+    }
+
+    const t = turns ?? assistantTurns
+    const blocked = built.getBlocked()
+    const checks = built.getCheckResult()
+    const stopped = reason as 'cancelled' | 'limit' | null
+    if (stopped === 'cancelled') return outcome('cancelled', blocked, t, costUsd, checks)
+    if (stopped === 'limit') return outcome('limit', blocked, t, costUsd, checks)
+    if (hitTurnLimit || (thrown !== null && LIMIT_TEXT.test(errText(thrown)))) {
+      return outcome('limit', blocked, t, costUsd, checks)
+    }
+    if (resultError !== null) return outcome('error', blocked, t, costUsd, checks, resultError)
+    if (thrown !== null) return outcome('error', blocked, t, costUsd, checks, errText(thrown))
+    if (turns === null) return outcome('error', blocked, t, costUsd, checks, 'session ended without a result')
+    return outcome('finished', blocked, t, costUsd, checks)
+  }
+}
+
+function outcome(
+  status: WorkerStatus,
+  blocked: string | null,
+  turns: number | null,
+  costUsd: number | null,
+  checksResult: CheckResult,
+  error?: string
+): WorkerOutcome {
+  return { status, blocked, turns, costUsd, checksResult, ...(error !== undefined ? { error: error.slice(0, 300) } : {}) }
+}
+
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}

@@ -46,6 +46,44 @@ export const MIGRATIONS: readonly string[] = [
     settings TEXT NOT NULL,
     updated_at INTEGER NOT NULL
   );
+  `,
+  `
+  CREATE TABLE pipeline_runs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    plan_path TEXT NOT NULL,
+    plan_sha256 TEXT NOT NULL,
+    base_branch TEXT NOT NULL,
+    base_commit TEXT NOT NULL,
+    integration_branch TEXT NOT NULL,
+    integration_path TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('running', 'done', 'failed', 'cancelled')),
+    created_at INTEGER NOT NULL,
+    finished_at INTEGER
+  );
+  CREATE INDEX idx_pipeline_runs_project_created ON pipeline_runs (project_id, created_at);
+  CREATE TABLE pipeline_tasks (
+    run_id TEXT NOT NULL REFERENCES pipeline_runs (id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    worker TEXT NOT NULL,
+    wave INTEGER NOT NULL,
+    depends_on TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'queued'
+      CHECK (status IN ('queued', 'running', 'done', 'failed', 'blocked', 'cancelled')),
+    reason TEXT,
+    branch TEXT,
+    worktree_path TEXT,
+    commit_sha TEXT,
+    checks_result TEXT CHECK (checks_result IN ('passed', 'failed', 'none')),
+    turns INTEGER,
+    cost_usd REAL,
+    started_at INTEGER,
+    finished_at INTEGER,
+    duration_ms INTEGER,
+    PRIMARY KEY (run_id, task_id)
+  );
+  CREATE INDEX idx_pipeline_tasks_status ON pipeline_tasks (status);
   `
 ]
 

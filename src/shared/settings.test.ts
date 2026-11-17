@@ -31,6 +31,39 @@ describe('projectSettingsSchema', () => {
   })
 })
 
+describe('checks', () => {
+  const base = defaultSettings()
+  const c = { name: 'unit', executable: 'node', args: ['a'], timeoutMs: 1000 }
+  const withChecks = (checks: unknown): boolean => ok({ ...base, checks })
+
+  it('defaults to [] and parses when absent', () => {
+    expect(base.checks).toEqual([])
+    const { checks: _omit, ...legacy } = base
+    void _omit
+    expect(ok(legacy)).toBe(true)
+    expect(parseSettingsOrDefaults(JSON.stringify(legacy))).toMatchObject({ case: 'ok' })
+    expect(parseSettingsOrDefaults(JSON.stringify(legacy)).settings.checks).toEqual([])
+  })
+
+  it('accepts valid and rejects each violation', () => {
+    expect(withChecks([c, { ...c, name: 'b', acceptsTestPath: true, timeoutMs: 600000 }])).toBe(true)
+    expect(withChecks([{ ...c, name: 'Bad' }])).toBe(false)
+    expect(withChecks([{ ...c, name: 'a'.repeat(33) }])).toBe(false)
+    expect(withChecks([c, c])).toBe(false)
+    expect(withChecks([{ ...c, executable: '' }])).toBe(false)
+    expect(withChecks([{ ...c, executable: 'a'.repeat(261) }])).toBe(false)
+    expect(withChecks([{ ...c, executable: 'a\0' }])).toBe(false)
+    expect(withChecks([{ ...c, args: Array.from({ length: 17 }, () => 'x') }])).toBe(false)
+    expect(withChecks([{ ...c, args: [''] }])).toBe(false)
+    expect(withChecks([{ ...c, args: ['a'.repeat(501)] }])).toBe(false)
+    expect(withChecks([{ ...c, args: ['a\0'] }])).toBe(false)
+    expect(withChecks([{ ...c, timeoutMs: 999 }])).toBe(false)
+    expect(withChecks([{ ...c, timeoutMs: 600001 }])).toBe(false)
+    expect(withChecks(Array.from({ length: 9 }, (_, i) => ({ ...c, name: `n${i}` })))).toBe(false)
+    expect(withChecks(Array.from({ length: 8 }, (_, i) => ({ ...c, name: `n${i}` })))).toBe(true)
+  })
+})
+
 describe('parseSettingsOrDefaults', () => {
   it('returns defaults for undefined, non-JSON and schema failures with a flag', () => {
     const defaults = defaultSettings()
