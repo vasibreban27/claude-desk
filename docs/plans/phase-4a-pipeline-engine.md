@@ -215,7 +215,7 @@ Test files sit next to their source and do not count toward the "at most 3 files
 ### Wave 4
 
 ### T8: End to end - integration test, live check, timing log
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: none
 - Owns: `tests/phase-4a-flow.test.ts`, `tests/live/phase-4a-live.test.ts`, `docs/notes/phase-4a-manual-check.md`, `docs/notes/phase-4a-timing.md`
@@ -267,3 +267,7 @@ If T1 decides that worktrees need an installed `node_modules`, `build` adds a ta
 - W3 reviewer F6 `workerRunner.test.ts`: missing tests for sync `queryFn` throw, `q.close()` throwing, time cap racing a cancel (`limit` should win), abort-listener removal on every exit. Check in T8.
 - W3 T7: extra reasons `merge failed: <error>` and `worktree error: <error>` are not in the plan's list; read-only git MCP tools are not added to the worker (`work` is the only server); `permissionMode: 'acceptEdits'` kept, re-check in T8 live run.
 - W3: the reviewer found F1 (failure-path tests), fixed with F2 (setRunStatus retry) and F4 (cleanup on failed start) in one round; no re-review per the speed rules.
+- W4 T8: live run NOT done (needs `CLAUDE_DESK_LIVE=1`, `CLAUDE_TOOLKIT_PATH`, owner login); `phase-4a-timing.md` is empty ("not measured"). Still unverified live: `acceptEdits` need, env allowlist on a real toolchain, `./<rel>` testPath with vitest.
+- W4 T8: F3 quirk (run `cancelled` after cancel even if all tasks `done`) still open; test accepts `done` or `cancelled`. Plan's merge-conflict test uses a stale task branch (`git reset --hard`) rather than a parser-bypassing plan.
+- W4 T8: `tests/phase-4a-flow.test.ts` takes ~90 s (real git).
+- W2 F6 (`git_commit` leaves paths staged after a failed commit) in `workerTools.ts` still open.
