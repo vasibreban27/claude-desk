@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { PRELOAD_FILE_NAME } from '../shared/build-output'
 import { app, BrowserWindow, type BrowserWindowConstructorOptions } from 'electron'
-import { openDatabase, createRunStore, createSettingsStore, type RunStore } from './db'
+import { openDatabase, createRunStore, createSettingsStore, type RunStore, type SettingsStore } from './db'
 import type Database from 'better-sqlite3'
 import { registerIpc } from './ipc/register'
 import { openJsonProjectStore } from './projects/store'
@@ -58,6 +58,27 @@ export function openRunStore(dataDir: string): { db: Database.Database; store: R
   }
 }
 
+/** Settings store over the database; if it cannot be built, logs the error name only and falls back to the unavailable store. */
+function openSettingsStore(db: Database.Database | null): SettingsStore {
+  if (db === null) return createSettingsStore(null)
+  try {
+    return createSettingsStore(db)
+  } catch (err) {
+    console.error('opening settings store failed:', err instanceof Error ? err.name : 'unknown')
+    return createSettingsStore(null)
+  }
+}
+
+/** Opens the database-backed stores; a database problem never stops the app, it only makes those stores unavailable. */
+export function bootstrapStores(dataDir: string): {
+  db: Database.Database | undefined
+  runStore: RunStore | undefined
+  settingsStore: SettingsStore
+} {
+  const opened = openRunStore(dataDir)
+  return { db: opened?.db, runStore: opened?.store, settingsStore: openSettingsStore(opened?.db ?? null) }
+}
+
 loadDevEnv(app.isPackaged, app.getAppPath())
 
 app
@@ -65,9 +86,9 @@ app
   .then(async () => {
     const dataDir = join(app.getPath('userData'), 'data')
     const store = await openJsonProjectStore(dataDir)
-    const opened = openRunStore(dataDir)
-    database = opened?.db
-    disposeIpc = registerIpc(store, opened?.store, createSettingsStore(opened?.db ?? null))
+    const stores = bootstrapStores(dataDir)
+    database = stores.db
+    disposeIpc = registerIpc(store, stores.runStore, stores.settingsStore)
     createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -1,4 +1,4 @@
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
+import { closeSync, constants, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { parseEnv } from 'node:util'
 import type { AppInfo } from '../shared/ipc'
@@ -88,7 +88,11 @@ export function readToolkitInfo(
   const invalid: AppInfo['toolkit'] = { status: 'invalid', path: resolved, version: null }
   try {
     if (!(deps.isDirectory ?? defaultIsDirectory)(resolved)) return invalid
-    const fd = openSync(path.join(resolved, '.claude-plugin', 'plugin.json'), 'r')
+    const manifestPath = path.join(resolved, '.claude-plugin', 'plugin.json')
+    // Only a regular file is opened: opening a FIFO without a writer would block the main process.
+    const st = statSync(manifestPath)
+    if (!st.isFile() || st.size > MAX_MANIFEST_BYTES) return invalid
+    const fd = openSync(manifestPath, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
     let text: string
     try {
       const buf = Buffer.alloc(MAX_MANIFEST_BYTES + 1)

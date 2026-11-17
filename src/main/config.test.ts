@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { loadConfig, loadEnvFile, MAX_MANIFEST_BYTES, readToolkitInfo } from './config'
@@ -143,6 +144,31 @@ describe('readToolkitInfo', () => {
     expect(readToolkitInfo(env()).status).toBe('invalid')
     writeFileSync(path.join(dir, '.claude-plugin', 'plugin.json'), '[1]')
     expect(readToolkitInfo(env()).status).toBe('invalid')
+  })
+
+  it('is invalid when plugin.json is a directory', () => {
+    mkdirSync(path.join(dir, '.claude-plugin', 'plugin.json'), { recursive: true })
+    expect(readToolkitInfo(env()).status).toBe('invalid')
+  })
+
+  it.runIf(process.platform !== 'win32')('is invalid, without blocking, when plugin.json is a FIFO', () => {
+    mkdirSync(path.join(dir, '.claude-plugin'))
+    execFileSync('mkfifo', [path.join(dir, '.claude-plugin', 'plugin.json')])
+    expect(readToolkitInfo(env()).status).toBe('invalid')
+  })
+
+  it('follows a symlink to a regular manifest', (ctx) => {
+    mkdirSync(path.join(dir, '.claude-plugin'))
+    const target = path.join(dir, 'real.json')
+    writeFileSync(target, '{"name":"flow","version":"2.0.0"}')
+    try {
+      symlinkSync(target, path.join(dir, '.claude-plugin', 'plugin.json'))
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'EPERM' || code === 'EACCES' || code === 'ENOSYS') return ctx.skip()
+      throw err
+    }
+    expect(readToolkitInfo(env())).toMatchObject({ status: 'valid', version: '2.0.0' })
   })
 
   it('is valid with the version, or null when the version is missing or too long', () => {
