@@ -1,4 +1,7 @@
 import { z } from 'zod'
+import { projectSettingsSchema, type ProjectSettings } from './settings'
+
+export * from './settings'
 
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
 
@@ -15,7 +18,10 @@ export const IPC = {
   chatEvent: 'chat:event',
   activityEvent: 'activity:event',
   activityHistory: 'activity:history',
-  usageSummary: 'usage:summary'
+  usageSummary: 'usage:summary',
+  settingsGet: 'settings:get',
+  settingsSet: 'settings:set',
+  appInfo: 'app:info'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -66,7 +72,35 @@ export const usageSummaryRequestSchema = z.object({
 })
 export type UsageSummaryRequest = z.infer<typeof usageSummaryRequestSchema>
 
+export const settingsGetRequestSchema = z.object({ projectId: z.uuid() })
+export type SettingsGetRequest = z.infer<typeof settingsGetRequestSchema>
+
+export const settingsSetRequestSchema = z.object({
+  projectId: z.uuid(),
+  settings: projectSettingsSchema
+})
+export type SettingsSetRequest = z.infer<typeof settingsSetRequestSchema>
+
 // --- Results ----------------------------------------------------------------
+
+export type SettingsNotice = 'defaults-applied' | 'storage-unavailable'
+export type SettingsGetResult =
+  | { ok: true; settings: ProjectSettings; notice: SettingsNotice | null }
+  | { ok: false; error: 'not-found' }
+
+export type SettingsSetError = 'invalid' | 'not-found' | 'storage-unavailable'
+export type SettingsSetResult =
+  | { ok: true; settings: ProjectSettings; sessionReset: boolean }
+  | { ok: false; error: SettingsSetError }
+
+export interface AppInfo {
+  toolkit: {
+    status: 'valid' | 'invalid' | 'unset'
+    path: string | null
+    version: string | null
+  }
+}
+export type AppInfoResult = AppInfo
 
 export type ProjectsListResult = Project[]
 
@@ -184,6 +218,9 @@ export interface DeskApi {
   onChatEvent(listener: (event: ChatEvent) => void): () => void
   activityHistory(req: ActivityHistoryRequest): Promise<ActivityHistoryResult>
   usageSummary(req: UsageSummaryRequest): Promise<UsageSummaryResult>
+  settingsGet(req: SettingsGetRequest): Promise<SettingsGetResult>
+  settingsSet(req: SettingsSetRequest): Promise<SettingsSetResult>
+  appInfo(): Promise<AppInfoResult>
   /** Subscribe to activity events; returns an unsubscribe function. */
   onActivityEvent(listener: (event: ActivityEvent) => void): () => void
 }

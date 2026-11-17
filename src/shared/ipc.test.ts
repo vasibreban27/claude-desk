@@ -7,7 +7,10 @@ import {
   activityHistoryRequestSchema,
   chatHistoryRequestSchema,
   chatSendRequestSchema,
+  defaultSettings,
   projectsRefreshRequestSchema,
+  settingsGetRequestSchema,
+  settingsSetRequestSchema,
   usageSummaryRequestSchema
 } from './ipc'
 
@@ -25,7 +28,10 @@ describe('IPC channels', () => {
         'chat:event',
         'activity:event',
         'activity:history',
-        'usage:summary'
+        'usage:summary',
+        'settings:get',
+        'settings:set',
+        'app:info'
       ].sort()
     )
   })
@@ -66,6 +72,20 @@ describe('shared module hygiene', () => {
   it('has no any and no node or electron imports', () => {
     expect(src).not.toMatch(/:\s*any\b|\bas any\b|<any>/)
     expect(src).not.toMatch(/from ['"](node:|electron|fs|path)/)
+  })
+})
+
+describe('phase 3 contract', () => {
+  it('validates settings request schemas', () => {
+    const settings = defaultSettings()
+    expect(settingsGetRequestSchema.safeParse({ projectId: uuid }).success).toBe(true)
+    expect(settingsGetRequestSchema.safeParse({ projectId: 'nope' }).success).toBe(false)
+    expect(settingsSetRequestSchema.safeParse({ projectId: uuid, settings }).success).toBe(true)
+    expect(settingsSetRequestSchema.safeParse({ projectId: 'x', settings }).success).toBe(false)
+    expect(
+      settingsSetRequestSchema.safeParse({ projectId: uuid, settings: { ...settings, version: 2 } })
+        .success
+    ).toBe(false)
   })
 })
 
