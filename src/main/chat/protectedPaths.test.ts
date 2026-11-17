@@ -91,4 +91,24 @@ describe('links', () => {
     expect(m.isProtected(link)).toBe(false) // lexical path is not protected
     expect(m.isProtected(fs.realpathSync(link))).toBe(true)
   })
+
+  it('protects files behind a directory junction once the real path is used', (ctx) => {
+    // Callers must pass real paths: the matcher is lexical and never touches the disk.
+    const target = path.join(dir, '.git')
+    fs.mkdirSync(target)
+    fs.writeFileSync(path.join(target, 'config'), '[core]')
+    const link = path.join(dir, 'alias')
+    try {
+      // 'junction' needs no privilege on Windows; on POSIX it is a plain directory symlink.
+      fs.symlinkSync(target, link, 'junction')
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      if (code === 'EPERM' || code === 'EACCES' || code === 'ENOSYS') return ctx.skip()
+      throw e
+    }
+    const m = createProtectedMatcher(DEFAULT_PROTECTED_PATHS, { realRoot: dir })
+    const viaLink = path.join(link, 'config')
+    expect(m.isProtected(viaLink)).toBe(false) // unresolved path looks harmless
+    expect(m.isProtected(fs.realpathSync(viaLink))).toBe(true)
+  })
 })
