@@ -165,7 +165,7 @@ Test files sit next to their source and do not count toward the "at most 3 files
 ### Wave 2
 
 ### T5: Worktree manager with integration branch
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: none
 - Owns: `src/main/pipeline/worktrees.ts`, `src/main/pipeline/worktrees.test.ts`
@@ -181,7 +181,7 @@ Test files sit next to their source and do not count toward the "at most 3 files
   - (Added after T1, per owner) Given the primary checkout has no `node_modules` When a task worktree is created Then it returns a clear error and creates no dangling junction.
 
 ### T6: Worker tools and worker guard
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: none (tool contracts, section 3)
 - Owns: `src/main/pipeline/workerTools.ts`, `src/main/pipeline/workerTools.test.ts`, `src/main/pipeline/workerGuard.ts`, `src/main/pipeline/workerGuard.test.ts`
@@ -248,3 +248,17 @@ If T1 decides that worktrees need an installed `node_modules`, `build` adds a ta
 - W1 T1 spike: `permissionMode: 'acceptEdits'` need unverified (re-check in T8 live run); `git worktree remove --force` with a junction untested (T5 test added); packaged-Electron npm resolution untested.
 - W1 T2 `planParser.ts`: toolkit worker list should later come from the plugin's `agents/` folder (parameter exists, default five workers).
 - W1 flaky: one full `npm test` run had 1 failing test (not reproduced on re-run; file not identified); watch for it.
+- W2 reviewer F1 `workerTools.ts:291`: output overflow (`ERR_CHILD_PROCESS_STDIO_MAXBUFFER`, `killed=true`) is reported as a timeout; check the MAXBUFFER code first and test it.
+- W2 reviewer F2 `worktrees.ts:261-269,426`: task id `integration` collides with the integration worktree path; reject it as reserved.
+- W2 reviewer F4 `workerTools.ts:365-397`: `git_commit` does not check paths against protected patterns (the Write guard is the only protected-path boundary).
+- W2 reviewer F5 `workerTools.ts:361-363`: `rev-parse --abbrev-ref HEAD` gives `heads/task/...` when a tag shares the branch name; use `symbolic-ref --short -q HEAD`.
+- W2 reviewer F6 `workerTools.ts:391-397`: if `git commit` fails after `git add`, paths stay staged; reset them best-effort.
+- W2 reviewer F7 `worktrees.ts:290-297`: an on-disk worktree folder git does not know (crashed add) makes `removeTask`/`removeRun` fail; prune, then delete after unlinking the junction.
+- W2 reviewer F8 `workerGuard.test.ts`: no tests for UNC/device, ADS, trailing dot/space, 8.3/case alias and Edit through a link.
+- W2 auditor S2 (residual): `run_check` runs worker-written code unsandboxed as the user (env allowlist added; accepted risk). Later: planner refuses `Owns` over files that define how checks run (`package.json`, `.npmrc`, `vitest.config.*`, `.gitattributes`); OS sandbox or approval gate before `run_check`. Add to Risks in 4b.
+- W2 round-2 reviewer F1 `workerTools.ts:155`: env allowlist is narrow for real toolchains (TMPDIR, LANG, windir, ProgramFiles, HOMEDRIVE/HOMEPATH, proxy/CA, npm_config_*); expand or make configurable if a live check fails on it (T8).
+- W2 round-2 reviewer F2 `workerTools.ts:266`: `testPath` is passed as `./<rel>`; may not match as a substring filter in some runners (vitest); verify in T8 live run.
+- W2 round-2 reviewer F3 `workerTools.test.ts`: add accept case `src/my-dir/a-b.test.ts` and a `Path`-key casing case.
+- W2 T5: git filter overrides are read once per public operation, not before every git call (deviation from spike); git prefix and identity duplicated in `worktrees.ts` and `workerTools.ts` (dedupe).
+- W2 T6: a failed-to-start check is recorded as `failed`; file-symlink test skipped on this machine (EPERM).
+- W2 T5 tests: the real-git `worktrees.test.ts` takes up to ~300 s on this machine (60 s per-test timeout set).
