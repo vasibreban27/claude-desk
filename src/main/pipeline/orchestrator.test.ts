@@ -160,6 +160,98 @@ describe('orchestrator', () => {
     expect(c.manager.removeTask).not.toHaveBeenCalled()
   })
 
+  const CHAIN = ['# Plan: chain', '', '## 7. Tasks', '', '### Wave 1', '', task('T1', 'a.ts', 'none'), '### Wave 2', '', task('T2', 'b.ts', 'T1'), '### Wave 3', '', task('T3', 'c.ts', 'T2')].join('\n')
+
+  it.each([
+    ['no commit', { heads: () => 'same' }, 'no commit', true],
+    ['blocked report', { runner: async () => finishedOutcome({ blocked: 'need x.ts' }) }, 'blocked: need x.ts', true],
+    ['worker error', { runner: async () => finishedOutcome({ status: 'error', error: 'boom' }) }, 'worker error', true],
+    ['merge conflict', { merge: async () => ({ ok: true as const, result: 'conflict' as const }) }, 'merge conflict', true],
+    ['merge failed', { merge: async () => ({ ok: false as const, error: 'index locked' }) }, 'merge failed: index locked', true],
+    ['runner throws', { runner: async () => Promise.reject(new Error('x')) }, 'worker error', false],
+    [
+      'resolveRef rejects',
+      {
+        heads: () => {
+          throw new Error('rev-parse failed')
+        }
+      },
+      'worker error',
+      false
+    ]
+  ])('%s: stores the reason and timings, blocks T2 and T3 transitively, keeps the worktree', async (_n, over, reason, hasOutcome) => {
+    const c = setup({ ...over, plan: CHAIN })
+    const r = await c.orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    const s = await r.finished
+    expect(s.status).toBe('failed')
+    expect(s.tasks.map((t) => t.status)).toEqual(['failed', 'blocked', 'blocked'])
+    expect(s.tasks[0]?.reason).toBe(reason)
+    expect(s.tasks[2]?.reason).toBe('depends on T2 (blocked)')
+    expect(c.manager.removeTask).not.toHaveBeenCalled()
+    const run = c.store.getRun(r.runId)
+    expect(run.ok && run.value).toMatchObject({ status: 'failed' })
+    const rows = c.store.listTasks(r.runId)
+    if (!rows.ok) throw new Error('no tasks')
+    const [t1, t2, t3] = rows.value
+    expect(t1).toMatchObject({ status: 'failed', reason })
+    expect(t1?.durationMs).toBeGreaterThan(0)
+    if (hasOutcome) expect(t1).toMatchObject({ turns: 3, costUsd: 0.01, checksResult: 'passed' })
+    expect(t2).toMatchObject({ status: 'blocked' })
+    expect(t3).toMatchObject({ status: 'blocked' })
+    expect(c.order).toEqual(_n === 'resolveRef rejects' ? [] : ['T1'])
+  })
+
+  it('retries a failed final setRunStatus once and succeeds', async () => {
+    const real = ctx.deps.store
+    const setRunStatus = vi.fn<PipelineStore['setRunStatus']>()
+    setRunStatus.mockReturnValueOnce({ ok: false, error: 'storage-error' })
+    setRunStatus.mockImplementation((...a) => real.setRunStatus(...a))
+    const orch = createOrchestrator({ ...ctx.deps, store: { ...real, setRunStatus } })
+    const r = await orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    const s = await r.finished
+    expect(setRunStatus).toHaveBeenCalledTimes(2)
+    expect(s.status).toBe('done')
+    const run = real.getRun(r.runId)
+    expect(run.ok && run.value).toMatchObject({ status: 'done' })
+  })
+
+  it('reports the run as failed with a reason when setRunStatus keeps failing', async () => {
+    const log = vi.fn()
+    const real = ctx.deps.store
+    const setRunStatus = vi.fn<PipelineStore['setRunStatus']>(() => ({ ok: false, error: 'storage-error' }))
+    const orch = createOrchestrator({ ...ctx.deps, log, store: { ...real, setRunStatus } })
+    const r = await orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    const s = await r.finished
+    expect(setRunStatus).toHaveBeenCalledTimes(2)
+    expect(s.status).toBe('failed')
+    expect(s.reason).toContain('final run status could not be saved')
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('storage-error'))
+  })
+
+  it('removes the run when createRun throws or fails after the manager started', async () => {
+    const real = ctx.deps.store
+    const throwing = createOrchestrator({
+      ...ctx.deps,
+      store: {
+        ...real,
+        createRun: () => {
+          throw new Error('disk gone')
+        }
+      }
+    })
+    expect(await throwing.startRun(input)).toMatchObject({ ok: false })
+    expect(ctx.manager.removeRun).toHaveBeenCalledTimes(1)
+
+    // A failing cleanup must not change the returned error.
+    vi.mocked(ctx.manager.removeRun).mockRejectedValueOnce(new Error('rm failed'))
+    const r = await throwing.startRun(input)
+    expect(r).toMatchObject({ ok: false })
+    expect(ctx.manager.removeRun).toHaveBeenCalledTimes(2)
+  })
+
   it('a failed task blocks only its dependents', async () => {
     const c = setup({
       runner: async (a) => (a.task.id === 'T2' ? finishedOutcome({ status: 'limit' }) : finishedOutcome())

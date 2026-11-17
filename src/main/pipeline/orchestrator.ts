@@ -238,10 +238,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (handle.cancelled || values.includes('cancelled')) finalStatus = 'cancelled'
       else if (values.some((s) => s === 'failed' || s === 'blocked')) finalStatus = 'failed'
     }
-    try {
-      deps.store.setRunStatus(runId, finalStatus, now())
-    } catch (e) {
-      log(`pipeline: could not write the final run status: ${short(e)}`)
+    const writeStatus = (): boolean => {
+      try {
+        const r = deps.store.setRunStatus(runId, finalStatus, now())
+        if (r.ok) return true
+        log(`pipeline: could not write the final run status: ${r.error}`)
+      } catch (e) {
+        log(`pipeline: could not write the final run status: ${short(e)}`)
+      }
+      return false
+    }
+    if (!writeStatus() && !writeStatus()) {
+      // The stored status cannot be trusted; report the run as failed so the summary says so.
+      const note = 'final run status could not be saved'
+      runReason = runReason === null ? note : cap(`${runReason}; ${note}`)
+      finalStatus = 'failed'
     }
     return {
       runId,
@@ -277,21 +288,34 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const started = await manager.startRun(input.baseBranch)
         if (!started.ok) return { ok: false, error: cap(started.error) }
 
-        const created = deps.store.createRun({
-          id: runId,
-          projectId: input.projectId,
-          planPath: input.planPath,
-          planSha256: createHash('sha256').update(text).digest('hex'),
-          baseBranch: input.baseBranch,
-          baseCommit: started.baseHash,
-          integrationBranch: started.branch,
-          integrationPath: started.path,
-          tasks: parsed.plan.waves.flatMap((w) =>
-            w.tasks.map((t) => ({ taskId: t.id, title: t.title, worker: t.worker, wave: w.n, dependsOn: t.dependsOn }))
-          )
-        })
+        const cleanup = async (): Promise<void> => {
+          try {
+            await manager.removeRun()
+          } catch (e) {
+            log(`pipeline: could not remove run ${runId} after a failed start: ${short(e)}`)
+          }
+        }
+        let created: ReturnType<PipelineStore['createRun']>
+        try {
+          created = deps.store.createRun({
+            id: runId,
+            projectId: input.projectId,
+            planPath: input.planPath,
+            planSha256: createHash('sha256').update(text).digest('hex'),
+            baseBranch: input.baseBranch,
+            baseCommit: started.baseHash,
+            integrationBranch: started.branch,
+            integrationPath: started.path,
+            tasks: parsed.plan.waves.flatMap((w) =>
+              w.tasks.map((t) => ({ taskId: t.id, title: t.title, worker: t.worker, wave: w.n, dependsOn: t.dependsOn }))
+            )
+          })
+        } catch (e) {
+          await cleanup()
+          return { ok: false, error: cap(`database error: ${short(e)}`) }
+        }
         if (!created.ok) {
-          await manager.removeRun().catch(() => undefined)
+          await cleanup()
           return { ok: false, error: `database error: ${created.error}` }
         }
 
