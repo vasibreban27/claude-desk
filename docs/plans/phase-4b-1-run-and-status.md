@@ -229,7 +229,7 @@ DeskApi additions: `pipelinePlans`, `pipelineStart`, `pipelineStatus`, `pipeline
 ## Wave 3: wiring
 
 ### T5: Handlers, registration and main wiring
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: M
 - Sensitive: yes
@@ -263,6 +263,7 @@ DeskApi additions: `pipelinePlans`, `pipelineStart`, `pipelineStatus`, `pipeline
   - Given a temp git repo with a flow-plan/1 plan in `docs/plans` and a fake worker runner When the flow test calls the real handlers (`pipeline:plans`, `pipeline:start`, `pipeline:status`) Then the plan is listed ok, the run starts, status reaches `done` with commits per task, events were emitted, `main` and the primary checkout are untouched.
   - Given a second start for the same project while the first runs When started Then it returns `busy`; cancel then yields a `cancelled` run with no task left `running`.
   - Given a plan with a parse error When listed and started Then the error line is returned and no run is created.
+  - Given a run left `running` by a simulated crash (seeded in the real store before `registerIpc`) When `pipeline:status` is read without any start Then the run and its running task are `failed` with reason `interrupted` (regression for F1 of wave 3).
   - Given `npm run build` When it runs Then it succeeds and the preload bundle test passes.
   - Given `docs/notes/phase-4b-1-manual-check.md` When read Then it has numbered steps with expected results: launch with `npm run dev`, add this repo as a project, add a `node check.mjs` check in Settings and save, open the Pipeline tab, see a parse error for a broken plan, start a small plan, watch live status and the "Committed, not reviewed" labels, cancel a second run, and confirm `main` is untouched.
   - Given the note When read Then it has a live step for `permissionMode: 'acceptEdits'` (run the live test with `CLAUDE_DESK_LIVE=1` and `CLAUDE_TOOLKIT_PATH`, with and without the setting, never committing the change) with a result line to fill in, and the decision it implies (keep, or remove the setting in a follow-up).
@@ -280,3 +281,9 @@ DeskApi additions: `pipelinePlans`, `pipelineStart`, `pipelineStatus`, `pipeline
 - W2 reviewer F5 `service.ts:~192`: a git status failure puts the raw git error text in the start message; log it and show a generic message.
 - W2 T6: vitest accepted `./<rel>` and the env allowlist needed no change; `npm --version` starts through the tool on Windows (see `docs/notes/phase-4b-1-checks-verify.md`). The npm test only asserts a string result because the outcome is platform dependent.
 - W2 out-of-scope (accepted): `src/renderer/src/App.test.tsx` (585c752, R1: tab order now Activity, Pipeline, Usage, Settings); T7 also updated Workspace tab expectations inside its Settings test files (ea612b7).
+- W3 T5 reviewer F1 (major, fixed in round 1, commit 65664a7): crash recovery ran only at the first start; `registerIpc` now calls `markInterrupted()` at registration. The fix test mocks the handlers; T8 gets an end-to-end criterion with a real store.
+- W3 reviewer F2 `register.ts:36-41`: the lazy orchestrator's `toolkit is not available` error maps to `start-failed`, the contract says `no-toolkit` (only after a race with the service's own check).
+- W3 reviewer F3 `handlers.ts`: with no service, cancel returns `not-found` and discard `cleanup-failed` (valid contract values, misleading); add a comment or a distinct code later.
+- W3 auditor S1 `handlers.ts:~207` / service: `pipeline:start` returns `git status: <git error>` text to the renderer (same as W2 F5); show a fixed message and log the detail.
+- W3 auditor S2 `register.ts:~155`: dispose removes the handlers but does not cancel active runs or clear the lazy orchestrator (hygiene).
+- W3 T5 deviation (accepted): the orchestrator is created lazily inside `registerIpc` (`buildPipeline`), not in `bootstrapStores`, so it can use the event-wrapped store; `bootstrapStores` returns `pipelineStore`.
