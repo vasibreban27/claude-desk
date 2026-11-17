@@ -45,6 +45,12 @@ describe('preload bridge', () => {
         'settingsGet',
         'settingsSet',
         'appInfo',
+        'pipelinePlans',
+        'pipelineStart',
+        'pipelineStatus',
+        'pipelineCancel',
+        'pipelineDiscard',
+        'onPipelineEvent',
         'usageSummary'
       ].sort()
     )
@@ -60,6 +66,11 @@ describe('preload bridge', () => {
     await api['chatSend']!({ projectId: 'a', text: 'x' })
     await api['activityHistory']!({ projectId: 'a' })
     await api['usageSummary']!({ projectId: null, days: 7 })
+    await api['pipelinePlans']!({ projectId: 'a' })
+    await api['pipelineStart']!({ projectId: 'a', planFile: 'p.md' })
+    await api['pipelineStatus']!({ projectId: 'a' })
+    await api['pipelineCancel']!({ projectId: 'a', runId: 'r' })
+    await api['pipelineDiscard']!({ projectId: 'a', runId: 'r' })
     expect(invoke.mock.calls).toEqual([
       ['projects:list'],
       ['projects:pick-and-add'],
@@ -67,8 +78,25 @@ describe('preload bridge', () => {
       ['chat:history', { projectId: 'a' }],
       ['chat:send', { projectId: 'a', text: 'x' }],
       ['activity:history', { projectId: 'a' }],
-      ['usage:summary', { projectId: null, days: 7 }]
+      ['usage:summary', { projectId: null, days: 7 }],
+      ['pipeline:plans', { projectId: 'a' }],
+      ['pipeline:start', { projectId: 'a', planFile: 'p.md' }],
+      ['pipeline:status', { projectId: 'a' }],
+      ['pipeline:cancel', { projectId: 'a', runId: 'r' }],
+      ['pipeline:discard', { projectId: 'a', runId: 'r' }]
     ])
+  })
+
+  it('subscribes to pipeline events without leaking the IPC event, and unsubscribes', async () => {
+    const api = await load()
+    const listener = vi.fn()
+    const off = api['onPipelineEvent']!(listener) as () => void
+    expect(on).toHaveBeenCalledWith('pipeline:event', expect.any(Function))
+    const wrapped = on.mock.calls[0]![1] as (e: unknown, ev: unknown) => void
+    wrapped({ sender: 'leak' }, { projectId: 'p', runId: 'r' })
+    expect(listener).toHaveBeenCalledWith({ projectId: 'p', runId: 'r' })
+    off()
+    expect(removeListener).toHaveBeenCalledWith('pipeline:event', wrapped)
   })
 
   it('subscribes without leaking the IPC event, and unsubscribes', async () => {

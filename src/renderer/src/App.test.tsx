@@ -57,6 +57,12 @@ beforeEach(() => {
     }),
     settingsGet: vi.fn().mockResolvedValue({ ok: true, settings: defaultSettings(), notice: null }),
     settingsSet: vi.fn(),
+    pipelinePlans: vi.fn().mockResolvedValue({ ok: true, plans: [] }),
+    pipelineStart: vi.fn(),
+    pipelineStatus: vi.fn().mockResolvedValue({ ok: true, run: null }),
+    pipelineCancel: vi.fn(),
+    pipelineDiscard: vi.fn(),
+    onPipelineEvent: vi.fn().mockReturnValue(() => undefined),
     appInfo: vi.fn().mockResolvedValue({ toolkit: { status: 'unset', path: null, version: null } })
   }
   try {

@@ -31,7 +31,13 @@ describe('IPC channels', () => {
         'usage:summary',
         'settings:get',
         'settings:set',
-        'app:info'
+        'app:info',
+        'pipeline:plans',
+        'pipeline:start',
+        'pipeline:status',
+        'pipeline:cancel',
+        'pipeline:discard',
+        'pipeline:event'
       ].sort()
     )
   })
