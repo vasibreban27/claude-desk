@@ -745,9 +745,19 @@ export function guardPreToolUse(input: unknown, cwd: string, policy?: ToolPolicy
     const resolved = readPolicy(policy)
     if (resolved === null) return deny('Malformed tool policy.')
     if (typeof input !== 'object' || input === null) return deny('Malformed tool request.')
-    const rec = input as Record<string, unknown>
-    const name = rec['tool_name']
+    const original = input as Record<string, unknown>
+    const name = original['tool_name']
     if (typeof name !== 'string' || name.length === 0) return deny('Malformed tool request.')
+    // Snapshot tool_input once (plain own-property copy; a throwing getter lands in the catch and denies). Every
+    // check and the rewritten updatedInput use this copy, so check and use cannot diverge.
+    const rawInput = original['tool_input']
+    const rec: Record<string, unknown> = {
+      tool_name: name,
+      tool_input:
+        typeof rawInput === 'object' && rawInput !== null && !Array.isArray(rawInput)
+          ? { ...(rawInput as Record<string, unknown>) }
+          : rawInput
+    }
     if (!isToolAllowed(name, resolved)) {
       return deny(`Tool "${name}" is not allowed in chat: only read-only tools, agents and skills are.`)
     }
