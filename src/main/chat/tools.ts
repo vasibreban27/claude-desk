@@ -214,6 +214,17 @@ function hasWinTrailingDotOrSpace(p: string): boolean {
 }
 
 /**
+ * S1: on NTFS `name::$DATA`, `name:$DATA`, `dir::$INDEX_ALLOCATION` and `dir:$I30:$INDEX_ALLOCATION` reach the same
+ * file or directory as `name`, but `lstat` reports a plain file and no pattern matches the suffixed name. Any `:`
+ * other than the drive colon of an absolute path (`C:\`) is denied lexically on win32 (legal on POSIX, so no rule there).
+ */
+function hasWinStreamColon(p: string): boolean {
+  if (process.platform !== 'win32') return false
+  const rest = /^[a-zA-Z]:/.test(p) ? p.slice(2) : p
+  return rest.includes(':')
+}
+
+/**
  * S74: on win32 the tools map a leading `/x/` or `/cygdrive/x/` to the drive `X:\`, which the guard would resolve
  * against the cwd's drive instead. A rooted path without a drive letter is never a project-relative path: denied.
  */
@@ -224,6 +235,7 @@ function isWinRootRelative(p: string): boolean {
 /** Lexical checks for one expanded pattern; never touches the filesystem. */
 function expansionLexicallyOk(pattern: string): boolean {
   if (pattern.includes('\0') || pattern.startsWith('~')) return false
+  if (hasWinStreamColon(pattern)) return false
   // F12: on POSIX a backslash escapes the next character, so `\.\./x` would hide a ".." segment from the split below.
   if (process.platform !== 'win32' && pattern.includes('\\')) return false
   // Only the literal prefix names real directories (and a fully literal pattern names the file itself).
@@ -473,7 +485,7 @@ function checkPathTool(name: string, input: Record<string, unknown>, ctx: ProbeC
     if (typeof v !== 'string') return 'Malformed tool request.'
     if (v.length === 0) continue
     if (v.length > MAX_PATH_LENGTH || segmentCount(v) > MAX_PATH_SEGMENTS) return TOO_DEEP
-    if (hasWinTrailingDotOrSpace(v) || isWinRootRelative(v)) return outside
+    if (hasWinTrailingDotOrSpace(v) || hasWinStreamColon(v) || isWinRootRelative(v)) return outside
     const denial = argDenial(ctx, v, outside)
     if (denial !== null) return denial
   }
@@ -552,9 +564,7 @@ function dirState(p: string): boolean | 'missing' {
   return !stats.isSymbolicLink() && stats.isDirectory()
 }
 
-function protectedOrNull(ctx: ProbeCtx, realTarget: string): string | null {
-  return isProtectedReal(ctx, realTarget) ? PROTECTED_MESSAGE : null
-}
+const WIN_DEVICE_SLUG = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i
 
 function checkPlanWrite(input: Record<string, unknown>, ctx: ProbeCtx): string | null {
   const toolInput = input['tool_input']
@@ -573,19 +583,26 @@ function checkPlanWrite(input: Record<string, unknown>, ctx: ProbeCtx): string |
   }
   const slug = planSlug(filePath, ctx.cwd)
   if (slug === null) return shape
+  // F2: Windows device names (`nul.md` opens the device) are valid slugs but never a plan file.
+  if (process.platform === 'win32' && WIN_DEVICE_SLUG.test(slug)) return shape
   // Filesystem phase (only now): Write creates missing parents, so existing ones must be real directories.
   try {
     const realCwd = resolveRealCwd(ctx)
     const docs = path.join(realCwd, 'docs')
     const plans = path.join(docs, 'plans')
     const target = path.join(plans, `${slug}.md`)
+    // F3: the protected check sees the canonical name (case-insensitive volumes), like the other path tools.
+    const protectedOrNull = (t: string): string | null => {
+      const real = walkDown(ctx, realCwd, t)
+      return real === null ? shape : isProtectedReal(ctx, real) ? PROTECTED_MESSAGE : null
+    }
     const linkMessage = 'Tool "Write": docs and docs/plans must be real folders inside the project, not links.'
     const docsState = dirState(docs)
     if (docsState === false) return linkMessage
-    if (docsState === 'missing') return protectedOrNull(ctx, target)
+    if (docsState === 'missing') return protectedOrNull(target)
     const plansState = dirState(plans)
     if (plansState === false) return linkMessage
-    if (plansState === 'missing') return protectedOrNull(ctx, target)
+    if (plansState === 'missing') return protectedOrNull(target)
     let stats: ReturnType<typeof lstatSync> | null = null
     try {
       stats = lstatSync(target)
@@ -595,40 +612,103 @@ function checkPlanWrite(input: Record<string, unknown>, ctx: ProbeCtx): string |
     if (stats !== null && (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1)) {
       return 'Tool "Write" may only overwrite a regular file that is not a link and has no other hard links.'
     }
-    return protectedOrNull(ctx, target)
+    return protectedOrNull(target)
   } catch (error) {
     if (error instanceof ProbeBudgetError) return TOO_COMPLEX
     throw error
   }
 }
 
-/** Case-insensitive glob for case-insensitive file systems: letters outside character classes become `[xX]`. */
+const isLetter = (ch: string): boolean => ch.toLowerCase() !== ch.toUpperCase()
+const swapCase = (ch: string): string => (ch === ch.toLowerCase() ? ch.toUpperCase() : ch.toLowerCase())
+
+/** Adds the other case to every letter and same-case letter range of a character class body (`a-z` -> `a-zA-Z`). */
+function foldClassBody(body: string): string {
+  const chars = [...body]
+  let i = 0
+  let out = ''
+  if (chars[0] === '!' || chars[0] === '^') {
+    out += chars[0]
+    i = 1
+  }
+  for (; i < chars.length; i++) {
+    const lo = chars[i] as string
+    const hi = chars[i + 2]
+    if (chars[i + 1] === '-' && hi !== undefined) {
+      out += `${lo}-${hi}`
+      const sameCase = (lo === lo.toLowerCase()) === (hi === hi.toLowerCase())
+      if (isLetter(lo) && isLetter(hi) && sameCase) {
+        out += `${swapCase(lo)}-${swapCase(hi)}`
+      }
+      i += 2
+    } else {
+      out += lo
+      if (isLetter(lo)) out += swapCase(lo)
+    }
+  }
+  return out
+}
+
+/** Case-insensitive glob for case-insensitive file systems: letters become `[xX]`, class bodies gain both cases. */
 function foldCase(s: string): string {
   let inClass = false
+  let body = ''
   let result = ''
   for (const ch of s) {
     if (inClass) {
-      if (ch === ']') inClass = false
-      result += ch
+      if (ch === ']') {
+        inClass = false
+        result += `[${foldClassBody(body)}]`
+      } else {
+        body += ch
+      }
     } else if (ch === '[') {
       inClass = true
-      result += ch
-    } else if (ch.toLowerCase() !== ch.toUpperCase()) {
+      body = ''
+    } else if (isLetter(ch)) {
       result += `[${ch.toLowerCase()}${ch.toUpperCase()}]`
     } else {
       result += ch
     }
   }
-  return result
+  return inClass ? `${result}[${body}` : result
 }
 
-/** One ripgrep exclusion glob per protected pattern that converts; `!` re-allow entries are not converted. */
+/**
+ * Converts gitignore `\x` escapes to a ripgrep glob that means the same on every platform (ripgrep does not treat
+ * `\` as an escape on win32): `\*`, `\?`, `\[`, `\]` become one-character classes, an escaped whitespace or `\\`
+ * becomes `?` (over-excludes), any other `\x` becomes `x` (`\#`, `\!`). A lone trailing `\` is dropped.
+ */
+function unescapeGitignore(s: string): string {
+  let out = ''
+  const chars = [...s]
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i] as string
+    if (ch !== '\\') {
+      out += ch
+      continue
+    }
+    const next = chars[++i]
+    if (next === undefined) break
+    if ('*?[]'.includes(next)) out += `[${next}]`
+    else if (next === '\\' || /\s/.test(next)) out += '?'
+    else out += next
+  }
+  return out
+}
+
+/**
+ * One ripgrep exclusion glob per protected pattern that converts. Skipped (no exclusion): empty patterns, `#`
+ * comments (an unescaped leading `#` is a comment in gitignore, so it protects nothing) and `!` re-allow entries
+ * (skipping those only excludes more). Escapes such as `\#secret.txt` are converted, never skipped.
+ */
 export function protectedGrepExclusions(patterns: readonly string[], platform: NodeJS.Platform = process.platform): string[] {
   const out: string[] = []
   for (const pattern of patterns) {
     if (typeof pattern !== 'string') continue
     let s = pattern.replace(/[ \t]+$/, '')
-    if (s === '' || s.startsWith('!') || s.startsWith('#') || s.includes('\\')) continue
+    if (s === '' || s.startsWith('!') || s.startsWith('#')) continue
+    s = unescapeGitignore(s)
     const dirOnly = s.endsWith('/')
     if (dirOnly) s = s.slice(0, -1)
     // Anchored and nested patterns are excluded at any depth: over-excluding is the safe direction.

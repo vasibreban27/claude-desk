@@ -974,7 +974,7 @@ describe('guardPreToolUse Grep exclusions (T8)', () => {
   })
 
   it('converts patterns to ripgrep exclusions (posix)', () => {
-    expect(protectedGrepExclusions(['.env', '*.pem', '.git/', '!.env.example', '#c', '', '/root.txt', 'a b', 'x\\y'], 'linux')).toEqual([
+    expect(protectedGrepExclusions(['.env', '*.pem', '.git/', '!.env.example', '#c', '', '/root.txt', 'a b'], 'linux')).toEqual([
       '!**/.env',
       '!**/.env/**',
       '!**/*.pem',
@@ -991,7 +991,120 @@ describe('guardPreToolUse Grep exclusions (T8)', () => {
     expect(protectedGrepExclusions(['.env', '[A-C]x/'], 'win32')).toEqual([
       '!**/.[eE][nN][vV]',
       '!**/.[eE][nN][vV]/**',
-      '!**/[A-C][xX]/**'
+      '!**/[A-Ca-c][xX]/**'
     ])
+  })
+
+  it('folds case inside character classes on win32 (F1)', () => {
+    expect(protectedGrepExclusions(['[a-z]x.pem'], 'win32')[0]).toBe('!**/[a-zA-Z][xX].[pP][eE][mM]')
+    expect(protectedGrepExclusions(['[!ab]'], 'win32')[0]).toBe('!**/[!aAbB]')
+    expect(protectedGrepExclusions(['[a-z]x.pem'], 'linux')[0]).toBe('!**/[a-z]x.pem')
+  })
+
+  it('converts escapes instead of skipping the pattern (F1)', () => {
+    expect(protectedGrepExclusions(['\\#secret.txt'], 'linux')).toEqual(['!**/#secret.txt', '!**/#secret.txt/**'])
+    expect(protectedGrepExclusions(['\\!bang', 'a\\ b', 'x\\*y', 'z\\'], 'linux')).toEqual([
+      '!**/!bang',
+      '!**/!bang/**',
+      '!**/a?b',
+      '!**/a?b/**',
+      '!**/x[*]y',
+      '!**/x[*]y/**',
+      '!**/z',
+      '!**/z/**'
+    ])
+    // An unescaped leading "#" is a comment and still protects nothing.
+    expect(protectedGrepExclusions(['#comment'], 'linux')).toEqual([])
+  })
+})
+
+describe('guardPreToolUse denies NTFS stream syntax on win32 (S1)', () => {
+  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor
+  afterEach(() => Object.defineProperty(process, 'platform', realPlatform))
+  const as = (platform: NodeJS.Platform) => Object.defineProperty(process, 'platform', { ...realPlatform, value: platform })
+  const suffixes = ['::$DATA', ':$DATA', '::$INDEX_ALLOCATION', ':$I30:$INDEX_ALLOCATION']
+  const full = policy({ allowGitRead: true, allowPlanWrites: true })
+
+  for (const suffix of suffixes) {
+    it(`denies "${suffix}" in every tool with no fs calls`, () => {
+      as('win32')
+      fsCalls.n = 0
+      const abs = `C:\\proj\\.env${suffix}`
+      const calls: GuardOutputLike[] = [
+        g('Read', { file_path: `.env${suffix}` }),
+        g('Read', { file_path: abs }),
+        g('Read', { file_path: `.git${suffix}/config` }),
+        g('Grep', { pattern: 'x', path: `.env${suffix}` }),
+        g('Grep', { pattern: 'x', path: abs }),
+        g('Grep', { pattern: 'x', glob: `.env${suffix}` }),
+        g('Grep', { pattern: 'x', glob: `{a,.env${suffix}}` }),
+        g('Glob', { pattern: `.env${suffix}` }),
+        g('Glob', { pattern: `.git${suffix}/*` }),
+        g('Glob', { pattern: `src/*${suffix}` }),
+        g('Glob', { pattern: `{a,.env${suffix}}` }),
+        g('Glob', { pattern: '*', path: `.git${suffix}` }),
+        gp(full, 'mcp__git__git_log', { path: `.env${suffix}` }),
+        gp(full, 'mcp__git__git_diff', { path: `.git${suffix}` }),
+        gp(full, 'Write', { file_path: `docs/plans/x${suffix}.md`, content: 'a' }),
+        gp(full, 'Write', { file_path: `docs/plans/x.md${suffix}`, content: 'a' })
+      ]
+      calls.forEach((c, i) => expect(isDenied(c), `call ${i}`).toBe(true))
+      expect(fsCalls.n).toBe(0)
+    })
+  }
+
+  it('keeps allowing ordinary names and drive-absolute paths', () => {
+    as('win32')
+    expect(g('Read', { file_path: 'a-b' })).toEqual({})
+    expect(g('Glob', { pattern: 'a-b/*.ts' })).toEqual({})
+    expect(g('Read', { file_path: path.join(cwd, 'a.txt') })).toEqual({})
+  })
+
+  it.runIf(process.platform !== 'win32')('does not apply on POSIX, where ":" is a legal name character', () => {
+    as('linux')
+    expect(g('Read', { file_path: 'a:b' })).toEqual({})
+    expect(g('Glob', { pattern: 'a:b/*' })).toEqual({})
+  })
+
+  it.runIf(process.platform === 'win32')('denies reading a real protected file through the stream syntax', () => {
+    const dir = path.join(root, 'stream-proj')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, '.env'), 'SECRET=1')
+    const call = (file_path: string) => guardPreToolUse({ tool_name: 'Read', tool_input: { file_path } }, dir)
+    expect(isDenied(call('.env'))).toBe(true)
+    expect(isDenied(call('.env::$DATA'))).toBe(true)
+    expect(isDenied(call(path.join(dir, '.env::$DATA')))).toBe(true)
+  })
+})
+
+type GuardOutputLike = ReturnType<typeof guardPreToolUse>
+
+describe('guardPreToolUse plan writes: device names and canonical target (F2, F3)', () => {
+  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor
+  afterEach(() => Object.defineProperty(process, 'platform', realPlatform))
+  const as = (platform: NodeJS.Platform) => Object.defineProperty(process, 'platform', { ...realPlatform, value: platform })
+  const on = policy({ allowPlanWrites: true })
+
+  it('denies Windows device names as slugs on win32 with no fs calls', () => {
+    as('win32')
+    fsCalls.n = 0
+    for (const slug of ['nul', 'con', 'prn', 'aux', 'com1', 'lpt9', 'com0']) {
+      expect(isDenied(gp(on, 'Write', { file_path: `docs/plans/${slug}.md`, content: 'a' }, cwd)), slug).toBe(true)
+    }
+    expect(fsCalls.n).toBe(0)
+    expect(gp(on, 'Write', { file_path: 'docs/plans/nul-x.md', content: 'a' }, cwd)).toEqual({})
+    expect(gp(on, 'Write', { file_path: 'docs/plans/com10.md', content: 'a' }, cwd)).toEqual({})
+  })
+
+  it.runIf(process.platform !== 'win32')('allows such slugs on POSIX', () => {
+    as('linux')
+    expect(gp(on, 'Write', { file_path: 'docs/plans/nul.md', content: 'a' }, cwd)).toEqual({})
+  })
+
+  it.runIf(process.platform === 'darwin')('matches protected patterns by the on-disk case on macOS', () => {
+    const dir = path.join(root, 'mac-proj')
+    mkdirSync(path.join(dir, 'Docs', 'plans'), { recursive: true })
+    const p = policy({ allowPlanWrites: true, protectedPatterns: ['Docs/plans/secret*.md'] })
+    expect(isDenied(gp(p, 'Write', { file_path: 'docs/plans/secret-one.md', content: 'a' }, dir))).toBe(true)
   })
 })
