@@ -127,7 +127,7 @@ Tasks that touch the contract say `Contract: <channel or tool>`.
 ### Wave 1
 
 ### T1: Spike - SDK and tool behaviour the design depends on
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: none
 - Owns: `docs/notes/phase-3-spike.md` (scratch scripts stay outside the repo)
@@ -141,7 +141,7 @@ Tasks that touch the contract say `Contract: <channel or tool>`.
   - Given the note When read Then every question above has a one-line decision that later tasks can cite.
 
 ### T2: Add the `ignore` dependency
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: none
 - Owns: `package.json`, `package-lock.json`, `tests/ignore-smoke.test.ts`
@@ -153,7 +153,7 @@ Tasks that touch the contract say `Contract: <channel or tool>`.
   - Given `npm install` on a clean checkout When `npm test` runs Then it passes with no manual step.
 
 ### T3: Settings schema and IPC contract
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: settings:get, settings:set, app:info
 - Owns: `src/shared/settings.ts`, `src/shared/settings.test.ts`, `src/shared/ipc.ts`, `src/shared/ipc.test.ts`
@@ -298,3 +298,10 @@ Workers: `node-developer` for T1-T3, T5, T6, T8-T11 (`src/main`, `src/preload`, 
 ## 9. Follow-ups
 
 - Toolkit (separate repo): the `reviewer` agent has an explicit tool list (`Read`, `Grep`, `Glob`, `Bash`), so it cannot use the in-process git tools and `/flow:review` cannot run `git diff` itself inside the app. Either let the main thread pass the diff in the reviewer's prompt (small toolkit change) or leave reviewers to Phase 5, where the app runs them. Not promised by Phase 3.
+- F1 (minor, src/shared/settings.ts:79): `needsSessionReset` compares with `!==`; compare arrays by value before ever adding `protectedPaths` to `SESSION_RESET_OPTIONS`.
+- Spike (T8): allow `ToolSearch` only when `allowGitRead` is on; the model may call it to load the MCP tools. Keep the guard deny-by-default (`allowedTools` only pre-approves).
+- Spike (T8): `Write` sends an absolute `file_path` built from `cwd` (backslashes on win32); accept that shape, the relative form was not observed. Use real long paths: an 8.3 `cwd` made the CLI refuse a shell write.
+- Spike (T8, T7): Grep excludes protected files through `updatedInput` with `!**/<pattern>` globs; Glob cannot be filtered and may list protected file names. UI wording is in `docs/notes/phase-3-spike.md` section 5.
+- Spike (T9, T10): a resumed session honours changed `model`, tools and MCP servers, so `sessionReset` is always `false` for now and the T7 session-reset message stays dormant. A model switch loses the prompt cache.
+- T3 deviation: `SESSION_RESET_OPTIONS` is empty (plan said model and both toggles) per the spike decision.
+- Not exercised in the spike: the git pager (no tty) and `core.sshCommand` (no network subcommand is used).
