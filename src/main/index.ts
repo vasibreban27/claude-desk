@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { PRELOAD_FILE_NAME } from '../shared/build-output'
 import { app, BrowserWindow, type BrowserWindowConstructorOptions } from 'electron'
-import { openDatabase, createRunStore, type RunStore } from './db'
+import { openDatabase, createRunStore, createSettingsStore, type RunStore } from './db'
 import type Database from 'better-sqlite3'
 import { registerIpc } from './ipc/register'
 import { openJsonProjectStore } from './projects/store'
@@ -67,7 +67,7 @@ app
     const store = await openJsonProjectStore(dataDir)
     const opened = openRunStore(dataDir)
     database = opened?.db
-    disposeIpc = registerIpc(store, opened?.store)
+    disposeIpc = registerIpc(store, opened?.store, createSettingsStore(opened?.db ?? null))
     createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

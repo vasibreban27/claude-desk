@@ -4,6 +4,11 @@ import {
   chatHistoryRequestSchema,
   chatSendRequestSchema,
   projectsRefreshRequestSchema,
+  settingsGetRequestSchema,
+  settingsSetRequestSchema,
+  type AppInfoResult,
+  type SettingsGetResult,
+  type SettingsSetResult,
   type ActivityHistoryResult,
   type UsageSummaryResult,
   type ChatHistoryResult,
@@ -16,6 +21,8 @@ import type { GitStatusResult } from '../git/status'
 import type { ProjectStore } from '../projects/store'
 import type { ChatService } from '../chat/service'
 import { emptySummary, type RunStore } from '../db'
+import { createSettingsStore, type SettingsStore } from '../db/settingsStore'
+import { needsSessionReset } from '../../shared/settings'
 
 export interface HandlerDeps {
   store: ProjectStore
@@ -25,6 +32,9 @@ export interface HandlerDeps {
   chat: Pick<ChatService, 'getHistory' | 'send' | 'activityHistory'>
   /** Undefined when the database could not be opened. */
   runStore?: Pick<RunStore, 'summary'>
+  /** Created in unavailable mode when the database could not be opened. */
+  settingsStore?: SettingsStore
+  readToolkitInfo?: () => AppInfoResult['toolkit']
 }
 
 export interface Handlers {
@@ -34,6 +44,9 @@ export interface Handlers {
   chatHistory(payload: unknown): Promise<ChatHistoryResult>
   activityHistory(payload: unknown): Promise<ActivityHistoryResult>
   usageSummary(payload: unknown): Promise<UsageSummaryResult>
+  settingsGet(payload: unknown): Promise<SettingsGetResult>
+  settingsSet(payload: unknown): Promise<SettingsSetResult>
+  appInfo(): Promise<AppInfoResult>
   /**
    * `route` runs before the turn starts (events may be emitted synchronously) and returns
    * an undo function that is called when the send is rejected.
@@ -49,6 +62,8 @@ function requestedDays(payload: unknown): number {
 
 /** Handlers never throw: every failure maps to the contract's error value (or an empty result). */
 export function createHandlers(deps: HandlerDeps): Handlers {
+  const settingsStore = deps.settingsStore ?? createSettingsStore(null)
+  const readToolkitInfo = deps.readToolkitInfo ?? (() => ({ status: 'unset' as const, path: null, version: null }))
   return {
     async listProjects() {
       try {
@@ -115,6 +130,43 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       } catch (err) {
         console.error('usage:summary failed:', err instanceof Error ? err.name : 'unknown')
         return emptySummary(req.data.days)
+      }
+    },
+
+    async settingsGet(payload) {
+      const req = settingsGetRequestSchema.safeParse(payload)
+      if (!req.success) return { ok: false, error: 'not-found' }
+      try {
+        if (!(await deps.store.get(req.data.projectId))) return { ok: false, error: 'not-found' }
+        const { settings, notice } = settingsStore.get(req.data.projectId)
+        return { ok: true, settings, notice }
+      } catch (err) {
+        console.error('settings:get failed:', err instanceof Error ? err.name : 'unknown')
+        return { ok: false, error: 'not-found' }
+      }
+    },
+
+    async settingsSet(payload) {
+      const req = settingsSetRequestSchema.safeParse(payload)
+      if (!req.success) return { ok: false, error: 'invalid' }
+      try {
+        if (!(await deps.store.get(req.data.projectId))) return { ok: false, error: 'not-found' }
+        const previous = settingsStore.get(req.data.projectId).settings
+        const saved = settingsStore.set(req.data.projectId, req.data.settings)
+        if (!saved.ok) return { ok: false, error: saved.error }
+        return { ok: true, settings: saved.settings, sessionReset: needsSessionReset(previous, saved.settings) }
+      } catch (err) {
+        console.error('settings:set failed:', err instanceof Error ? err.name : 'unknown')
+        return { ok: false, error: 'storage-unavailable' }
+      }
+    },
+
+    async appInfo() {
+      try {
+        return { toolkit: readToolkitInfo() }
+      } catch (err) {
+        console.error('app:info failed:', err instanceof Error ? err.name : 'unknown')
+        return { toolkit: { status: 'invalid', path: null, version: null } }
       }
     },
 

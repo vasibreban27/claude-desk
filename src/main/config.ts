@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { parseEnv } from 'node:util'
+import type { AppInfo } from '../shared/ipc'
 
 export type ConfigErrorCode = 'toolkit-path-unset' | 'toolkit-path-missing'
 
@@ -64,6 +65,54 @@ export function loadEnvFile(
     if (fromFile !== undefined && !env[key]?.trim()) env[key] = fromFile
   }
   return 'loaded'
+}
+
+export const MAX_MANIFEST_BYTES = 64 * 1024
+const MAX_VERSION_LENGTH = 64
+
+export interface ToolkitInfoDeps {
+  isDirectory?: (p: string) => boolean
+}
+
+/**
+ * Describes the toolkit folder for the App section. Never throws; the only value taken
+ * from the manifest is a short version string. Reads at most MAX_MANIFEST_BYTES + 1 bytes.
+ */
+export function readToolkitInfo(
+  env: Record<string, string | undefined> = process.env,
+  deps: ToolkitInfoDeps = {}
+): AppInfo['toolkit'] {
+  const raw = env['CLAUDE_TOOLKIT_PATH']?.trim()
+  if (!raw) return { status: 'unset', path: null, version: null }
+  const resolved = path.resolve(raw)
+  const invalid: AppInfo['toolkit'] = { status: 'invalid', path: resolved, version: null }
+  try {
+    if (!(deps.isDirectory ?? defaultIsDirectory)(resolved)) return invalid
+    const fd = openSync(path.join(resolved, '.claude-plugin', 'plugin.json'), 'r')
+    let text: string
+    try {
+      const buf = Buffer.alloc(MAX_MANIFEST_BYTES + 1)
+      let total = 0
+      while (total < buf.length) {
+        const n = readSync(fd, buf, total, buf.length - total, null)
+        if (n === 0) break
+        total += n
+      }
+      if (total > MAX_MANIFEST_BYTES) return invalid
+      text = buf.subarray(0, total).toString('utf8')
+    } finally {
+      closeSync(fd)
+    }
+    const parsed: unknown = JSON.parse(text)
+    if (typeof parsed !== 'object' || parsed === null) return invalid
+    const { name, version } = parsed as { name?: unknown; version?: unknown }
+    if (typeof name !== 'string' || name.trim() === '') return invalid
+    const safeVersion =
+      typeof version === 'string' && version.length > 0 && version.length <= MAX_VERSION_LENGTH ? version : null
+    return { status: 'valid', path: resolved, version: safeVersion }
+  } catch {
+    return invalid
+  }
 }
 
 /** Reads CLAUDE_TOOLKIT_PATH. Error messages never include the env value. */

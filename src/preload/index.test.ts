@@ -42,6 +42,9 @@ describe('preload bridge', () => {
         'onChatEvent',
         'pickAndAddProject',
         'refreshProject',
+        'settingsGet',
+        'settingsSet',
+        'appInfo',
         'usageSummary'
       ].sort()
     )

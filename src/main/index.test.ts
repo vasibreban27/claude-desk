@@ -9,7 +9,7 @@ const { loadEnvFile } = vi.hoisted(() => ({ loadEnvFile: vi.fn() }))
 vi.mock('./config', () => ({ loadEnvFile }))
 vi.mock('./ipc/register', () => ({ registerIpc: vi.fn(() => () => undefined) }))
 const { openDatabase } = vi.hoisted(() => ({ openDatabase: vi.fn() }))
-vi.mock('./db', () => ({ openDatabase, createRunStore: vi.fn(() => ({ recordRun: vi.fn(), summary: vi.fn() })) }))
+vi.mock('./db', () => ({ openDatabase, createRunStore: vi.fn(() => ({ recordRun: vi.fn(), summary: vi.fn() })), createSettingsStore: vi.fn() }))
 vi.mock('./projects/store', () => ({ openJsonProjectStore: vi.fn() }))
 
 import { getWindowOptions, loadDevEnv, openRunStore } from './index'
