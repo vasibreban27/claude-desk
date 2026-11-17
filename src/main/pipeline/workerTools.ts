@@ -411,11 +411,21 @@ export function createWorkerTools(deps: WorkerToolsDeps): WorkerTools {
 
       await exec('git', [...GIT_PREFIX, ...overrides, 'add', '--', ...paths], gitOptions())
       const fullMessage = `${message}\n\nTask: ${deps.taskId}`
-      await exec(
-        'git',
-        [...GIT_PREFIX, ...overrides, ...IDENTITY, 'commit', '--no-verify', '-m', fullMessage, '--only', '--', ...paths],
-        gitOptions()
-      )
+      try {
+        await exec(
+          'git',
+          [...GIT_PREFIX, ...overrides, ...IDENTITY, 'commit', '--no-verify', '-m', fullMessage, '--only', '--', ...paths],
+          gitOptions()
+        )
+      } catch (commitError) {
+        // F6: do not leave these paths staged after a failed commit. Best effort; the commit error is reported.
+        try {
+          await exec('git', [...GIT_PREFIX, ...overrides, 'reset', '-q', '--', ...paths], gitOptions())
+        } catch {
+          // ignored on purpose
+        }
+        throw commitError
+      }
       const hash = await exec('git', [...GIT_PREFIX, 'rev-parse', '--short', 'HEAD'], gitOptions())
       return ok(`committed ${paths.length} file(s) as ${hash.stdout.trim()}`)
     } catch (e) {

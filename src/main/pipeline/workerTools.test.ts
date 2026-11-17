@@ -286,6 +286,22 @@ describe('git_commit', () => {
     expect(calls(fn).some((a) => a.includes('commit'))).toBe(false)
   })
 
+  it('F6: resets exactly the paths after a failed commit and reports the commit error', async () => {
+    const base = gitExec({ status: ' M src/a.ts  M src/dir/b.ts ' })
+    const exec: ExecFn = async (file, args, o) => {
+      if (args.includes('commit')) throw Object.assign(new Error('x'), { stderr: 'fatal: commit failed' })
+      if (args.includes('reset')) throw Object.assign(new Error('y'), { stderr: 'fatal: reset failed' })
+      return base(file, args, o)
+    }
+    const { fn, h } = setup({}, exec)
+    const r = await h.git_commit({ paths: ['src/a.ts', 'src/dir/b.ts'], message: 'm' })
+    expect(r.isError).toBe(true)
+    expect(text(r)).toContain('git failed: fatal: commit failed')
+    const reset = calls(fn).find((a) => a.includes('reset')) as string[]
+    expect(has(reset, '-c', 'core.hooksPath=')).toBe(true)
+    expect(reset.slice(reset.indexOf('reset'))).toEqual(['reset', '-q', '--', 'src/a.ts', 'src/dir/b.ts'])
+  })
+
   it('maps git errors without throwing', async () => {
     const { h } = setup({}, async () => Promise.reject(Object.assign(new Error('x'), { stderr: 'fatal: nope' })))
     const r = await h.git_commit({ paths: ['src/a.ts'], message: 'm' })

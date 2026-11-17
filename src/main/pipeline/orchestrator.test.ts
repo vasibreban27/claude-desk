@@ -294,6 +294,26 @@ describe('orchestrator', () => {
     expect(c.orch.cancel(r.runId)).toBe(false)
   })
 
+  it('F3: cancel after the last task merged leaves the run and every task done', async () => {
+    const single = ['# Plan: demo', '', '## 7. Tasks', '', '### Wave 1', '', task('T1', 'a.ts', 'none')].join('\n')
+    let cancel: () => boolean = () => false
+    const c = setup({
+      plan: single,
+      runner: async () => {
+        cancel()
+        return finishedOutcome()
+      }
+    })
+    const r = await c.orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    cancel = () => c.orch.cancel(r.runId)
+    const s = await r.finished
+    expect(s.status).toBe('done')
+    expect(s.tasks.map((t) => t.status)).toEqual(['done'])
+    const run = c.store.getRun(r.runId)
+    expect(run.ok && run.value.status).toBe('done')
+  })
+
   it('calls markInterrupted at start and resumes nothing', () => {
     const store = { markInterrupted: vi.fn(() => ({ ok: true as const, value: 2 })) } as unknown as PipelineStore
     createOrchestrator({ ...ctx.deps, store })

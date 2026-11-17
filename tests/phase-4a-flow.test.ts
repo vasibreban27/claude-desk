@@ -297,11 +297,11 @@ describe('phase 4a pipeline, end to end (real git, in-memory db, fake workers)',
     if (!r.ok) throw new Error(r.error)
     id = r.runId
     const summary = await r.finished
-    // The worker returned `finished` and the task merged, so it is done. Known quirk (plan follow-up F3):
-    // the orchestrator forces the run status to `cancelled` once cancel() was called, even though nothing was lost.
+    // The worker finished and the task merged, so nothing was lost: the run is done.
     expect(taskRows(r.runId)[0]).toMatchObject({ status: 'done' })
     expect(show(run(r.runId).integrationBranch, 'a.txt')).toBe('one\n')
-    expect(['done', 'cancelled']).toContain(summary.status)
+    expect(summary.status).toBe('done')
+    expect(run(r.runId).status).toBe('done')
   })
 
   describe('real workerRunner with a scripted SDK stream', () => {
