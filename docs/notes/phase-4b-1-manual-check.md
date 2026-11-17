@@ -41,6 +41,7 @@ Result line to fill in: `acceptEdits` with: <pass/fail>; without: <pass/fail>; d
 - "Done" means committed in the task branch and merged into `run/<id>`, not reviewed. Reviewers, checks before review, merge into `main` and push come in Phase 5.
 - `run_check` runs worker-written code unsandboxed as the user (env allowlist only); accepted risk from the 4a security review.
 - Only the latest run per project is shown; the discard button comes in 4b-2.
+- Older plans (`phase-1-app-skeleton.md`, `phase-2-closeout.md`) show parse errors in the Pipeline tab; that is expected (legacy layout with wave suffixes).
 
 ## Results
 
