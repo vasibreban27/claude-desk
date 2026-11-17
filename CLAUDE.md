@@ -60,3 +60,4 @@ Workers and `verify` run these, so keep them accurate.
 - Always work on a feature branch (`phase-N-<name>`), never on `main`.
 - Do not read `node_modules`, `dist`, `out`, `.git` (hooks block it).
 - When an agent misbehaves, fix its `.md` or skill in the toolkit repo, not just the code.
+flow-autonomy: checkpoints
