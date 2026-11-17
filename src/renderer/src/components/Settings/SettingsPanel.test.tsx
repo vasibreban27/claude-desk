@@ -80,7 +80,8 @@ describe('SettingsPanel', () => {
         model: 'opus',
         protectedPaths: ['a.txt', 'secret/'],
         allowGitRead: true,
-        allowPlanWrites: false
+        allowPlanWrites: false,
+        checks: []
       }
     })
     expect(screen.getByLabelText('Model')).toHaveValue('opus')

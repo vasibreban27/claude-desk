@@ -1,6 +1,7 @@
 import { useId, useState, type FormEvent } from 'react'
 import { projectSettingsSchema, type ModelChoice, type ProjectSettings } from '@shared/ipc'
 import { useSettings, type SaveError } from '../../hooks/useSettings'
+import { ChecksEditor, rowsFromChecks, validateRows, type CheckRow, type RowErrors } from './ChecksEditor'
 import './settings.css'
 
 const MODEL_LABELS: Record<ModelChoice, string> = {
@@ -45,20 +46,25 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
   const [paths, setPaths] = useState(initial.protectedPaths.join('\n'))
   const [allowGitRead, setAllowGitRead] = useState(initial.allowGitRead)
   const [allowPlanWrites, setAllowPlanWrites] = useState(initial.allowPlanWrites)
+  const [rows, setRows] = useState<CheckRow[]>(() => rowsFromChecks(initial.checks))
+  const [checkErrors, setCheckErrors] = useState<ReadonlyMap<number, RowErrors>>(new Map())
   const [clientInvalid, setClientInvalid] = useState(false)
 
   function submit(ev: FormEvent) {
     ev.preventDefault()
     if (saving) return
+    const validation = validateRows(rows)
+    setCheckErrors(validation.errors)
     const parsed = projectSettingsSchema.safeParse({
       version: 1,
       model,
       protectedPaths: parsePaths(paths),
       allowGitRead,
-      allowPlanWrites
+      allowPlanWrites,
+      checks: validation.errors.size === 0 ? validation.checks : undefined
     })
     setClientInvalid(!parsed.success)
-    if (parsed.success) onSave(parsed.data)
+    if (parsed.success && validation.errors.size === 0) onSave(parsed.data)
   }
 
   const errorText = clientInvalid ? SAVE_ERRORS['client-invalid'] : saveError ? SAVE_ERRORS[saveError] : null
@@ -121,6 +127,19 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
         </label>
         <p className="settings__hint">Lets the chat write files named docs/plans/&lt;slug&gt;.md, nothing else.</p>
       </div>
+      <ChecksEditor
+        rows={rows}
+        errors={checkErrors}
+        onChange={(next) => {
+          setRows(next)
+          onEdit()
+        }}
+      />
+      {checkErrors.size > 0 ? (
+        <p role="alert" className="settings__message">
+          Some checks are invalid. Fix the marked fields and save again.
+        </p>
+      ) : null}
       <button type="submit" className="settings__save" disabled={saving}>
         {saving ? 'Saving...' : 'Save'}
       </button>
