@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ACTIVITY_BUFFER_MAX, type ActivityEvent, type ChatEvent } from '../../shared/ipc'
 import { ConfigError } from '../config'
 import { extractSessionId, extractTextDelta, type ChatRunner, type RunnerItem } from './runner'
+import { defaultSettings, type ProjectSettings } from '../../shared/settings'
 import { ChatService } from './service'
 
 const TOOLKIT = '/toolkit'
@@ -321,5 +322,158 @@ describe('ChatService tool-finished dedupe', () => {
     await run()
     expect(activity.filter((e) => e.type === 'tool-finished')).toHaveLength(1)
     expect(activity.map((e) => e.seq)).toEqual(activity.map((_, i) => i))
+  })
+})
+
+describe('ChatService per-turn settings', () => {
+  type Reader = NonNullable<ConstructorParameters<typeof ChatService>[0]['settings']>
+  const settingsOf = (over: Partial<ProjectSettings> = {}): ProjectSettings => ({ ...defaultSettings(), ...over })
+
+  function build(runner: ChatRunner, settings?: Reader, rule?: (a: ProjectSettings, b: ProjectSettings) => boolean) {
+    let done: () => void = () => {}
+    let ended = new Promise<void>((r) => (done = r))
+    const service = new ChatService({
+      resolveProjectPath: (id) => paths[id],
+      runner,
+      emit: (e) => {
+        if (e.type !== 'text-delta') {
+          done()
+          ended = new Promise<void>((r) => (done = r))
+        }
+      },
+      loadConfig: () => ({ ok: true, config: { toolkitPath: TOOLKIT } }),
+      ...(settings ? { settings } : {}),
+      ...(rule ? { needsSessionReset: rule } : {})
+    })
+    const turn = async (id = 'p1'): Promise<void> => {
+      const end = ended
+      expect(service.send(id, 'hi').ok).toBe(true)
+      await end
+    }
+    return { service, turn }
+  }
+
+  const sessionRunner = (id: string): ChatRunner =>
+    async function* () {
+      yield { kind: 'session', sessionId: id }
+    }
+
+  it('reads settings once per turn and hands them to the runner', async () => {
+    const get = vi.fn(() => ({ settings: settingsOf({ model: 'haiku' }), notice: null }))
+    const runner = vi.fn(streamOf([]))
+    const { turn } = build(runner, { get })
+    await turn()
+    expect(get).toHaveBeenCalledTimes(1)
+    expect(get).toHaveBeenCalledWith('p1')
+    expect(runner.mock.calls[0]?.[0].settings?.model).toBe('haiku')
+  })
+
+  it('uses the safe defaults without a reader', async () => {
+    const runner = vi.fn(streamOf([]))
+    const { turn } = build(runner)
+    await turn()
+    expect(runner.mock.calls[0]?.[0].settings).toEqual(defaultSettings())
+  })
+
+  it('a throwing or invalid reader gives the safe defaults and the turn still runs', async () => {
+    const runner = vi.fn(streamOf([{ kind: 'text', text: 'ok' }]))
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const throwing = build(runner, {
+      get: () => {
+        throw new Error('db down')
+      }
+    })
+    await throwing.turn()
+    expect(runner.mock.calls[0]?.[0].settings).toEqual(defaultSettings())
+    expect(throwing.service.getHistory('p1')[1]?.text).toBe('ok')
+
+    const invalid = build(runner, {
+      get: () => ({ settings: { version: 1, model: 'gpt', allowGitRead: true } as unknown as ProjectSettings, notice: null })
+    })
+    await invalid.turn()
+    expect(runner.mock.calls[1]?.[0].settings).toEqual(defaultSettings())
+    spy.mockRestore()
+  })
+
+  it('a settings change during a run applies to the next turn only', async () => {
+    let current = settingsOf({ model: 'haiku' })
+    const seen: ProjectSettings[] = []
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const runner: ChatRunner = async function* (args) {
+      if (args.settings) seen.push(args.settings)
+      await gate
+      yield { kind: 'text', text: 'x' }
+    }
+    const { service, turn } = build(runner, { get: () => ({ settings: current, notice: null }) })
+    const first = turn()
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    current = settingsOf({ model: 'opus' })
+    release()
+    await first
+    expect(seen[0]?.model).toBe('haiku')
+    await turn()
+    expect(seen[1]?.model).toBe('opus')
+    expect(service.getHistory('p1')).toHaveLength(4)
+  })
+
+  describe('session rule', () => {
+    it('keeps resume when nothing needs a reset (default rule, only protectedPaths changed)', async () => {
+      let current = settingsOf()
+      const runner = vi.fn(sessionRunner('s1'))
+      const { turn } = build(runner, { get: () => ({ settings: current, notice: null }) })
+      await turn()
+      current = settingsOf({ protectedPaths: ['*.dat'] })
+      await turn()
+      expect(runner.mock.calls[0]?.[0].resume).toBeUndefined()
+      expect(runner.mock.calls[1]?.[0].resume).toBe('s1')
+    })
+
+    it('with the default rule a model change keeps resume (spike: honoured on resume)', async () => {
+      let current = settingsOf()
+      const runner = vi.fn(sessionRunner('s1'))
+      const { turn } = build(runner, { get: () => ({ settings: current, notice: null }) })
+      await turn()
+      current = settingsOf({ model: 'opus', allowGitRead: true, allowPlanWrites: true })
+      await turn()
+      expect(runner.mock.calls[1]?.[0].resume).toBe('s1')
+    })
+
+    it('omits resume and starts a new session when the injected rule says reset', async () => {
+      let current = settingsOf()
+      const ids = ['s1', 's2']
+      const runner = vi.fn<ChatRunner>(() => sessionRunner(ids.shift() ?? 's3')({} as never))
+      const rule = vi.fn((a: ProjectSettings, b: ProjectSettings) => a.model !== b.model)
+      const { turn } = build(runner, { get: () => ({ settings: current, notice: null }) }, rule)
+      await turn()
+      current = settingsOf({ protectedPaths: [] })
+      await turn()
+      expect(runner.mock.calls[1]?.[0].resume).toBe('s1')
+      current = settingsOf({ protectedPaths: [], model: 'sonnet' })
+      await turn()
+      expect(rule).toHaveBeenLastCalledWith(expect.objectContaining({ model: 'auto' }), expect.objectContaining({ model: 'sonnet' }))
+      expect(runner.mock.calls[2]?.[0].resume).toBeUndefined()
+      // The new session is remembered with the settings it started with.
+      await turn()
+      expect(runner.mock.calls[3]?.[0].resume).toBe('s3')
+    })
+
+    it('a throwing rule fails safe by starting a new session', async () => {
+      const runner = vi.fn(sessionRunner('s1'))
+      const { turn } = build(runner, undefined, () => {
+        throw new Error('x')
+      })
+      await turn()
+      await turn()
+      expect(runner.mock.calls[1]?.[0].resume).toBeUndefined()
+    })
+
+    it('sessions are tracked per project', async () => {
+      const runner = vi.fn(sessionRunner('s1'))
+      const { turn } = build(runner, undefined, () => true)
+      await turn('p1')
+      await turn('p2')
+      expect(runner.mock.calls[1]?.[0].resume).toBeUndefined()
+    })
   })
 })
