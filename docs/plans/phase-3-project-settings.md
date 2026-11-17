@@ -26,7 +26,8 @@ In:
 - A spike (T1) that verifies the SDK and tool behaviour this design depends on before any guard code is written.
 
 Out (do not build; later phases or separate plans):
-- Push policy, merge policy, checks command, auto-fix rounds, parallel worktrees, which reviewers run, plans location (files/Linear). They have no consumer until Phase 4/5; their fields are added then (versioned schema).
+- Checks command: an optional `checks` field was added in Phase 4a without a version bump (see the contract's `ProjectSettings`).
+- Push policy, merge policy, auto-fix rounds, parallel worktrees, which reviewers run, plans location (files/Linear). They have no consumer until Phase 4/5; their fields are added then (versioned schema).
 - Cloning and pulling the toolkit, a toolkit source setting, a per-project trust setting for `settingSources` (Phase 6).
 - `Edit`, `Bash` or any other tool. `write_plan` is not built. No planner pipeline, orchestrator or worktrees.
 - Model choice for subagents: the setting applies to the main chat session only; toolkit agents keep their own model.
@@ -59,7 +60,9 @@ ProjectSettings = {
   model: "auto" | "haiku" | "sonnet" | "opus",
   protectedPaths: string(1..200, no NUL)[]   // max 100 entries; may be empty
   allowGitRead: boolean,
-  allowPlanWrites: boolean
+  allowPlanWrites: boolean,
+  checks?: { name: /^[a-z0-9-]{1,32}$/ (unique), executable: string(1..260), args: string(1..500)[] (max 16),
+             timeoutMs: 1000..600000, acceptsTestPath?: boolean }[]   // max 8; added in Phase 4a, no version bump
 }
 DEFAULT_PROTECTED_PATHS = [".env", ".env.*", "!.env.example", "*.pem", "*.key", ".git/"]
 

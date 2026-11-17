@@ -64,6 +64,38 @@ describe('SettingsStore', () => {
     expect(store.get(P)).toEqual({ settings: defaultSettings(), notice: 'storage-unavailable' })
   })
 
+  describe('checks', () => {
+    const check = { name: 'unit', executable: 'node', args: ['t.js'], timeoutMs: 5000 }
+
+    it('preserves stored checks when the incoming object has none, clears on [], replaces on a list', () => {
+      const store = createSettingsStore(db)
+      store.set(P, { ...custom(), checks: [check] })
+      const { checks: _omit, ...withoutChecks } = custom()
+      void _omit
+      const res = store.set(P, withoutChecks)
+      expect(res).toMatchObject({ ok: true })
+      expect(store.get(P).settings.checks).toEqual([check])
+      store.set(P, { ...custom(), checks: [] })
+      expect(store.get(P).settings.checks).toEqual([])
+      store.set(P, { ...custom(), checks: [check] })
+      const other = { ...check, name: 'other' }
+      store.set(P, { ...custom(), checks: [other] })
+      expect(store.get(P).settings.checks).toEqual([other])
+    })
+
+    it('stored v1 rows without checks stay valid', () => {
+      const { checks: _omit, ...legacy } = custom()
+      void _omit
+      db.prepare('INSERT INTO project_settings VALUES (?, ?, 0)').run(P, JSON.stringify(legacy))
+      expect(createSettingsStore(db).get(P)).toEqual({ settings: custom(), notice: null })
+    })
+
+    it('ignores package.json scripts in the project folder', () => {
+      // the store has no project path input at all; checks only come from the database
+      expect(createSettingsStore(db).get(P).settings.checks).toEqual([])
+    })
+  })
+
   it('without a database: defaults and storage-unavailable', () => {
     const store = createSettingsStore(null)
     expect(store.get(P)).toEqual({ settings: defaultSettings(), notice: 'storage-unavailable' })

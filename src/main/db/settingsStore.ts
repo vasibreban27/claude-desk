@@ -63,12 +63,22 @@ export function createSettingsStore(
     set(projectId, settings) {
       const parsed = projectSettingsSchema.safeParse(settings)
       if (!parsed.success) return { ok: false, error: 'invalid' }
+      let next: ProjectSettings = parsed.data
       try {
-        write(projectId, JSON.stringify(parsed.data), Math.round(now()))
+        if (next.checks === undefined) {
+          // Callers that do not know the field (the 4a Settings tab) must not wipe stored checks.
+          const row = selectStmt.get(projectId) as { settings: unknown } | undefined
+          const stored =
+            row !== undefined && typeof row.settings === 'string'
+              ? parseSettingsOrDefaults(row.settings)
+              : null
+          next = { ...next, checks: stored !== null && stored.case === 'ok' ? stored.settings.checks : [] }
+        }
+        write(projectId, JSON.stringify(next), Math.round(now()))
       } catch {
         return { ok: false, error: 'storage-unavailable' }
       }
-      return { ok: true, settings: parsed.data }
+      return { ok: true, settings: next }
     }
   }
 }
