@@ -4,7 +4,8 @@
  * `Write`/`Edit` only reach files covered by the task's `Owns`, inside the worktree, through no link, with
  * no other hard link and never under `.git`. The `work` MCP tools are allowed (they validate their own input).
  * Everything else (Bash, PowerShell, Agent, Task, Skill, unknown MCP tools) is denied. Never throws.
- * This guard is the boundary; the SDK `tools` list is only a second layer.
+ * This guard confines Write/Edit only. `run_check` executes worker-written code unsandboxed as the user
+ * (accepted risk, mitigated by an env allowlist and by Owns); the SDK `tools` list is only a second layer.
  */
 import { lstatSync, realpathSync } from 'node:fs'
 import path from 'node:path'

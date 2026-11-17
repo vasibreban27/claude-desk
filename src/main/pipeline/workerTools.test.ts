@@ -82,7 +82,31 @@ describe('run_check', () => {
     expect(fn).not.toHaveBeenCalled()
     const ok = await h.run_check({ name: 'test', testPath: 'src\\a.test.ts' })
     expect(ok.isError).toBeUndefined()
-    expect(fn.mock.calls[0]?.[1]).toEqual(['--test', 'src/a.test.ts'])
+    expect(fn.mock.calls[0]?.[1]).toEqual(['--test', './src/a.test.ts'])
+  })
+
+  it('rejects testPath whose normalized form has a segment starting with "-"', async () => {
+    const { fn, h } = setup({ platform: 'linux' })
+    for (const testPath of ['./--config=src/foo/evil.config.ts', '.\\--x', 'a/--x', 'a\\--x/b', './a/./--y']) {
+      expect((await h.run_check({ name: 'test', testPath })).isError).toBe(true)
+    }
+    expect(fn).not.toHaveBeenCalled()
+  })
+
+  it('passes an allow-listed env to the check, without secrets', async () => {
+    const env = {
+      PATH: 'p',
+      SystemRoot: 'C:\\Windows',
+      HOME: '/h',
+      ANTHROPIC_API_KEY: 'sk-secret',
+      GIT_DIR: 'x',
+      NODE_OPTIONS: '--require evil',
+      GITHUB_TOKEN: 'tok'
+    }
+    const { fn, h } = setup({ env, platform: 'linux' })
+    await h.run_check({ name: 'test' })
+    const passed = (fn.mock.calls[0] as Parameters<ExecFn>)[2].env
+    expect(passed).toEqual({ PATH: 'p', SystemRoot: 'C:\\Windows', HOME: '/h', CI: '1' })
   })
 
   it('reports failed, timeout and cannot-start without throwing', async () => {

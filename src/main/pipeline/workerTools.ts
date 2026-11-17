@@ -152,6 +152,22 @@ function badRelativePath(p: string): string | null {
   return null
 }
 
+const CHECK_ENV_ALLOW: ReadonlySet<string> = new Set(
+  ['PATH', 'SystemRoot', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'ComSpec', 'PATHEXT'].map((k) =>
+    k.toUpperCase()
+  )
+)
+
+/** Allow-listed environment for check processes: no API keys, GIT_*, NODE_OPTIONS or tokens. */
+export function checkEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(source)) {
+    if (value !== undefined && CHECK_ENV_ALLOW.has(key.toUpperCase())) out[key] = value
+  }
+  out['CI'] = '1'
+  return out
+}
+
 const sameCase = (a: string): string => (process.platform === 'win32' ? a.toLowerCase() : a)
 
 // ---------------------------------------------------------------- tools
@@ -243,7 +259,12 @@ export function createWorkerTools(deps: WorkerToolsDeps): WorkerTools {
         return { error: 'testPath rejected: cannot be resolved' }
       }
     }
-    return { path: rel.split(path.sep).join('/') }
+    const segments = rel.split(/[\\/]/)
+    if (segments.some((s) => s.startsWith('-'))) {
+      return { error: 'testPath rejected: no path segment may start with "-"' }
+    }
+    // The "./" prefix keeps the argument from ever being read as an option.
+    return { path: `./${segments.join('/')}` }
   }
 
   async function run_check(input: unknown): Promise<TextResult> {
@@ -274,7 +295,7 @@ export function createWorkerTools(deps: WorkerToolsDeps): WorkerTools {
       try {
         const { stdout, stderr } = await exec(command.file, command.args, {
           cwd: deps.worktree,
-          env: deps.env ?? process.env,
+          env: checkEnv(deps.env ?? process.env),
           timeout: check.timeoutMs,
           maxBuffer: CHECK_OUTPUT_BUFFER
         })
