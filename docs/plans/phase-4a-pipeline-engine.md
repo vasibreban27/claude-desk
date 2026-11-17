@@ -108,7 +108,7 @@ Test files sit next to their source and do not count toward the "at most 3 files
 ### Wave 1
 
 ### T1: Spike - SDK, worktree and npm behaviour the design depends on
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: none
 - Owns: `docs/notes/phase-4a-spike.md` (scratch scripts stay outside the repo)
@@ -124,7 +124,7 @@ Test files sit next to their source and do not count toward the "at most 3 files
   - Given the note When read Then every question has a one-line decision that later tasks can cite.
 
 ### T2: Plan parser and validator
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: none (plan format contract, section 3)
 - Owns: `src/main/pipeline/planParser.ts`, `src/main/pipeline/planParser.test.ts`
@@ -137,7 +137,7 @@ Test files sit next to their source and do not count toward the "at most 3 files
   - Given a plan larger than 512 KiB or more than 200 tasks When parsed Then it is rejected before parsing.
 
 ### T3: Migration 3 and PipelineStore
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: database-engineer
 - Contract: none
 - Owns: `src/main/db/migrations.ts`, `src/main/db/migrations.test.ts`, `src/main/db/pipelineStore.ts`, `src/main/db/pipelineStore.test.ts`, `src/main/db/index.ts`
@@ -150,7 +150,7 @@ Test files sit next to their source and do not count toward the "at most 3 files
   - Given a store created without a database When called Then every method returns the unavailable result and nothing throws.
 
 ### T4: `checks` setting, store preservation, Phase 3 note
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: none
 - Owns: `src/shared/settings.ts`, `src/shared/settings.test.ts`, `src/main/db/settingsStore.ts`, `src/main/db/settingsStore.test.ts`, `docs/plans/phase-3-project-settings.md`
@@ -177,6 +177,8 @@ Test files sit next to their source and do not count toward the "at most 3 files
   - Given a temp repo with hostile config and hooks (T1's fixtures) When any manager operation runs Then no marker is written; tests assert the exact argv and env from `docs/notes/phase-4a-spike.md`, with `execFile` argument arrays, `cwd`, a timeout and an output cap, and no shell.
   - Given a base branch that does not exist, a project that is not a git repo, or git older than the required version When `startRun` runs Then it returns a short error and creates nothing; `removeTask` and `removeRun` delete the worktree and branch and are safe to repeat.
   - Given a worktree location When it would be inside the project folder, or the name contains a path separator or `..` Then it is rejected.
+  - (Added after T1, per owner) Given a task worktree with a `node_modules` junction to the primary checkout (T1 decision) When `removeTask`/`removeRun` run Then the junction is unlinked first (never recursively deleted), a sentinel file in the junction target survives, and the manager refuses to remove a worktree whose junction could not be unlinked. Use `realpathSync.native` for worktree paths (8.3 temp paths break `Edit`).
+  - (Added after T1, per owner) Given the primary checkout has no `node_modules` When a task worktree is created Then it returns a clear error and creates no dangling junction.
 
 ### T6: Worker tools and worker guard
 - Status: [ ] todo
@@ -191,6 +193,8 @@ Test files sit next to their source and do not count toward the "at most 3 files
   - Given `run_check` outcomes When a check passes, fails (non-zero), times out or cannot start Then the reply says which in a short text, never throws, and the last result per task is `passed`, `failed` or `none`.
   - Given `git_commit { paths, message }` When every path is covered by `Owns` and has a change, HEAD is the expected `task/...` branch Then it commits only those paths with hooks disabled, the app identity and the task id appended; a path outside `Owns`, an unchanged path, a `..` or absolute path, HEAD on another branch or an empty or oversized message is rejected before any git call.
   - Given `report_blocked { reason }` When called Then the reason (capped at 500 chars) is recorded and returned to the orchestrator callback; no tool for push, merge, checkout or branch changes exists (asserted on the tool list).
+  - (Added after T1, per owner) Given `run_check` on Windows When it runs `npm`/`npx` Then it resolves the system `node` and npm's `npm-cli.js` (never `process.execPath` under Electron, which is the Electron binary, and never `cmd.exe`), with a test for the resolution, and returns a clear "cannot run npm" error when either cannot be found.
+  - (Added after T1, per owner) The worker guard stays the boundary; the SDK `tools` list is only a second layer.
 
 ### Wave 3
 
@@ -221,7 +225,7 @@ Test files sit next to their source and do not count toward the "at most 3 files
   - Given a worker that edits a file outside its `Owns` When it tries Then the guard denies it and the task ends `failed: blocked` with dependents `blocked`; given two tasks forced to conflict (hand-built plan bypassing the parser) Then the second becomes `failed: merge conflict`.
   - Given the base branch moves while a run is in progress When later waves start Then they still branch from `run/<id>`, whose recorded base commit is unchanged.
   - Given `CLAUDE_DESK_LIVE=1` and a tiny real plan (two dependent tasks that each add a small file and run a configured check) When the live test runs Then the real SDK sessions use the plan's worker, commit, and the integration branch contains both changes; without the variable the test is skipped visibly.
-  - Given `docs/notes/phase-4a-manual-check.md` When read Then it lists exact steps and expected results for the live run (how the checks are seeded through `SettingsStore`, how to inspect the branches and worktrees, how to remove them), including a deliberately failing task and a cancel.
+  - Given `docs/notes/phase-4a-manual-check.md` When read Then it lists exact steps and expected results for the live run (how the checks are seeded through `SettingsStore`, how to inspect the branches and worktrees, how to remove them), including a deliberately failing task and a cancel. It also records as accepted that checks write caches through the `node_modules` junction into the primary checkout's `node_modules`, and re-checks whether `permissionMode: 'acceptEdits'` is needed (T1 was uncertain).
   - Given the live run When finished Then `docs/notes/phase-4a-timing.md` holds per-task duration, turns, cost and total for the real run (the input for planning 4c), or states plainly that the live run was not done.
 
 ## 8. Wave summary
@@ -238,4 +242,9 @@ Workers: `node-developer` for T1, T2, T4-T8 (`src/main`, `src/shared`, tests, no
 If T1 decides that worktrees need an installed `node_modules`, `build` adds a task to wave 2 for it before T6/T7 rely on it.
 
 ## 9. Follow-ups
-
+- W1 T4 `src/main/db/settingsStore.test.ts`: the "no repo file read" test only asserts `get` returns `[]` with no row; it has no `package.json` fixture (weak).
+- W1 T4 `src/shared/settings.ts`: `checks` is `.optional()` (type `checks?:`), not `.default([])`; readers must default to `[]`.
+- W1 T3 `src/main/db/migrations.test.ts`: migration 2 test now uses `MIGRATIONS.slice(0, 2)`.
+- W1 T1 spike: `permissionMode: 'acceptEdits'` need unverified (re-check in T8 live run); `git worktree remove --force` with a junction untested (T5 test added); packaged-Electron npm resolution untested.
+- W1 T2 `planParser.ts`: toolkit worker list should later come from the plugin's `agents/` folder (parameter exists, default five workers).
+- W1 flaky: one full `npm test` run had 1 failing test (not reproduced on re-run; file not identified); watch for it.
