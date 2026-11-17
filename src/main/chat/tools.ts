@@ -1,6 +1,47 @@
 /** Tool allowlist and the deny-by-default PreToolUse guard for chat runs (Phase 2: read-only). */
 import { lstatSync, readlinkSync, realpathSync } from 'node:fs'
 import path from 'node:path'
+import { DEFAULT_PROTECTED_PATHS } from '../../shared/settings'
+import { GIT_ALLOWED_TOOLS } from './gitTools'
+import { createProtectedMatcher, type ProtectedMatcher } from './protectedPaths'
+
+/**
+ * Per-turn policy derived from the project settings. Without a policy the guard behaves as in Phase 2 (read-only),
+ * with the default protected list applied to path checks.
+ */
+export interface ToolPolicy {
+  /** Gitignore-style patterns; an unusable list falls back to the defaults. */
+  protectedPatterns: readonly string[]
+  /** Allows the three in-process git tools (and `ToolSearch`, which loads them). */
+  allowGitRead: boolean
+  /** Allows `Write` for exactly `docs/plans/<slug>.md`. */
+  allowPlanWrites: boolean
+}
+
+const DEFAULT_POLICY: ToolPolicy = {
+  protectedPatterns: DEFAULT_PROTECTED_PATHS,
+  allowGitRead: false,
+  allowPlanWrites: false
+}
+
+/** Null when the policy is malformed (the guard then denies everything). */
+function readPolicy(policy: unknown): ToolPolicy | null {
+  if (policy === undefined) return DEFAULT_POLICY
+  if (typeof policy !== 'object' || policy === null) return null
+  const p = policy as Record<string, unknown>
+  if (!Array.isArray(p['protectedPatterns']) || !p['protectedPatterns'].every((x) => typeof x === 'string')) return null
+  if (typeof p['allowGitRead'] !== 'boolean' || typeof p['allowPlanWrites'] !== 'boolean') return null
+  const patterns = p['protectedPatterns'] as string[]
+  // An unusable list (invalid entry) must never loosen anything: use the defaults, here and in the matcher.
+  const usable = createProtectedMatcher(patterns, { realRoot: path.resolve('.') }).usable
+  return {
+    protectedPatterns: usable ? patterns : DEFAULT_PROTECTED_PATHS,
+    allowGitRead: p['allowGitRead'],
+    allowPlanWrites: p['allowPlanWrites']
+  }
+}
+
+const GIT_TOOL_SET: ReadonlySet<string> = new Set(GIT_ALLOWED_TOOLS)
 
 export const ALLOWED_TOOLS = ['Read', 'Grep', 'Glob', 'Agent', 'Task', 'Skill'] as const
 
@@ -25,8 +66,10 @@ const AGENT_INPUT_KEYS: ReadonlySet<string> = new Set([
 export interface GuardOutput {
   hookSpecificOutput?: {
     hookEventName: 'PreToolUse'
-    permissionDecision: 'deny'
-    permissionDecisionReason: string
+    permissionDecision: 'deny' | 'allow'
+    permissionDecisionReason?: string
+    /** Set only with `allow`: the tool runs with this input instead of the original (Grep exclusion globs). */
+    updatedInput?: Record<string, unknown>
   }
 }
 
@@ -40,9 +83,15 @@ function deny(reason: string): GuardOutput {
   }
 }
 
-export function isToolAllowed(name: string): boolean {
-  return ALLOWED_SET.has(name)
+/** Deny-by-default: the base read-only set plus only what the policy adds. */
+export function isToolAllowed(name: string, policy?: ToolPolicy): boolean {
+  if (ALLOWED_SET.has(name)) return true
+  if (policy === undefined) return false
+  if (policy.allowGitRead && (GIT_TOOL_SET.has(name) || name === 'ToolSearch')) return true
+  return policy.allowPlanWrites && name === 'Write'
 }
+
+const PROTECTED_MESSAGE = 'This path is protected by the project settings and cannot be accessed.'
 
 /** Trailing-separator-safe containment (path.relative is case-insensitive on win32). */
 function isInside(root: string, target: string): boolean {
@@ -198,6 +247,24 @@ interface ProbeCtx {
   probes: number
   /** Per path: the real path of an existing component, or null when it does not exist (or dangles inside). */
   cache: Map<string, string | null>
+  patterns: readonly string[]
+  /** Built lazily from the real cwd; null until first needed. */
+  matcher: ProtectedMatcher | null
+}
+
+function newCtx(cwd: string, patterns: readonly string[]): ProbeCtx {
+  return { cwd, realCwd: null, probes: 0, cache: new Map(), patterns, matcher: null }
+}
+
+/** True when the real path is protected (outside the project counts as protected: fail closed). */
+function isProtectedReal(ctx: ProbeCtx, real: string): boolean {
+  if (ctx.matcher === null) {
+    const realRoot = resolveRealCwd(ctx)
+    let matcher = createProtectedMatcher(ctx.patterns, { realRoot })
+    if (!matcher.usable) matcher = createProtectedMatcher(DEFAULT_PROTECTED_PATHS, { realRoot })
+    ctx.matcher = matcher
+  }
+  return ctx.matcher.isProtected(real)
 }
 
 /**
@@ -274,9 +341,9 @@ function probeComponent(ctx: ProbeCtx, realCwd: string, next: string): string | 
  * at the first missing component (the rest cannot leave cwd), so the work is bounded by the existing
  * components. Targets lexically inside neither the cwd nor its real path are outside without any probe.
  */
-function targetInside(ctx: ProbeCtx, raw: string, resolved: string): boolean {
+function targetReal(ctx: ProbeCtx, raw: string, resolved: string): string | null {
   const base = targetBase(ctx, raw, resolved)
-  return base !== null && walkDown(ctx, base, resolved)
+  return base === null ? null : walkDown(ctx, base, resolved)
 }
 
 /** Lexical phase: the directory the target is relative to, or null when it is already clearly outside. */
@@ -292,17 +359,50 @@ function targetBase(ctx: ProbeCtx, raw: string, resolved: string): string | null
   return isInside(realCwd, resolved) ? realCwd : null
 }
 
-function walkDown(ctx: ProbeCtx, base: string, resolved: string): boolean {
+/**
+ * True when a name written differently could reach the same file: Windows 8.3 short names (`ENV~1` for `.env`;
+ * the case difference is handled by the case-insensitive matcher) and case-insensitive macOS volumes.
+ */
+function mayBeAlias(relative: string): boolean {
+  if (process.platform === 'darwin') return true
+  return process.platform === 'win32' && relative.includes('~')
+}
+
+/**
+ * The real path of the target when it stays inside the real cwd, else null. When a name may be an alias the
+ * existing prefix is canonicalized with one more native realpath, so it matches the protected patterns by its
+ * true name; components below the first missing one are appended as written.
+ */
+function walkDown(ctx: ProbeCtx, base: string, resolved: string): string | null {
   const realCwd = resolveRealCwd(ctx)
   let current = realCwd
+  const rest: string[] = []
+  let missing = false
   for (const segment of path.relative(base, resolved).split(path.sep)) {
     if (segment === '') continue
+    if (missing) {
+      rest.push(segment)
+      continue
+    }
     const real = probeComponent(ctx, realCwd, path.join(current, segment))
-    if (real === null) return true
-    if (!isInside(realCwd, real)) return false
+    if (real === null) {
+      missing = true
+      rest.push(segment)
+      continue
+    }
+    if (!isInside(realCwd, real)) return null
     current = real
   }
-  return true
+  if (current !== realCwd && mayBeAlias(path.relative(realCwd, current))) {
+    spend(ctx)
+    try {
+      current = realpathSync.native(current)
+    } catch (error) {
+      if (!isMissingError(error)) throw error
+    }
+    if (!isInside(realCwd, current)) return null
+  }
+  return rest.length > 0 ? path.join(current, ...rest) : current
 }
 
 const TOO_DEEP = `Path or glob is too long to check safely: use at most ${MAX_PATH_SEGMENTS} path segments and ${MAX_PATH_LENGTH} characters.`
@@ -331,7 +431,9 @@ function patternDenial(ctx: ProbeCtx, base: string, pattern: string, outside: st
   }
   try {
     for (const [resolved, raw] of targets) {
-      if (!targetInside(ctx, raw, resolved)) return outside
+      const real = targetReal(ctx, raw, resolved)
+      if (real === null) return outside
+      if (isProtectedReal(ctx, real)) return PROTECTED_MESSAGE
     }
   } catch (error) {
     if (error instanceof ProbeBudgetError) return TOO_COMPLEX
@@ -343,23 +445,24 @@ function patternDenial(ctx: ProbeCtx, base: string, pattern: string, outside: st
 /** Path argument check on the shared ProbeCtx: null when allowed, else the deny reason. */
 function argDenial(ctx: ProbeCtx, value: string, outside: string): string | null {
   try {
-    return targetInside(ctx, value, path.resolve(ctx.cwd, value)) ? null : outside
+    const real = targetReal(ctx, value, path.resolve(ctx.cwd, value))
+    if (real === null) return outside
+    return isProtectedReal(ctx, real) ? PROTECTED_MESSAGE : null
   } catch (error) {
     if (error instanceof ProbeBudgetError) return TOO_COMPLEX
     throw error
   }
 }
 
-function checkPathTool(name: string, input: Record<string, unknown>, cwd: string): string | null {
+function checkPathTool(name: string, input: Record<string, unknown>, ctx: ProbeCtx): string | null {
   const toolInput = input['tool_input']
   if (typeof toolInput !== 'object' || toolInput === null || Array.isArray(toolInput)) {
     return 'Malformed tool request.'
   }
   const args = toolInput as Record<string, unknown>
   const outside = `Tool "${name}" may only access files inside the project folder. Use relative paths and globs without "..", absolute or "~" paths, with at most ${MAX_EXPANSIONS} brace expansions, no "[" inside braces, and brace patterns of at most ${MAX_EXPANSION_LENGTH} characters.`
-  const ctx: ProbeCtx = { cwd, realCwd: null, probes: 0, cache: new Map() }
   const pathKeys = name === 'Read' ? ['file_path'] : ['path']
-  const patternKeys = name === 'Read' ? [] : name === 'Glob' ? ['pattern'] : ['glob']
+  const patternKeys = name === 'Read' ? [] : name === 'Glob' ? ['pattern'] : name === 'Grep' ? ['glob'] : []
 
   if (name === 'Read' && (typeof args['file_path'] !== 'string' || args['file_path'].length === 0)) {
     return 'Malformed tool request.'
@@ -402,20 +505,192 @@ function checkAgentTool(name: string, input: Record<string, unknown>): string | 
   return null
 }
 
-/** Fails closed: anything not explicitly allowed, or malformed, is denied. Never throws. */
-export function guardPreToolUse(input: unknown, cwd: string): GuardOutput {
+const GIT_INPUT_KEYS: Readonly<Record<string, ReadonlySet<string>>> = {
+  git_status: new Set(),
+  git_log: new Set(['maxCount', 'path']),
+  git_diff: new Set(['staged', 'path'])
+}
+
+function checkGitTool(name: string, input: Record<string, unknown>, ctx: ProbeCtx): string | null {
+  const toolInput = input['tool_input']
+  // Absent input is the same as `{}` for the argument-less tools.
+  const args = toolInput === undefined ? {} : toolInput
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) return 'Malformed tool request.'
+  const allowed = GIT_INPUT_KEYS[name.slice(name.lastIndexOf('__') + 2)]
+  if (allowed === undefined) return 'Malformed tool request.'
+  for (const key of Object.keys(args)) {
+    if (!allowed.has(key)) return `Tool "${name}" input "${key}" is not allowed in chat.`
+  }
+  return checkPathTool(name, { tool_input: args }, ctx)
+}
+
+/** Largest `content` a plan write may carry (bytes of UTF-8). */
+export const PLAN_CONTENT_CAP = 200_000
+const PLAN_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const PLAN_RELATIVE = /^docs\/plans\/([a-z0-9]+(?:-[a-z0-9]+)*)\.md$/
+
+/** The slug when `raw` is exactly an accepted `file_path` string, else null. No normalisation: no filesystem access. */
+function planSlug(raw: string, cwd: string): string | null {
+  const relative = PLAN_RELATIVE.exec(raw)
+  let slug: string | null = relative === null ? null : (relative[1] as string)
+  if (slug === null) {
+    const prefix = path.join(cwd, 'docs', 'plans') + path.sep
+    if (raw.startsWith(prefix) && raw.endsWith('.md')) slug = raw.slice(prefix.length, -'.md'.length)
+  }
+  return slug !== null && slug.length <= 64 && PLAN_SLUG.test(slug) ? slug : null
+}
+
+/** An existing component must be a real directory (no link or junction); 'missing' when it does not exist. */
+function dirState(p: string): boolean | 'missing' {
+  let stats: ReturnType<typeof lstatSync>
   try {
+    stats = lstatSync(p)
+  } catch (error) {
+    if (isMissingError(error)) return 'missing'
+    throw error
+  }
+  return !stats.isSymbolicLink() && stats.isDirectory()
+}
+
+function protectedOrNull(ctx: ProbeCtx, realTarget: string): string | null {
+  return isProtectedReal(ctx, realTarget) ? PROTECTED_MESSAGE : null
+}
+
+function checkPlanWrite(input: Record<string, unknown>, ctx: ProbeCtx): string | null {
+  const toolInput = input['tool_input']
+  if (typeof toolInput !== 'object' || toolInput === null || Array.isArray(toolInput)) return 'Malformed tool request.'
+  const args = toolInput as Record<string, unknown>
+  const shape = 'Tool "Write" may only create or overwrite docs/plans/<slug>.md (lowercase letters, digits and single hyphens).'
+  for (const key of Object.keys(args)) {
+    if (key !== 'file_path' && key !== 'content') return `Tool "Write" input "${key}" is not allowed in chat.`
+  }
+  const filePath = args['file_path']
+  const content = args['content']
+  if (typeof filePath !== 'string' || typeof content !== 'string') return 'Malformed tool request.'
+  if (filePath.length > MAX_PATH_LENGTH) return shape
+  if (Buffer.byteLength(content, 'utf8') > PLAN_CONTENT_CAP) {
+    return `Tool "Write" content is too large: at most ${PLAN_CONTENT_CAP} bytes.`
+  }
+  const slug = planSlug(filePath, ctx.cwd)
+  if (slug === null) return shape
+  // Filesystem phase (only now): Write creates missing parents, so existing ones must be real directories.
+  try {
+    const realCwd = resolveRealCwd(ctx)
+    const docs = path.join(realCwd, 'docs')
+    const plans = path.join(docs, 'plans')
+    const target = path.join(plans, `${slug}.md`)
+    const linkMessage = 'Tool "Write": docs and docs/plans must be real folders inside the project, not links.'
+    const docsState = dirState(docs)
+    if (docsState === false) return linkMessage
+    if (docsState === 'missing') return protectedOrNull(ctx, target)
+    const plansState = dirState(plans)
+    if (plansState === false) return linkMessage
+    if (plansState === 'missing') return protectedOrNull(ctx, target)
+    let stats: ReturnType<typeof lstatSync> | null = null
+    try {
+      stats = lstatSync(target)
+    } catch (error) {
+      if (!isMissingError(error)) throw error
+    }
+    if (stats !== null && (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1)) {
+      return 'Tool "Write" may only overwrite a regular file that is not a link and has no other hard links.'
+    }
+    return protectedOrNull(ctx, target)
+  } catch (error) {
+    if (error instanceof ProbeBudgetError) return TOO_COMPLEX
+    throw error
+  }
+}
+
+/** Case-insensitive glob for case-insensitive file systems: letters outside character classes become `[xX]`. */
+function foldCase(s: string): string {
+  let inClass = false
+  let result = ''
+  for (const ch of s) {
+    if (inClass) {
+      if (ch === ']') inClass = false
+      result += ch
+    } else if (ch === '[') {
+      inClass = true
+      result += ch
+    } else if (ch.toLowerCase() !== ch.toUpperCase()) {
+      result += `[${ch.toLowerCase()}${ch.toUpperCase()}]`
+    } else {
+      result += ch
+    }
+  }
+  return result
+}
+
+/** One ripgrep exclusion glob per protected pattern that converts; `!` re-allow entries are not converted. */
+export function protectedGrepExclusions(patterns: readonly string[], platform: NodeJS.Platform = process.platform): string[] {
+  const out: string[] = []
+  for (const pattern of patterns) {
+    if (typeof pattern !== 'string') continue
+    let s = pattern.replace(/[ \t]+$/, '')
+    if (s === '' || s.startsWith('!') || s.startsWith('#') || s.includes('\\')) continue
+    const dirOnly = s.endsWith('/')
+    if (dirOnly) s = s.slice(0, -1)
+    // Anchored and nested patterns are excluded at any depth: over-excluding is the safe direction.
+    s = s.replace(/^\/+/, '').replace(/\s/g, '?')
+    if (s === '') continue
+    if (platform === 'win32') s = foldCase(s)
+    if (!dirOnly) out.push(`!**/${s}`)
+    out.push(`!**/${s}/**`)
+  }
+  return out
+}
+
+function grepRewrite(rec: Record<string, unknown>, patterns: readonly string[]): GuardOutput {
+  const exclusions = protectedGrepExclusions(patterns)
+  if (exclusions.length === 0) return {}
+  const args = rec['tool_input'] as Record<string, unknown>
+  const user = typeof args['glob'] === 'string' ? args['glob'].trim() : ''
+  const glob = [...(user.length > 0 ? [user] : []), ...exclusions].join(' ')
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'allow',
+      updatedInput: { ...args, glob }
+    }
+  }
+}
+
+/**
+ * Fails closed: anything not explicitly allowed, or malformed, is denied. Never throws.
+ * Without `policy` the Phase 2 behaviour applies (read-only, default protected list, no input rewriting).
+ */
+export function guardPreToolUse(input: unknown, cwd: string, policy?: ToolPolicy): GuardOutput {
+  try {
+    const resolved = readPolicy(policy)
+    if (resolved === null) return deny('Malformed tool policy.')
     if (typeof input !== 'object' || input === null) return deny('Malformed tool request.')
     const rec = input as Record<string, unknown>
     const name = rec['tool_name']
     if (typeof name !== 'string' || name.length === 0) return deny('Malformed tool request.')
-    if (!isToolAllowed(name)) {
+    if (!isToolAllowed(name, resolved)) {
       return deny(`Tool "${name}" is not allowed in chat: only read-only tools, agents and skills are.`)
     }
+    const needsCwd = PATH_TOOLS.has(name) || GIT_TOOL_SET.has(name) || name === 'Write'
+    if (needsCwd && (typeof cwd !== 'string' || cwd.length === 0)) return deny('Malformed tool request.')
     if (PATH_TOOLS.has(name)) {
-      if (typeof cwd !== 'string' || cwd.length === 0) return deny('Malformed tool request.')
-      const reason = checkPathTool(name, rec, cwd)
+      const reason = checkPathTool(name, rec, newCtx(cwd, resolved.protectedPatterns))
       if (reason !== null) return deny(reason)
+      if (name === 'Grep' && policy !== undefined) return grepRewrite(rec, resolved.protectedPatterns)
+    }
+    if (GIT_TOOL_SET.has(name)) {
+      const reason = checkGitTool(name, rec, newCtx(cwd, resolved.protectedPatterns))
+      if (reason !== null) return deny(reason)
+    }
+    if (name === 'Write') {
+      const reason = checkPlanWrite(rec, newCtx(cwd, resolved.protectedPatterns))
+      if (reason !== null) return deny(reason)
+    }
+    if (name === 'ToolSearch') {
+      const toolInput = rec['tool_input']
+      if (typeof toolInput !== 'object' || toolInput === null || Array.isArray(toolInput)) {
+        return deny('Malformed tool request.')
+      }
     }
     if (AGENT_TOOLS.has(name)) {
       const reason = checkAgentTool(name, rec)
