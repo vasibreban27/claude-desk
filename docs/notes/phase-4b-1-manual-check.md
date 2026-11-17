@@ -17,7 +17,7 @@ Status: **not yet run**.
 2. Add this repo as a project (folder picker). Expect it in the left panel with its branch.
 3. Open Settings for the project, add a check: name `verify`, executable `node`, args `check.mjs`, timeout 60000, test path off, then save. Expect the save to succeed, the check to stay listed after reopening Settings, and the "workers run these as you" hint next to the editor.
 4. Open the Pipeline tab. Expect the plan list with each file name, its format and task count.
-5. Look at `broken.md`. Expect it marked as invalid with the error count and the first errors with their line numbers, and its start button disabled (or a start attempt refused with the first error line).
+5. Look at `broken.md`. Expect it marked as invalid with the error count and the first errors with their line numbers, and its Start button disabled.
 6. Start the small plan. Expect the run to appear at once as `running`, tasks `queued` then `running` then `done` as they finish, without a manual refresh, with a short commit id per finished task.
 7. Check the labels. Expect "Committed, not reviewed" on done tasks (never "verified" or "merged"), the check result next to a task, and turns, cost and duration once known.
 8. After the run is `done`, check git: `git branch --list "run/*" "task/*"` shows `run/<id8>` and the task branches; `git show run/<id8>:src/one.txt` shows the file. Expect `main` and the working tree (including uncommitted files) unchanged: `git rev-parse main` is the same as before the run and `git status --porcelain` is unchanged.

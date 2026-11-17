@@ -250,7 +250,7 @@ DeskApi additions: `pipelinePlans`, `pipelineStart`, `pipelineStatus`, `pipeline
 ## Wave 4: smoke
 
 ### T8: Flow test and launch manual check
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: M
 - Sensitive: no
@@ -287,3 +287,4 @@ DeskApi additions: `pipelinePlans`, `pipelineStart`, `pipelineStatus`, `pipeline
 - W3 auditor S1 `handlers.ts:~207` / service: `pipeline:start` returns `git status: <git error>` text to the renderer (same as W2 F5); show a fixed message and log the detail.
 - W3 auditor S2 `register.ts:~155`: dispose removes the handlers but does not cancel active runs or clear the lazy orchestrator (hygiene).
 - W3 T5 deviation (accepted): the orchestrator is created lazily inside `registerIpc` (`buildPipeline`), not in `bootstrapStores`, so it can use the event-wrapped store; `bootstrapStores` returns `pipelineStore`.
+- W4 T8: the flow test mocks `electron` and `createWorkerRunner` and runs the real `registerIpc`, handlers, service, orchestrator and in-memory store; the F1 crash-recovery regression is covered end to end. The manual check (`docs/notes/phase-4b-1-manual-check.md`) has NOT been run; the `acceptEdits` live result line is blank.
