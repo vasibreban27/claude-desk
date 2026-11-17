@@ -331,3 +331,4 @@ Workers: `node-developer` for T1-T3, T5, T6, T8-T11 (`src/main`, `src/preload`, 
 - F3 (minor, manual check step 17): it only tests `Bash` and a protected `Read` inside a subagent; add sub-checks for a subagent calling a `mcp__git__*` tool with git off and a subagent `Write` with plan writes off.
 - F4 (minor, manual check step 7): the database location is given as `.../data/`; it is `<userData>/data/claude-desk.db` (Electron per-user app-data folder; on Windows under `%APPDATA%`, exact folder name not checked).
 - Not automated: launching the built app (needs a display and the Claude login); covered by `docs/notes/phase-3-manual-check.md` steps 1-2.
+- Live check 2026-11-17 (headless, real SDK, details in `docs/notes/phase-3-manual-check.md`): SDK hooks DO fire inside Agent/Task subagents (shell, protected `Read` and `Write` denied there); the open Phase 2 step 7 is closed. Still open: the GUI steps and the default-list check with real env and key files.

@@ -35,3 +35,14 @@ Notes on creating test files: a hook blocks shell commands that mention `.env`, 
 
 17. SDK hooks inside subagents (`docs/notes/phase-2-manual-check.md` step 7, not yet verified live): with the default settings, prompt "Delegate to a subagent: have it run `echo hi` in a shell and report the output." Expect the subagent's Bash call to show a "Denied" row labelled with the subagent type. Then repeat with a protected file: "Delegate to a subagent: have it read .env" and expect a "Denied" Read row labelled with the subagent. If either runs, hooks do not fire inside Agent/Task subagents: stop and report it, because protected paths and the git capability gate would not cover subagents.
 18. Run the remaining unchecked items in `docs/notes/phase-2-manual-check.md` (steps 8-10) if not done yet.
+
+## Live check results (2026-11-17, headless)
+
+Run through the app's real `sdkRunner` (real SDK and Claude login, model `haiku`, the app's own guard; an empty plugin folder so only the app's hooks could deny anything) against a scratch git project. Not a GUI run.
+
+- Step 17 (hooks inside subagents): PASS. A subagent's shell call (`PowerShell`), `Read` of a protected file and `Write` with plan writes off were each DENIED, labelled with the subagent type, and the protected content never reached the chat. (A first attempt had no shell tool in the subagent, so it proved nothing; the repeat did.)
+- Steps 9, 10, 11 (model and git tools): model reached the run (`claude-haiku-5-5`); git tools load through `ToolSearch` and work; with a hostile `core.fsmonitor` configured (a naive `git status` fires it) no marker was written.
+- Steps 13 and 15 (plan writes, protected files): `docs/plans/<slug>.md` allowed, any other `Write` DENIED; the protected file was refused for the main thread and a subagent. Done with a custom protected list (`topsecret.txt`, `vault/`), not the default list.
+- Phase 2 steps 6-10 (guard side): `Edit` denied, file unchanged; read outside the project denied; a project skill with a shell injection and a project `SessionStart` hook were inert (settingSources `[]`); the project `CLAUDE.md` was in effect; the `flow` plugin skills loaded.
+
+Not done: all GUI steps (Settings tab, Activity and Usage tabs, restart persistence, storage-unavailable banner), the default-list check with real env and key files (the toolkit guard stops an agent from writing those: create them with your editor), step 12 in the app UI, Grep/Glob best-effort (step 16), `/flow:plan` end to end (step 14), `duration_ms` on tool rows, and runs on a model other than Haiku.
