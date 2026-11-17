@@ -199,7 +199,7 @@ Test files sit next to their source and do not count toward the "at most 3 files
 ### Wave 3
 
 ### T7: Serial orchestrator and worker runner
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: none
 - Owns: `src/main/pipeline/orchestrator.ts`, `src/main/pipeline/orchestrator.test.ts`, `src/main/pipeline/workerRunner.ts`, `src/main/pipeline/workerRunner.test.ts`, `src/main/pipeline/prompts.ts`
@@ -262,3 +262,8 @@ If T1 decides that worktrees need an installed `node_modules`, `build` adds a ta
 - W2 T5: git filter overrides are read once per public operation, not before every git call (deviation from spike); git prefix and identity duplicated in `worktrees.ts` and `workerTools.ts` (dedupe).
 - W2 T6: a failed-to-start check is recorded as `failed`; file-symlink test skipped on this machine (EPERM).
 - W2 T5 tests: the real-git `worktrees.test.ts` takes up to ~300 s on this machine (60 s per-test timeout set).
+- W3 reviewer F3 `orchestrator.ts:236-239`: `handle.cancelled` forces the run to `cancelled` even when every task finished `done` (cancel racing the final merge). Check in T8.
+- W3 reviewer F5 `orchestrator.ts:167,201,214-218`: git errors (`resolveRef`, merge exception) are recorded as `worker error`; consider `git error`.
+- W3 reviewer F6 `workerRunner.test.ts`: missing tests for sync `queryFn` throw, `q.close()` throwing, time cap racing a cancel (`limit` should win), abort-listener removal on every exit. Check in T8.
+- W3 T7: extra reasons `merge failed: <error>` and `worktree error: <error>` are not in the plan's list; read-only git MCP tools are not added to the worker (`work` is the only server); `permissionMode: 'acceptEdits'` kept, re-check in T8 live run.
+- W3: the reviewer found F1 (failure-path tests), fixed with F2 (setRunStatus retry) and F4 (cleanup on failed start) in one round; no re-review per the speed rules.
