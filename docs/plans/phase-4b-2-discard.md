@@ -44,7 +44,7 @@ Component and hook tests with a mocked `window.api`. No smoke task: no runtime w
 ## Wave 1: discard button
 
 ### T1: Discard button with confirmation
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Size: S
 - Sensitive: no
@@ -62,3 +62,7 @@ Component and hook tests with a mocked `window.api`. No smoke task: no runtime w
   - Given `docs/notes/phase-4b-2-manual-check.md` When read Then it has the steps to discard a finished run, a failed run, and to see that Discard is absent while a run is active, with the expected result for each.
 
 ## Follow-ups
+- Review F1 `usePipeline.ts` (discard, ~214): `discardError` is cleared only when the next discard starts, so a stale "run not found" alert can appear on a later run's view; clear it in `start` or on a run id change.
+- Review F2 `PipelinePanel.tsx` (DiscardConfirm, RunView): focus drops to `body` after Cancel or Escape (the dialog unmounts) and while discarding; keep a ref to the Discard trigger and focus it on close.
+- Review F3 `PipelinePanel.tsx` (onConfirm): the dialog closes after a failed discard, so a retry takes two clicks; close it only on success if that matters.
+- Review F4 `PipelinePanel.test.tsx`: the double-click test never clicks confirm twice; add a component test that does.
