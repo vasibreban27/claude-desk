@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import type { PipelineRunView, PipelineTaskView, PlanEntry } from '@shared/ipc'
 import type { UsePipeline } from '../../hooks/usePipeline'
 import './pipeline.css'
@@ -70,17 +71,79 @@ function TaskRow({ task }: { task: PipelineTaskView }) {
   )
 }
 
+function DiscardConfirm({
+  run,
+  discarding,
+  onConfirm,
+  onClose
+}: {
+  run: PipelineRunView
+  discarding: boolean
+  onConfirm: () => void
+  onClose: () => void
+}) {
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    cancelRef.current?.focus()
+  }, [])
+  const prefix = run.integrationBranch.replace(/^run\//, '')
+  return (
+    <div
+      role="alertdialog"
+      aria-labelledby="discard-title"
+      aria-describedby="discard-desc"
+      className="pipeline__confirm"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && !discarding) onClose()
+      }}
+    >
+      <h4 id="discard-title">Discard this run?</h4>
+      <div id="discard-desc">
+        <p>This removes the run&apos;s worktrees, branches and records:</p>
+        <ul>
+          <li>
+            integration branch <code>{run.integrationBranch}</code>
+          </li>
+          {run.tasks.map((t) => (
+            <li key={t.taskId}>
+              task branch <code>{`task/${prefix}-${t.taskId.toLowerCase()}`}</code>
+            </li>
+          ))}
+        </ul>
+        <p>
+          Commits on these branches are lost. The base branch <code>{run.baseBranch}</code> is not touched.
+        </p>
+      </div>
+      <div className="pipeline__actions">
+        <button type="button" className="pipeline__btn" ref={cancelRef} disabled={discarding} onClick={onClose}>
+          Cancel
+        </button>
+        <button type="button" className="pipeline__btn pipeline__btn--danger" disabled={discarding} onClick={onConfirm}>
+          {discarding ? 'Discarding...' : 'Discard'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function RunView({
   run,
   cancelling,
   cancelError,
-  onCancel
+  discarding,
+  discardError,
+  onCancel,
+  onDiscard
 }: {
   run: PipelineRunView
   cancelling: boolean
   cancelError: string | null
+  discarding: boolean
+  discardError: string | null
   onCancel: () => void
+  onDiscard: () => Promise<void>
 }) {
+  const [confirming, setConfirming] = useState(false)
   const waves = [...new Set(run.tasks.map((t) => t.wave))].sort((a, b) => a - b)
   return (
     <section aria-label="Latest run" className="pipeline__run">
@@ -96,7 +159,27 @@ function RunView({
             {cancelling ? 'Cancelling...' : 'Cancel run'}
           </button>
         )}
+        {!run.active && !confirming && (
+          <button type="button" className="pipeline__btn" onClick={() => setConfirming(true)}>
+            Discard
+          </button>
+        )}
       </div>
+      {!run.active && confirming && (
+        <DiscardConfirm
+          run={run}
+          discarding={discarding}
+          onClose={() => setConfirming(false)}
+          onConfirm={() => {
+            void onDiscard().then(() => setConfirming(false))
+          }}
+        />
+      )}
+      {discardError && (
+        <p role="alert" className="pipeline__error">
+          {discardError}
+        </p>
+      )}
       <p role="status" className="pipeline__muted">
         Work is merged into <code>{run.integrationBranch}</code> only. Nothing is merged into{' '}
         <code>{run.baseBranch}</code> or pushed.
@@ -124,6 +207,11 @@ function RunView({
 
 export function PipelinePanel(p: PipelinePanelProps) {
   const busy = p.starting || (p.run?.active ?? false)
+  const plansHeading = useRef<HTMLHeadingElement>(null)
+  const onDiscard = async (): Promise<void> => {
+    const ok = await p.discard()
+    if (ok) plansHeading.current?.focus()
+  }
   return (
     <section className="pipeline" aria-label="Pipeline">
       {p.startError && (
@@ -137,8 +225,20 @@ export function PipelinePanel(p: PipelinePanelProps) {
         </p>
       )}
       {p.runLoading && !p.run && <p className="pipeline__muted">Loading run…</p>}
-      {p.run && <RunView run={p.run} cancelling={p.cancelling} cancelError={p.cancelError} onCancel={() => void p.cancel()} />}
-      <h3>Plans</h3>
+      {p.run && (
+        <RunView
+          run={p.run}
+          cancelling={p.cancelling}
+          cancelError={p.cancelError}
+          discarding={p.discarding}
+          discardError={p.discardError}
+          onCancel={() => void p.cancel()}
+          onDiscard={onDiscard}
+        />
+      )}
+      <h3 ref={plansHeading} tabIndex={-1}>
+        Plans
+      </h3>
       {p.plansError && (
         <p role="alert" className="pipeline__error">
           {p.plansError}

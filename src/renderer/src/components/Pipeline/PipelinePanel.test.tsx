@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import type { PipelineRunView, PlanEntry } from '@shared/ipc'
 import { PipelinePanel, type PipelinePanelProps } from './PipelinePanel'
@@ -75,9 +75,14 @@ function props(over: Partial<PipelinePanelProps> = {}): PipelinePanelProps {
     cancelError: null,
     start: vi.fn(async () => {}),
     cancel: vi.fn(async () => {}),
+    discarding: false,
+    discardError: null,
+    discard: vi.fn(async () => true),
     ...over
   }
 }
+
+const finished = () => run({ status: 'done', active: false })
 
 describe('PipelinePanel', () => {
   it('shows plan name, badge and counts, and starts with the file name', () => {
@@ -153,6 +158,55 @@ describe('PipelinePanel', () => {
     expect(screen.queryByRole('button', { name: /Cancel/ })).toBeNull()
     rerender(<PipelinePanel {...props({ run: run(), cancelError: 'The run is no longer active.' })} />)
     expect(screen.getByRole('alert')).toHaveTextContent('no longer active')
+  })
+
+  it('shows Discard only when the run is not active', () => {
+    const { rerender } = render(<PipelinePanel {...props({ run: run() })} />)
+    expect(screen.queryByRole('button', { name: 'Discard' })).toBeNull()
+    rerender(<PipelinePanel {...props({ run: finished() })} />)
+    expect(screen.getByRole('button', { name: 'Discard' })).toBeInTheDocument()
+  })
+
+  it('confirms with the branches named and Cancel does not call the API', () => {
+    const p = props({ run: finished() })
+    render(<PipelinePanel {...p} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    const dialog = screen.getByRole('alertdialog')
+    expect(dialog).toHaveTextContent('run/r1')
+    expect(dialog).toHaveTextContent('task/r1-t1')
+    expect(dialog).toHaveTextContent('task/r1-t2')
+    expect(dialog).toHaveTextContent(/Commits on these branches are lost/)
+    expect(dialog).toHaveTextContent(/main is not touched/)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(p.discard).not.toHaveBeenCalled()
+  })
+
+  it('discards on confirm and focuses the plans heading', async () => {
+    const p = props({ run: finished() })
+    render(<PipelinePanel {...p} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Discard' }))
+    expect(p.discard).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Plans' })).toHaveFocus())
+  })
+
+  it('disables the buttons while discarding so a double click calls once', () => {
+    const p = props({ run: finished(), discarding: true })
+    const { rerender } = render(<PipelinePanel {...props({ run: finished() })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    rerender(<PipelinePanel {...p} />)
+    const btn = screen.getByRole('button', { name: 'Discarding...' })
+    expect(btn).toBeDisabled()
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+    expect(p.discard).not.toHaveBeenCalled()
+  })
+
+  it('shows a discard error in an alert and keeps the run visible', () => {
+    render(<PipelinePanel {...props({ run: finished(), discardError: 'Some worktrees could not be removed.' })} />)
+    expect(screen.getByRole('alert')).toHaveTextContent('could not be removed')
+    expect(screen.getByRole('region', { name: 'Latest run' })).toBeInTheDocument()
   })
 
   it('disables Start while a run is active', () => {

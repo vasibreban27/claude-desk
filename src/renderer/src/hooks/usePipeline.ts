@@ -24,9 +24,21 @@ export interface UsePipeline {
   startError: string | null
   cancelling: boolean
   cancelError: string | null
+  discarding: boolean
+  discardError: string | null
   start: (planFile: string) => Promise<void>
   cancel: () => Promise<void>
+  /** Resolves true when the run was discarded. */
+  discard: () => Promise<boolean>
   reloadPlans: () => void
+}
+
+export const DISCARD_ERROR_MESSAGES: Record<'active' | 'not-found' | 'cleanup-failed' | 'failed', string> = {
+  active: 'The run is still active. Cancel it first, then discard it.',
+  'not-found': 'The run was not found. It may already have been discarded.',
+  'cleanup-failed':
+    'Some worktrees or branches could not be removed. The run was kept; try Discard again.',
+  failed: 'Could not discard the run.'
 }
 
 interface State {
@@ -41,6 +53,8 @@ interface State {
   startError: string | null
   cancelling: boolean
   cancelError: string | null
+  discarding: boolean
+  discardError: string | null
 }
 
 const empty = (projectId: string | null): State => ({
@@ -54,7 +68,9 @@ const empty = (projectId: string | null): State => ({
   starting: false,
   startError: null,
   cancelling: false,
-  cancelError: null
+  cancelError: null,
+  discarding: false,
+  discardError: null
 })
 
 export function usePipeline(projectId: string | null): UsePipeline {
@@ -66,6 +82,7 @@ export function usePipeline(projectId: string | null): UsePipeline {
     current.current = projectId
   }, [projectId])
   const startingRef = useRef(false)
+  const discardingRef = useRef(false)
 
   const fetchStatus = useCallback(async (pid: string): Promise<void> => {
     const api = window.api
@@ -180,6 +197,27 @@ export function usePipeline(projectId: string | null): UsePipeline {
     // On success `cancelling` stays set until the next status arrives (fetchStatus clears it).
   }, [state.run?.runId, fetchStatus])
 
+  const discard = useCallback(async (): Promise<boolean> => {
+    const api = window.api
+    const pid = current.current
+    const runId = state.run?.runId
+    if (!api || pid === null || !runId || discardingRef.current) return false
+    discardingRef.current = true
+    setState((s) => (s.projectId === pid ? { ...s, discarding: true, discardError: null } : s))
+    let discardError: string | null = null
+    try {
+      const res = await api.pipelineDiscard({ projectId: pid, runId })
+      if (!res.ok) discardError = DISCARD_ERROR_MESSAGES[res.error]
+    } catch {
+      discardError = DISCARD_ERROR_MESSAGES.failed
+    }
+    discardingRef.current = false
+    if (current.current !== pid) return false
+    setState((s) => (s.projectId === pid ? { ...s, discarding: false, discardError } : s))
+    await fetchStatus(pid)
+    return discardError === null
+  }, [state.run?.runId, fetchStatus])
+
   const reloadPlans = useCallback(() => {
     const pid = current.current
     if (pid === null) return
@@ -187,5 +225,5 @@ export function usePipeline(projectId: string | null): UsePipeline {
     void fetchPlans(pid)
   }, [fetchPlans])
 
-  return { ...state, start, cancel, reloadPlans }
+  return { ...state, start, cancel, discard, reloadPlans }
 }
