@@ -43,7 +43,7 @@ Env additions: `GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1
   - `git_diff` listing: `diff --name-only -z --relative --ignore-submodules=all --no-ext-diff --no-textconv [--cached] [-- <path>]`; diff: `diff --relative --ignore-submodules=all --no-ext-diff --no-textconv --no-color --no-renames [--cached] -- <files>`
   - Each handler call runs the filter listing once (`<prefix> config --get-regexp -z ^filter\..*\.(clean|smudge|process)$`) and reuses the overrides for all its git calls (`git_diff` lists and diffs with the same overrides).
   - Pathspecs: drive-relative paths (`d:x`, `C:.env`) are rejected along with absolute, UNC, `..`, leading `-` or `:`.
-- **Decision (T6, superseded where the findings above differ):** use these, `execFile('git', args, { cwd, env, timeout, maxBuffer })`. Tests assert the argv. Not covered: the pager (not triggered without a tty; `--no-pager` set anyway). Network access is disabled by `--no-lazy-fetch` (see above); no network subcommand is used.
+- **Decision (T6, superseded where the findings above differ):** use these, `execFile('git', args, { cwd, env, timeout, maxBuffer })`. Tests assert the argv. Not covered: the pager (not triggered without a tty; `--no-pager` set anyway). `--no-lazy-fetch` stops git's own transport (promisor fetches), and no network subcommand is used. It does not stop git from reading config includes (`include.path`, `includeIf.*.path`) or `.git/objects/info/alternates` that point at a UNC path, which can make Windows open an SMB connection and send an NTLM hash (S4, accepted for now, see the plan's Follow-ups).
 
 ## 5. Grep and Glob versus protected paths
 Folder `src/` with a protected-style file `hidden.dat` and `ok.txt`, both containing the search word.

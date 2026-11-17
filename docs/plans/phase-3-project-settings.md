@@ -167,7 +167,7 @@ Tasks that touch the contract say `Contract: <channel or tool>`.
 ### Wave 2
 
 ### T4: Migration 2 and SettingsStore
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: database-engineer
 - Contract: none
 - Owns: `src/main/db/migrations.ts`, `src/main/db/migrations.test.ts`, `src/main/db/settingsStore.ts`, `src/main/db/settingsStore.test.ts`, `src/main/db/index.ts`
@@ -179,7 +179,7 @@ Tasks that touch the contract say `Contract: <channel or tool>`.
   - Given a store created without a database (open failed) When `get` is called Then it returns defaults with notice `storage-unavailable` and `set` returns `storage-unavailable`.
 
 ### T5: Protected-path matcher
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: none
 - Owns: `src/main/chat/protectedPaths.ts`, `src/main/chat/protectedPaths.test.ts`
@@ -192,7 +192,7 @@ Tasks that touch the contract say `Contract: <channel or tool>`.
   - Given a junction or symlink inside the project pointing at a protected file (skipped with `ctx.skip()` on `EPERM`/`EACCES`/`ENOSYS`) When the caller passes the real path Then it is protected.
 
 ### T6: Git MCP tools
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: git_status, git_log, git_diff
 - Owns: `src/main/chat/gitTools.ts`, `src/main/chat/gitTools.test.ts`
@@ -205,7 +205,7 @@ Tasks that touch the contract say `Contract: <channel or tool>`.
   - Given a `path` argument When it contains `..`, is absolute or starts with `-` Then it is rejected before `execFile` runs.
 
 ### T7: Settings tab (renderer)
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Contract: settings:get, settings:set, app:info
 - Owns: `src/renderer/src/components/Settings/`, `src/renderer/src/hooks/useSettings.ts`, `src/renderer/src/components/Workspace/Workspace.tsx`, `src/renderer/src/components/Workspace/workspace.css`, `src/renderer/src/App.tsx`
@@ -305,3 +305,10 @@ Workers: `node-developer` for T1-T3, T5, T6, T8-T11 (`src/main`, `src/preload`, 
 - Spike (T9, T10): a resumed session honours changed `model`, tools and MCP servers, so `sessionReset` is always `false` for now and the T7 session-reset message stays dormant. A model switch loses the prompt cache.
 - T3 deviation: `SESSION_RESET_OPTIONS` is empty (plan said model and both toggles) per the spike decision.
 - Not exercised in the spike: the git pager (no tty) and `core.sshCommand` (no network subcommand is used).
+- S4 (minor, gitTools.ts prefix): a hostile `.git/config` `include.path` / `includeIf.*.path` or `.git/objects/info/alternates` pointing at a UNC path makes any git call open an SMB connection on Windows (NTLM hash leak). `-c` cannot disable it. Fix later: before the first git call read `alternates` and run `git config --no-includes --get-regexp "^include(if\..*)?\.path$"`, refuse values starting with `//` or `\` or on another drive. The user's own git in that folder leaks the same way, so the added risk is small.
+- F10 (minor, SettingsPanel.test.tsx): the "pending save" test cannot detect a missing `currentProject.current === projectId` guard on `setSaveState`; assert on the hook directly. Production behaviour is correct.
+- F12 (minor, gitTools.test.ts:44): the promisor real-git test takes about 20 s against a 30 s timeout; raise it to 60-90 s for that test if it flakes on a loaded machine.
+- T8/T9 wiring: `createGitMcpServer({ isProtected })` takes a project-relative forward-slash path, but `createProtectedMatcher().isProtected` takes a real absolute path. Wire an adapter that joins the path onto the real root (passing the relative string directly resolves against the process cwd and returns "outside", which fails closed).
+- T6: `validatePathspec` rejects any path starting with a letter and a colon (`a:b`), also on POSIX; fail closed, accepted. Git must be 2.45 or newer (`--no-lazy-fetch`); older git gives a clear tool error. Each git tool call makes 1-2 extra git spawns (filter listing, `rev-parse --show-prefix` for status).
+- T5: the file-symlink test is skipped without privilege on Windows; the junction test runs.
+- Wave 2 verify: 3 rounds, 2 majors found and fixed by the security audit (S1 filter drivers, S2 log signature programs) plus S3 (lazy fetch); `docs/notes/phase-3-spike.md` section 4 holds the final argv and env.
