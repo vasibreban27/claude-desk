@@ -1,23 +1,25 @@
 import { useRef, useState, type KeyboardEvent } from 'react'
 import { ActivityFeed } from '../Activity'
 import { UsagePanel } from '../Usage'
+import { SettingsPanel } from '../Settings'
 import { useActivity } from '../../hooks/useActivity'
 import { useUsage } from '../../hooks/useUsage'
 import './workspace.css'
 
-export type WorkspaceTab = 'activity' | 'usage'
+export type WorkspaceTab = 'activity' | 'usage' | 'settings'
 
 export const WORKSPACE_TAB_KEY = 'claude-desk:workspace-tab'
 
 const TABS: { id: WorkspaceTab; label: string }[] = [
   { id: 'activity', label: 'Activity' },
-  { id: 'usage', label: 'Usage' }
+  { id: 'usage', label: 'Usage' },
+  { id: 'settings', label: 'Settings' }
 ]
 
 export function readStoredTab(): WorkspaceTab {
   try {
     const raw = localStorage.getItem(WORKSPACE_TAB_KEY)
-    return raw === 'usage' || raw === 'activity' ? raw : 'activity'
+    return raw === 'usage' || raw === 'activity' || raw === 'settings' ? raw : 'activity'
   } catch {
     return 'activity'
   }
@@ -36,7 +38,11 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
     seenRunId: string | null
     signal: number
   }>({ baselineFor: null, seenRunId: null, signal: 0 })
-  const tabRefs = useRef<Record<WorkspaceTab, HTMLButtonElement | null>>({ activity: null, usage: null })
+  const tabRefs = useRef<Record<WorkspaceTab, HTMLButtonElement | null>>({
+    activity: null,
+    usage: null,
+    settings: null
+  })
 
   const activity = useActivity(projectId)
 
@@ -113,8 +119,10 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
       >
         {tab === 'activity' ? (
           <ActivityFeed events={activity.events} loading={activity.loading} error={activity.error} hasProject />
-        ) : (
+        ) : tab === 'usage' ? (
           <UsagePanel {...usage} projectNames={projectNames} />
+        ) : (
+          <SettingsPanel projectId={projectId} />
         )}
       </div>
     </div>
