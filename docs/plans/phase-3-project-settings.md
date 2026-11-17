@@ -222,7 +222,7 @@ Tasks that touch the contract say `Contract: <channel or tool>`.
 ### Wave 3
 
 ### T8: Guard policy - protected paths, git tools, plan writes
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: git_status, git_log, git_diff
 - Owns: `src/main/chat/tools.ts`, `src/main/chat/tools.test.ts`
@@ -312,3 +312,9 @@ Workers: `node-developer` for T1-T3, T5, T6, T8-T11 (`src/main`, `src/preload`, 
 - T6: `validatePathspec` rejects any path starting with a letter and a colon (`a:b`), also on POSIX; fail closed, accepted. Git must be 2.45 or newer (`--no-lazy-fetch`); older git gives a clear tool error. Each git tool call makes 1-2 extra git spawns (filter listing, `rev-parse --show-prefix` for status).
 - T5: the file-symlink test is skipped without privilege on Windows; the junction test runs.
 - Wave 2 verify: 3 rounds, 2 majors found and fixed by the security audit (S1 filter drivers, S2 log signature programs) plus S3 (lazy fetch); `docs/notes/phase-3-spike.md` section 4 holds the final argv and env.
+- Wave 3 verify: 3 rounds. Security audit found S1 (NTFS alternate data stream paths such as `.env::$DATA` bypassed the protected-path match on win32; fixed by denying any `:` other than the drive colon) and S2 (Grep exclusions did not match when the search root was an 8.3 or junction alias; fixed by rewriting Grep's `path` to the canonical real path). Also fixed: reserved device slugs (F2), escaped Grep patterns and class folding (F1), Write target canonicalization (F3, macOS-only test not run here), tool_input snapshot, escaped trailing blank (F6).
+- F9 (minor): no CI exists, so the POSIX-only and darwin-only tests (F3 canonical case, `:` allowed on POSIX) and the symlink tests that skip on EPERM never run automatically; add a CI matrix (ubuntu, macos, windows) or run them by hand on macOS before relying on F3.
+- F10 (minor): `src/main/chat/tools.ts` is about 800 lines with several concerns; a split is natural (Windows lexical rules, probe/walkDown layer, per-tool checks, Grep exclusion building into `grepExclusions.ts`). Tests (`tools.test.ts`, `tools.gaps.test.ts`) could follow.
+- F12 (minor, tools.gaps.test.ts `runRg`): the real-ripgrep assertion passes silently when `rg` is not on PATH; use `ctx.skip()` so the skip is visible.
+- Read of Windows device names (`CON`, `NUL`, `COM1`) is allowed by the guard: it leaks nothing protected (an empty read or a stuck open); not fixed.
+- T9 must (from the T8 report): call `guardPreToolUse(input, cwd, policy)` with the per-turn `ToolPolicy` (`protectedPatterns`, `allowGitRead`, `allowPlanWrites`) and the exact cwd string; return the guard output unchanged (an allow result carries `updatedInput`); add `Write` to `allowedTools` for `allowPlanWrites`, and for `allowGitRead` add `GIT_ALLOWED_TOOLS` plus `createGitMcpServer({ cwd, isProtected })` under `GIT_SERVER_NAME` in `mcpServers`; the `isProtected` adapter joins the project-relative path onto `realpathSync.native(cwd)` and uses `createProtectedMatcher(patterns, { realRoot })` (defaults when `usable` is false). Production `runner.ts:72` still calls the guard without a policy until T9 lands.

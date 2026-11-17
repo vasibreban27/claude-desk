@@ -716,7 +716,7 @@ export function protectedGrepExclusions(patterns: readonly string[], platform: N
   for (const pattern of patterns) {
     if (typeof pattern !== 'string') continue
     let s = stripTrailingBlanks(pattern)
-    if (s === ''|| s.startsWith('!') || s.startsWith('#')) continue
+    if (s === '' || s.startsWith('!') || s.startsWith('#')) continue
     s = unescapeGitignore(s)
     const dirOnly = s.endsWith('/')
     if (dirOnly) s = s.slice(0, -1)
