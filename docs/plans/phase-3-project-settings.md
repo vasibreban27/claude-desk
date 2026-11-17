@@ -255,7 +255,7 @@ Tasks that touch the contract say `Contract: <channel or tool>`.
 ### Wave 5
 
 ### T10: IPC handlers, preload bridge, toolkit info and bootstrap
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Contract: settings:get, settings:set, app:info
 - Owns: `src/main/ipc/handlers.ts`, `src/main/ipc/handlers.test.ts`, `src/main/ipc/register.ts`, `src/main/ipc/register.test.ts`, `src/preload/index.ts`, `src/main/config.ts`, `src/main/config.test.ts`, `src/main/index.ts`
@@ -322,3 +322,7 @@ Workers: `node-developer` for T1-T3, T5, T6, T8-T11 (`src/main`, `src/preload`, 
 - Not verified live (T11 manual check must cover): that SDK hooks fire for tool calls inside Agent/Task subagents (`docs/notes/phase-2-manual-check.md` step 7 still open).
 - Design note (security audit): settings are read once per turn, so an ongoing run keeps a capability the user just turned off until it ends. An injected instruction could make the chat write or overwrite `docs/plans/<slug>.md` when `allowPlanWrites` is on; a later privileged pipeline (Phase 4/5 workers with Bash) must not follow an unreviewed plan.
 - T10 must pass `settings: settingsStore` when constructing `ChatService` (`src/main/ipc/register.ts:19` does not yet; production runs use the safe defaults until then) and compute `sessionReset = needsSessionReset(previous, saved)` in `settings:set` from `store.get(projectId).settings` taken before the save.
+- Wave 5 verify: 1 round plus one fix commit, no majors. Fixed: `readToolkitInfo` now stats `plugin.json` first and requires a regular file within the size cap before a non-blocking open (a FIFO would have blocked the main process; the FIFO test is skipped on win32); `bootstrapStores(dataDir)` extracted and tested for the database-open-failure path; `createSettingsStore(db)` falls back to the unavailable store if it throws instead of quitting the app.
+- Out-of-scope files accepted in wave 5 (tests of owned files, minimal edits): `src/main/index.test.ts`, `src/preload/index.test.ts`.
+- T10 contract names: the plan's prose says getSettings/setSettings/getAppInfo; the real `DeskApi` methods are `settingsGet`, `settingsSet`, `appInfo` (channels `settings:get`, `settings:set`, `app:info`).
+- T10 note: `registerIpc(store, runStore?, settingsStore?)` takes the settings store as a third argument; handler deps for the settings store and `readToolkitInfo` are optional and default to the unavailable store and toolkit status `unset`, so Phase 2 tests keep compiling.
