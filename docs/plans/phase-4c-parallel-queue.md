@@ -191,7 +191,7 @@ Internal: `effectiveLimits(settings) -> { maxParallel, maxTurns, timeCapMs }` (s
 ## Wave 3: integration test
 
 ### T7: Parallel flow over real git
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: M
 - Sensitive: no
@@ -238,3 +238,4 @@ Internal: `effectiveLimits(settings) -> { maxParallel, maxTurns, timeCapMs }` (s
 - W2 reviewer F3 `orchestrator.ts:159-172`: the cancel check happens before the task is marked `running`; a cancel between it and the runner call relies on the runner honouring a pre-aborted signal (the real runner does); re-check `handle.cancelled` after the worktree is created.
 - W2 T4: the `MAX_TURNS` and `TIME_CAP_MS` exports in `workerRunner.ts` are now unused (the runner reads `effectiveLimits`); remove them later.
 - W2 flaky (not caused by 4c): `src/main/chat/gitTools.test.ts` "does not lazy-fetch missing objects in a partial clone (S3)" timed out at about 31 s once in a full parallel run; it passed alone (50/50) and in a second full run (1331 passed). Same kind of single failure as the 4a follow-up "W1 flaky".
+- W3 T7: `tests/phase-4c-flow.test.ts` takes about 128 s on Windows (real git, 6 tests); the full suite is now about 250 s. The fake runner makes the first N entrants wait for each other (30 s deadline) so the concurrency assertions are deterministic. The conflict test commits to the shared file directly with git inside the worktrees (it skips the write guard on purpose).
