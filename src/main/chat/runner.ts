@@ -23,7 +23,7 @@ export type RunnerItem =
   | { kind: 'session'; sessionId: string }
   | { kind: 'activity'; draft: ActivityDraft }
   | { kind: 'usage'; usage: RunUsage; agents: AgentUsage[] }
-  | { kind: 'proposal'; name: string; brief: string }
+  | { kind: 'proposal'; name: string; brief: string; worker: string | null }
 
 export interface RunnerArgs {
   prompt: string

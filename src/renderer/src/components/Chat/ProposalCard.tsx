@@ -13,12 +13,13 @@ const ERRORS: Record<string, string> = {
 export interface ProposalCardProps {
   name: string
   brief: string
-  onCreated: (project: Project, brief: string) => void
+  worker: string | null
+  onCreated: (project: Project, planFile: string | null) => void
   onCancel: () => void
 }
 
 /** Confirmation for an assistant-proposed project. Only the click creates anything. */
-export function ProposalCard({ name, brief, onCreated, onCancel }: ProposalCardProps) {
+export function ProposalCard({ name, brief, worker, onCreated, onCancel }: ProposalCardProps) {
   const [root, setRoot] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [working, setWorking] = useState(false)
@@ -39,8 +40,8 @@ export function ProposalCard({ name, brief, onCreated, onCancel }: ProposalCardP
     setWorking(true)
     setError(null)
     try {
-      const r: ProjectsCreateResult = await window.api.createProject({ name })
-      if (r.ok) onCreated(r.project, brief)
+      const r: ProjectsCreateResult = await window.api.createProject({ name, brief, ...(worker ? { worker } : {}) })
+      if (r.ok) onCreated(r.project, r.planFile)
       else setError(ERRORS[r.error] ?? 'Could not create the project.')
     } catch {
       setError('Could not create the project.')
@@ -56,7 +57,11 @@ export function ProposalCard({ name, brief, onCreated, onCancel }: ProposalCardP
         Create project <strong>{name}</strong>
       </p>
       <p>{root === null ? 'No projects folder set.' : `Folder: ${root}${sep}${name}`}</p>
-      <p>A git repository is created and a session starts with this brief: {brief}</p>
+      <p>
+        A git repository is created on main, the brief is saved as docs/plans/bootstrap.md and a pipeline run starts
+        {worker ? ` (${worker})` : ''}. Its workers may run allow-listed commands such as npm install in this project.
+      </p>
+      <blockquote>{brief}</blockquote>
       {error && <p role="alert">{error}</p>}
       <button type="button" onClick={() => void pickRoot()}>
         {root === null ? 'Choose projects folder' : 'Change folder'}

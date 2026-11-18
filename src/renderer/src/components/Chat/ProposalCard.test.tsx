@@ -15,19 +15,19 @@ const project = { id: 'p', name: 'demo-app', path: '/r/demo-app', branch: 'main'
 describe('ProposalCard', () => {
   it('creates nothing until the user clicks, then hands off with the brief', async () => {
     api.projectsRootGet.mockResolvedValue({ root: '/r' })
-    api.createProject.mockResolvedValue({ ok: true, project })
+    api.createProject.mockResolvedValue({ ok: true, project, planFile: 'bootstrap.md' })
     const onCreated = vi.fn()
-    render(<ProposalCard name="demo-app" brief="add a README" onCreated={onCreated} onCancel={vi.fn()} />)
+    render(<ProposalCard name="demo-app" brief="add a README" worker="python-developer" onCreated={onCreated} onCancel={vi.fn()} />)
     await screen.findByText('Folder: /r/demo-app')
     expect(api.createProject).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }))
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(project, 'add a README'))
-    expect(api.createProject).toHaveBeenCalledWith({ name: 'demo-app' })
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(project, 'bootstrap.md'))
+    expect(api.createProject).toHaveBeenCalledWith({ name: 'demo-app', brief: 'add a README', worker: 'python-developer' })
   })
 
   it('needs a projects folder and shows creation errors', async () => {
     api.projectsRootGet.mockResolvedValue({ root: null })
-    render(<ProposalCard name="demo-app" brief="b" onCreated={vi.fn()} onCancel={vi.fn()} />)
+    render(<ProposalCard name="demo-app" brief="b" worker={null} onCreated={vi.fn()} onCancel={vi.fn()} />)
     expect(await screen.findByText('No projects folder set.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Create project' })).toBeDisabled()
     api.projectsRootPick.mockResolvedValue({ root: '/r' })

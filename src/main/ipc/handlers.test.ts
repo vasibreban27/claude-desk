@@ -294,6 +294,29 @@ describe('settings and app info', () => {
     expect(await h.createProject({ name: 'ok-name' })).toEqual({ ok: false, error: 'no-root' })
   })
 
+  it('projects:create with a brief writes the plan and enables allow-listed commands for that project', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const root = mkdtempSync(join(tmpdir(), 'hcreate-'))
+    try {
+      const project = { id: '11111111-1111-4111-8111-111111111111', name: 'demo-app', path: join(root, 'demo-app'), branch: 'main', dirty: false, addedAt: 'x' }
+      const store = { list: async () => [], get: async () => undefined, update: async () => undefined, add: async () => ({ ok: true as const, project }) }
+      const set = vi.fn(() => ({ ok: true as const, settings: {} as never }))
+      const h = setup({
+        store,
+        appSettings: { getProjectsRoot: async () => root, setProjectsRoot: async () => undefined },
+        gitRun: async () => undefined,
+        settingsStore: { get: () => ({ settings: {} as never, notice: null }), set } as never
+      }).h
+      const r = await h.createProject({ name: 'demo-app', brief: 'a todo API', worker: 'node-developer' })
+      expect(r).toMatchObject({ ok: true, planFile: 'bootstrap.md' })
+      expect(set).toHaveBeenCalledWith(project.id, expect.objectContaining({ allowCommands: true }))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('projects:root-pick stores the picked folder', async () => {
     let root: string | null = null
     const appSettings = { getProjectsRoot: async () => root, setProjectsRoot: async (r: string) => { root = r } }

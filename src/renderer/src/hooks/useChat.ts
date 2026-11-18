@@ -15,7 +15,7 @@ export interface UseChat {
   error: string | null
   send: (text: string) => Promise<void>
   /** A project the assistant proposed; nothing exists until the user confirms. */
-  proposal: { name: string; brief: string } | null
+  proposal: { name: string; brief: string; worker: string | null } | null
   clearProposal: () => void
 }
 
@@ -25,7 +25,7 @@ interface ChatState {
   loading: boolean
   busy: boolean
   error: string | null
-  proposal: { name: string; brief: string } | null
+  proposal: { name: string; brief: string; worker: string | null } | null
 }
 
 const empty = (projectId: string | null): ChatState => ({
@@ -49,7 +49,7 @@ function applyEvent(state: ChatState, event: ChatEvent): ChatState {
     const created: ChatMessage = { id, role: 'assistant', text: event.text, at: new Date().toISOString() }
     return { ...state, messages: [...state.messages, created] }
   }
-  if (event.type === 'proposal') return { ...state, proposal: { name: event.name, brief: event.brief } }
+  if (event.type === 'proposal') return { ...state, proposal: { name: event.name, brief: event.brief, worker: event.worker } }
   if (event.type === 'done') return { ...state, busy: false }
   return { ...state, busy: false, error: event.message }
 }

@@ -41,7 +41,7 @@ import type { ChatService } from '../chat/service'
 import { emptySummary, type RunStore } from '../db'
 import { createSettingsStore, type SettingsStore } from '../db/settingsStore'
 import type { PipelineService } from '../pipeline/service'
-import { needsSessionReset } from '../../shared/settings'
+import { defaultSettings, needsSessionReset } from '../../shared/settings'
 
 export interface HandlerDeps {
   store: ProjectStore
@@ -210,7 +210,22 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       if (!req.success) return { ok: false, error: 'invalid-name' }
       try {
         const root = (await deps.appSettings?.getProjectsRoot()) ?? null
-        return await createProject(root, req.data.name, { store: deps.store, ...(deps.gitRun ? { git: deps.gitRun } : {}) }, { claudeMd: req.data.claudeMd === true })
+        const created = await createProject(
+          root,
+          req.data.name,
+          { store: deps.store, ...(deps.gitRun ? { git: deps.gitRun } : {}) },
+          {
+            claudeMd: req.data.claudeMd === true,
+            ...(req.data.brief !== undefined ? { brief: req.data.brief } : {}),
+            ...(req.data.worker !== undefined ? { worker: req.data.worker } : {})
+          }
+        )
+        // A project the assistant bootstraps may run allow-listed commands (npm install, venv, ...) in its workers.
+        if (created.ok && created.planFile !== null) {
+          const saved = settingsStore.set(created.project.id, { ...defaultSettings(), allowCommands: true })
+          if (!saved.ok) console.error('projects:create: could not enable commands:', saved.error)
+        }
+        return created
       } catch (err) {
         console.error('projects:create failed:', errName(err))
         return { ok: false, error: 'register-failed' }

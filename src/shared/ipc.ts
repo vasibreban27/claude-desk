@@ -232,11 +232,14 @@ export type ProjectsPickAndAddResult =
 
 export const projectsCreateRequestSchema = z.object({
   name: z.string().min(1).max(100),
-  claudeMd: z.boolean().optional()
+  claudeMd: z.boolean().optional(),
+  /** The assistant's brief: becomes docs/plans/bootstrap.md and the first pipeline run. */
+  brief: z.string().max(2000).optional(),
+  worker: z.string().max(40).optional()
 })
 export type ProjectsCreateRequest = z.infer<typeof projectsCreateRequestSchema>
 export type ProjectsCreateResult =
-  | { ok: true; project: Project }
+  | { ok: true; project: Project; planFile: string | null }
   | { ok: false; error: 'invalid-name' | 'no-root' | 'exists' | 'escape' | 'git-failed' | 'register-failed' }
 export type ProjectsRootResult = { root: string | null }
 
@@ -305,7 +308,7 @@ export type ChatEvent =
   | { projectId: string; turnId: string; type: 'text-delta'; text: string }
   | { projectId: string; turnId: string; type: 'done' }
   | { projectId: string; turnId: string; type: 'error'; message: string }
-  | { projectId: string; turnId: string; type: 'proposal'; name: string; brief: string }
+  | { projectId: string; turnId: string; type: 'proposal'; name: string; brief: string; worker: string | null }
 
 /** A change signal; the renderer re-fetches pipeline:status. */
 export interface PipelineEvent {

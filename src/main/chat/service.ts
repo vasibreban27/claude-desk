@@ -110,7 +110,7 @@ export class ChatService {
         } else if (item.kind === 'activity') {
           this.recordActivity(run, item.draft)
         } else if (item.kind === 'proposal') {
-          this.deps.emit({ projectId, turnId, type: 'proposal', name: item.name, brief: item.brief })
+          this.deps.emit({ projectId, turnId, type: 'proposal', name: item.name, brief: item.brief, worker: item.worker })
         } else if (item.kind === 'usage') {
           run.usage = item
         } else {
