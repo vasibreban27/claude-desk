@@ -80,7 +80,8 @@ describe('SettingsPanel', () => {
         model: 'opus',
         protectedPaths: ['a.txt', 'secret/'],
         allowGitRead: true,
-        allowPlanWrites: false
+        allowPlanWrites: false,
+        checks: []
       }
     })
     expect(screen.getByLabelText('Model')).toHaveValue('opus')
@@ -258,14 +259,17 @@ describe('Workspace settings tab', () => {
     Object.assign(api, {
       activityHistory: vi.fn().mockResolvedValue([]),
       onActivityEvent: vi.fn().mockReturnValue(() => undefined),
-      usageSummary: vi.fn().mockReturnValue(new Promise(() => undefined))
+      usageSummary: vi.fn().mockReturnValue(new Promise(() => undefined)),
+      pipelinePlans: vi.fn().mockReturnValue(new Promise(() => undefined)),
+      pipelineStatus: vi.fn().mockReturnValue(new Promise(() => undefined)),
+      onPipelineEvent: vi.fn().mockReturnValue(() => undefined)
     })
   })
 
   it('adds a third Settings tab with the same keyboard pattern and stores the key', async () => {
     render(<Workspace projectId={P1} />)
     const tabs = screen.getAllByRole('tab').map((t) => t.textContent)
-    expect(tabs).toEqual(['Activity', 'Usage', 'Settings'])
+    expect(tabs).toEqual(['Activity', 'Pipeline', 'Usage', 'Settings'])
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Activity' }), { key: 'End' })
     const settings = screen.getByRole('tab', { name: 'Settings' })
     expect(settings).toHaveAttribute('aria-selected', 'true')

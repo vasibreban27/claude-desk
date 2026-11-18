@@ -32,6 +32,13 @@ export interface PlanTask {
   dependsOn: string[]
   acceptance: string[]
   contract: string
+  /** Present for `flow-plan/1` plans only. */
+  size?: 'S' | 'M'
+  sensitive?: boolean
+  model?: 'haiku' | 'sonnet' | 'opus'
+  tests?: 'writer'
+  readFirst?: string[]
+  doneWhen?: string
 }
 
 export interface PlanWave {
@@ -42,6 +49,9 @@ export interface PlanWave {
 export interface ParsedPlan {
   title: string
   waves: PlanWave[]
+  format: 'flow-plan/1' | 'legacy'
+  /** The `Autonomy:` header (flow-plan/1 only), or null. */
+  autonomy: string | null
 }
 
 export interface PlanError {
@@ -53,7 +63,21 @@ export interface PlanError {
 export type PlanParseResult = { ok: true; plan: ParsedPlan } | { ok: false; errors: PlanError[] }
 
 const FIELDS = ['Status', 'Worker', 'Contract', 'Owns', 'Depends on', 'Acceptance criteria'] as const
-type Field = (typeof FIELDS)[number]
+const FLOW_REQUIRED = [
+  'Status',
+  'Worker',
+  'Size',
+  'Sensitive',
+  'Contract',
+  'Owns',
+  'Read first',
+  'Depends on',
+  'Done when',
+  'Acceptance criteria'
+] as const
+const FLOW_FIELDS = [...FLOW_REQUIRED, 'Model', 'Tests'] as const
+type Field = (typeof FLOW_FIELDS)[number]
+const AUTONOMY_VALUES = ['supervised', 'checkpoints', 'autonomous']
 
 function normalizePath(p: string, platform: NodeJS.Platform): string {
   let n = p.replace(/\\/g, '/')
@@ -112,6 +136,14 @@ function isDefaultProtected(p: string): boolean {
   return matcher.isProtected(path.join(root, ...rel.split('/')))
 }
 
+/** Comma separated list, each item with optional surrounding backticks. */
+function splitList(value: string): string[] {
+  return value
+    .split(',')
+    .map((x) => x.trim().replace(/^`|`$/g, '').trim())
+    .filter((x) => x !== '')
+}
+
 interface DraftTask {
   id: string
   title: string
@@ -132,6 +164,14 @@ export function parsePlan(
     return { ok: false, errors: [{ line: 0, message: `plan is larger than ${MAX_PLAN_BYTES / 1024} KiB` }] }
   }
   const lines = markdown.split(/\r?\n/)
+  const formatLine = /^Format:\s*(.*?)\s*$/.exec(lines[0] as string)
+  if (formatLine !== null && (formatLine[1] as string) !== 'flow-plan/1') {
+    return {
+      ok: false,
+      errors: [{ line: 1, message: `unsupported plan format "${formatLine[1] as string}" (expected "flow-plan/1")` }]
+    }
+  }
+  const flow = formatLine !== null
   const taskCount = lines.filter((l) => /^###\s+T\d+\s*:/.test(l)).length
   if (taskCount > MAX_PLAN_TASKS) {
     return { ok: false, errors: [{ line: 0, message: `plan has more than ${MAX_PLAN_TASKS} tasks (${taskCount})` }] }
@@ -143,6 +183,8 @@ export function parsePlan(
   }
 
   let title = ''
+  let autonomy: string | null = null
+  let inHeader = flow
   let inTasks = false
   let sawTasksSection = false
   const waves: { n: number; line: number }[] = []
@@ -154,12 +196,49 @@ export function parsePlan(
     const lineNo = i + 1
     const line = lines[i] as string
 
+    if (flow && inHeader) {
+      if (i === 0) continue
+      if (/^#/.test(line)) {
+        inHeader = false
+      } else {
+        if (line.trim() === '') continue
+        const kv = /^([A-Za-z][A-Za-z ]*?):\s*(.*?)\s*$/.exec(line)
+        if (kv === null) {
+          err(lineNo, 'unexpected text before the first heading (expected "Key: value" header lines)')
+        } else if (kv[1] === 'Autonomy') {
+          if (autonomy !== null) err(lineNo, 'duplicate header "Autonomy"')
+          else if (!AUTONOMY_VALUES.includes(kv[2] as string)) {
+            err(lineNo, `invalid Autonomy "${kv[2] as string}" (expected ${AUTONOMY_VALUES.join(' | ')})`)
+          } else autonomy = kv[2] as string
+        } else if (kv[1] === 'Format') {
+          err(lineNo, 'duplicate header "Format"')
+        } else {
+          err(lineNo, `unknown header "${kv[1] as string}" (expected Format or Autonomy)`)
+        }
+        continue
+      }
+    }
+
+    if (flow) {
+      const wave = /^##\s+Wave\s+(\d+)(?!\d)/.exec(line)
+      if (wave) {
+        const n = Number(wave[1])
+        const expected = waves.length + 1
+        if (n !== expected) err(lineNo, `wave heading must be "Wave ${expected}" (waves ascend from 1), found "Wave ${n}"`)
+        waves.push({ n, line: lineNo })
+        inTasks = true
+        current = null
+        currentField = null
+        continue
+      }
+    }
+
     if (title === '' && /^#\s+/.test(line)) {
       title = line.replace(/^#\s+/, '').replace(/^Plan:\s*/i, '').trim()
       continue
     }
     if (/^##\s+/.test(line) && !/^###/.test(line)) {
-      inTasks = /^##\s+(\d+\.\s*)?Tasks\b/i.test(line)
+      inTasks = !flow && /^##\s+(\d+\.\s*)?Tasks\b/i.test(line)
       if (inTasks) sawTasksSection = true
       current = null
       currentField = null
@@ -172,7 +251,7 @@ export function parsePlan(
       const text = (heading[1] as string).trim()
       current = null
       currentField = null
-      const wave = /^Wave\s+(\d+)\s*$/.exec(text)
+      const wave = flow ? null : /^Wave\s+(\d+)\s*$/.exec(text)
       if (wave) {
         const n = Number(wave[1])
         const expected = waves.length + 1
@@ -207,7 +286,7 @@ export function parsePlan(
     const field = /^-\s+([A-Za-z][A-Za-z ]*?):\s*(.*)$/.exec(line)
     if (field) {
       const name = field[1] as string
-      if (!(FIELDS as readonly string[]).includes(name)) {
+      if (!((flow ? FLOW_FIELDS : FIELDS) as readonly string[]).includes(name)) {
         err(lineNo, `unknown field "${name}" in task ${current.id}`)
         currentField = null
         continue
@@ -235,9 +314,13 @@ export function parsePlan(
     }
   }
 
-  if (title === '') err(0, 'plan has no "# " title line')
-  if (!sawTasksSection) err(0, 'plan has no "## Tasks" section')
-  else if (waves.length === 0) err(0, 'tasks section has no "### Wave <n>" heading')
+  if (flow) {
+    if (waves.length === 0) err(0, 'plan has no "## Wave <n>" heading')
+  } else {
+    if (title === '') err(0, 'plan has no "# " title line')
+    if (!sawTasksSection) err(0, 'plan has no "## Tasks" section')
+    else if (waves.length === 0) err(0, 'tasks section has no "### Wave <n>" heading')
+  }
 
   // Per-task validation and construction.
   const idToWave = new Map<string, number>()
@@ -254,7 +337,7 @@ export function parsePlan(
   const built = new Map<string, PlanTask>()
   for (const d of drafts) {
     let valid = true
-    for (const f of FIELDS) {
+    for (const f of flow ? FLOW_REQUIRED : FIELDS) {
       if (!d.fields.has(f)) {
         err(d.line, `task ${d.id} is missing the field "${f}"`)
         valid = false
@@ -271,7 +354,9 @@ export function parsePlan(
     }
 
     const ownsField = get('Owns')
-    const owns = [...ownsField.value.matchAll(/`([^`]*)`/g)].map((m) => (m[1] as string).trim())
+    const owns = flow
+      ? splitList(ownsField.value)
+      : [...ownsField.value.matchAll(/`([^`]*)`/g)].map((m) => (m[1] as string).trim())
     if (owns.length === 0) {
       err(ownsField.line, `task ${d.id} has an empty Owns (list paths in backticks)`)
       valid = false
@@ -313,8 +398,58 @@ export function parsePlan(
       valid = false
     }
 
+    const extra: Partial<PlanTask> = {}
+    if (flow) {
+      const size = get('Size')
+      if (size.value === 'S' || size.value === 'M') extra.size = size.value
+      else {
+        err(
+          size.line,
+          size.value === 'L'
+            ? `task ${d.id} field "Size" is L: split the task`
+            : `task ${d.id} field "Size" must be S or M, found "${size.value}"`
+        )
+        valid = false
+      }
+      const sens = get('Sensitive')
+      if (sens.value === 'yes' || sens.value === 'no') extra.sensitive = sens.value === 'yes'
+      else {
+        err(sens.line, `task ${d.id} field "Sensitive" must be yes or no, found "${sens.value}"`)
+        valid = false
+      }
+      const model = d.fields.get('Model')
+      if (model !== undefined) {
+        if (model.value === 'haiku' || model.value === 'sonnet' || model.value === 'opus') extra.model = model.value
+        else {
+          err(model.line, `task ${d.id} field "Model" must be haiku, sonnet or opus, found "${model.value}"`)
+          valid = false
+        }
+      }
+      const tests = d.fields.get('Tests')
+      if (tests !== undefined) {
+        if (tests.value === 'writer') extra.tests = 'writer'
+        else {
+          err(tests.line, `task ${d.id} field "Tests" must be writer, found "${tests.value}"`)
+          valid = false
+        }
+      }
+      const read = get('Read first')
+      const readFirst = splitList(read.value)
+      if (readFirst.length === 0) {
+        err(read.line, `task ${d.id} field "Read first" is empty`)
+        valid = false
+      } else extra.readFirst = readFirst
+      const done = get('Done when')
+      const cmds = [...done.value.matchAll(/`([^`]*)`/g)].map((m) => (m[1] as string).trim())
+      if (cmds.length !== 1 || cmds[0] === '') {
+        err(done.line, `task ${d.id} field "Done when" must contain exactly one command in backticks`)
+        valid = false
+      } else extra.doneWhen = cmds[0] as string
+    }
+
     if (valid && !built.has(d.id)) {
       built.set(d.id, {
+        ...extra,
         id: d.id,
         title: d.title,
         worker: worker.value,
@@ -352,5 +487,8 @@ export function parsePlan(
     n: wv.n,
     tasks: drafts.filter((d) => d.waveIndex === idx).map((d) => built.get(d.id) as PlanTask)
   }))
-  return { ok: true, plan: { title, waves: planWaves } }
+  return {
+    ok: true,
+    plan: { title, waves: planWaves, format: flow ? 'flow-plan/1' : 'legacy', autonomy }
+  }
 }

@@ -2,16 +2,19 @@ import { useRef, useState, type KeyboardEvent } from 'react'
 import { ActivityFeed } from '../Activity'
 import { UsagePanel } from '../Usage'
 import { SettingsPanel } from '../Settings'
+import { PipelinePanel } from '../Pipeline'
+import { usePipeline } from '../../hooks/usePipeline'
 import { useActivity } from '../../hooks/useActivity'
 import { useUsage } from '../../hooks/useUsage'
 import './workspace.css'
 
-export type WorkspaceTab = 'activity' | 'usage' | 'settings'
+export type WorkspaceTab = 'activity' | 'pipeline' | 'usage' | 'settings'
 
 export const WORKSPACE_TAB_KEY = 'claude-desk:workspace-tab'
 
 const TABS: { id: WorkspaceTab; label: string }[] = [
   { id: 'activity', label: 'Activity' },
+  { id: 'pipeline', label: 'Pipeline' },
   { id: 'usage', label: 'Usage' },
   { id: 'settings', label: 'Settings' }
 ]
@@ -19,7 +22,7 @@ const TABS: { id: WorkspaceTab; label: string }[] = [
 export function readStoredTab(): WorkspaceTab {
   try {
     const raw = localStorage.getItem(WORKSPACE_TAB_KEY)
-    return raw === 'usage' || raw === 'activity' || raw === 'settings' ? raw : 'activity'
+    return raw === 'usage' || raw === 'activity' || raw === 'settings' || raw === 'pipeline' ? raw : 'activity'
   } catch {
     return 'activity'
   }
@@ -40,6 +43,7 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
   }>({ baselineFor: null, seenRunId: null, signal: 0 })
   const tabRefs = useRef<Record<WorkspaceTab, HTMLButtonElement | null>>({
     activity: null,
+    pipeline: null,
     usage: null,
     settings: null
   })
@@ -64,6 +68,8 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
     }
   }
   const usage = useUsage(projectId, refresh.signal)
+  // Subscribe only while the tab is open so existing Workspace tests need no pipeline bridge.
+  const pipeline = usePipeline(tab === 'pipeline' ? projectId : null)
 
   function select(next: WorkspaceTab, focus = false) {
     setTab(next)
@@ -119,6 +125,8 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
       >
         {tab === 'activity' ? (
           <ActivityFeed events={activity.events} loading={activity.loading} error={activity.error} hasProject />
+        ) : tab === 'pipeline' ? (
+          <PipelinePanel {...pipeline} />
         ) : tab === 'usage' ? (
           <UsagePanel {...usage} projectNames={projectNames} />
         ) : (

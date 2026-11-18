@@ -235,7 +235,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
     if (finalStatus !== 'failed') {
       const values = [...status.values()]
-      if (handle.cancelled || values.includes('cancelled')) finalStatus = 'cancelled'
+      // A cancel that arrives after the last task merged loses nothing: the run stays `done` (F3).
+      if (values.includes('cancelled')) finalStatus = 'cancelled'
       else if (values.some((s) => s === 'failed' || s === 'blocked')) finalStatus = 'failed'
     }
     const writeStatus = (): boolean => {

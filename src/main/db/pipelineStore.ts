@@ -89,6 +89,62 @@ export interface PipelineStore {
   listTasks(runId: string): StoreResult<PipelineTaskRow[]>
   /** Running tasks become failed (`interrupted`), their runs failed; returns the task count. */
   markInterrupted(now?: number): StoreResult<number>
+  /** The newest run of a project (null when it has none). */
+  latestRunForProject(projectId: string): StoreResult<PipelineRunRow | null>
+  /** Deletes the run and its tasks in one transaction. */
+  deleteRun(runId: string): StoreResult<true>
+}
+
+/** Called after each successful write with the project and run it touched. */
+export type PipelineChangeEmit = (event: { projectId: string; runId: string }) => void
+
+/**
+ * Wraps a store so that every write (createRun, updateTask, setRunStatus, deleteRun) emits one change event.
+ * Return values are unchanged and an `emit` that throws never breaks a write.
+ */
+export function withChangeEvents(inner: PipelineStore, emit: PipelineChangeEmit): PipelineStore {
+  const fire = (projectId: string, runId: string): void => {
+    try {
+      emit({ projectId, runId })
+    } catch {
+      // a broken listener must not break the write
+    }
+  }
+  const projectOf = (runId: string): string | null => {
+    try {
+      const r = inner.getRun(runId)
+      return r.ok ? r.value.projectId : null
+    } catch {
+      return null
+    }
+  }
+  return {
+    ...inner,
+    createRun(input) {
+      const r = inner.createRun(input)
+      if (r.ok) fire(input.projectId, input.id)
+      return r
+    },
+    updateTask(runId, taskId, patch) {
+      const r = inner.updateTask(runId, taskId, patch)
+      if (r.ok) {
+        const p = projectOf(runId)
+        if (p !== null) fire(p, runId)
+      }
+      return r
+    },
+    setRunStatus(runId, status, finishedAt) {
+      const r = inner.setRunStatus(runId, status, finishedAt)
+      if (r.ok) fire(r.value.projectId, runId)
+      return r
+    },
+    deleteRun(runId) {
+      const p = projectOf(runId)
+      const r = inner.deleteRun(runId)
+      if (r.ok && p !== null) fire(p, runId)
+      return r
+    }
+  }
 }
 
 const PATCH_COLUMNS: Record<keyof TaskPatch, string> = {
@@ -204,7 +260,9 @@ export function createPipelineStore(
       setRunStatus: () => UNAVAILABLE,
       getRun: () => UNAVAILABLE,
       listTasks: () => UNAVAILABLE,
-      markInterrupted: () => UNAVAILABLE
+      markInterrupted: () => UNAVAILABLE,
+      latestRunForProject: () => UNAVAILABLE,
+      deleteRun: () => UNAVAILABLE
     }
   }
 
@@ -222,6 +280,15 @@ export function createPipelineStore(
   const selectTasks = db.prepare(
     'SELECT * FROM pipeline_tasks WHERE run_id = ? ORDER BY wave, rowid'
   )
+  const selectLatest = db.prepare(
+    'SELECT * FROM pipeline_runs WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1'
+  )
+  const deleteTasksStmt = db.prepare('DELETE FROM pipeline_tasks WHERE run_id = ?')
+  const deleteRunStmt = db.prepare('DELETE FROM pipeline_runs WHERE id = ?')
+  const deleteTx = db.transaction((runId: string): boolean => {
+    deleteTasksStmt.run(runId)
+    return deleteRunStmt.run(runId).changes > 0
+  })
   const updateRunStmt = db.prepare('UPDATE pipeline_runs SET status = ?, finished_at = ? WHERE id = ?')
   const interruptTasks = db.prepare(
     `UPDATE pipeline_tasks SET status = 'failed', reason = 'interrupted', finished_at = ?
@@ -336,6 +403,23 @@ export function createPipelineStore(
       try {
         const rows = selectTasks.all(runId) as TaskDbRow[]
         return { ok: true, value: rows.map(toTask) }
+      } catch (e) {
+        return fail(e)
+      }
+    },
+
+    latestRunForProject(projectId) {
+      try {
+        const row = selectLatest.get(projectId) as RunDbRow | undefined
+        return { ok: true, value: row === undefined ? null : toRun(row) }
+      } catch (e) {
+        return fail(e)
+      }
+    },
+
+    deleteRun(runId) {
+      try {
+        return deleteTx(runId) ? { ok: true, value: true } : { ok: false, error: 'not-found' }
       } catch (e) {
         return fail(e)
       }

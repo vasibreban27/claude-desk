@@ -21,7 +21,13 @@ export const IPC = {
   usageSummary: 'usage:summary',
   settingsGet: 'settings:get',
   settingsSet: 'settings:set',
-  appInfo: 'app:info'
+  appInfo: 'app:info',
+  pipelinePlans: 'pipeline:plans',
+  pipelineStart: 'pipeline:start',
+  pipelineStatus: 'pipeline:status',
+  pipelineCancel: 'pipeline:cancel',
+  pipelineDiscard: 'pipeline:discard',
+  pipelineEvent: 'pipeline:event'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -81,7 +87,105 @@ export const settingsSetRequestSchema = z.object({
 })
 export type SettingsSetRequest = z.infer<typeof settingsSetRequestSchema>
 
+export const pipelinePlansRequestSchema = z.object({ projectId: z.uuid() })
+export type PipelinePlansRequest = z.infer<typeof pipelinePlansRequestSchema>
+
+export const PLAN_FILE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.md$/
+export const pipelineStartRequestSchema = z.object({
+  projectId: z.uuid(),
+  /** The whole name is at most 100 characters. */
+  planFile: z.string().max(100).regex(PLAN_FILE_PATTERN)
+})
+export type PipelineStartRequest = z.infer<typeof pipelineStartRequestSchema>
+
+export const pipelineStatusRequestSchema = z.object({ projectId: z.uuid() })
+export type PipelineStatusRequest = z.infer<typeof pipelineStatusRequestSchema>
+
+export const pipelineCancelRequestSchema = z.object({
+  projectId: z.uuid(),
+  runId: z.string().min(1)
+})
+export type PipelineCancelRequest = z.infer<typeof pipelineCancelRequestSchema>
+
+export const pipelineDiscardRequestSchema = z.object({
+  projectId: z.uuid(),
+  runId: z.string().min(1)
+})
+export type PipelineDiscardRequest = z.infer<typeof pipelineDiscardRequestSchema>
+
 // --- Results ----------------------------------------------------------------
+
+export type PlanFormat = 'flow-plan/1' | 'legacy'
+
+export interface PlanEntry {
+  file: string
+  title: string | null
+  format: PlanFormat
+  ok: boolean
+  taskCount: number
+  waveCount: number
+  errorCount: number
+  /** At most 20. */
+  errors: { line: number; message: string }[]
+}
+
+export type PipelinePlansResult =
+  | { ok: true; plans: PlanEntry[] }
+  | { ok: false; error: 'not-found' | 'unreadable' }
+
+export type PipelineStartError =
+  | 'not-found'
+  | 'invalid-plan'
+  | 'busy'
+  | 'no-toolkit'
+  | 'detached-head'
+  | 'storage-unavailable'
+  | 'start-failed'
+export type PipelineStartResult =
+  | { ok: true; runId: string }
+  | { ok: false; error: PipelineStartError; message?: string }
+
+export type PipelineRunStatus = 'running' | 'done' | 'failed' | 'cancelled'
+export type PipelineTaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'blocked' | 'cancelled'
+
+export interface PipelineTaskView {
+  taskId: string
+  title: string
+  worker: string
+  wave: number
+  dependsOn: string[]
+  status: PipelineTaskStatus
+  reason: string | null
+  /** 7 chars. */
+  commit: string | null
+  checks: 'passed' | 'failed' | 'none' | null
+  turns: number | null
+  costUsd: number | null
+  durationMs: number | null
+}
+
+export interface PipelineRunView {
+  runId: string
+  planFile: string
+  status: PipelineRunStatus
+  active: boolean
+  baseBranch: string
+  integrationBranch: string
+  /** ISO-8601. */
+  createdAt: string
+  finishedAt: string | null
+  tasks: PipelineTaskView[]
+}
+
+export type PipelineStatusResult =
+  | { ok: true; run: PipelineRunView | null }
+  | { ok: false; error: 'not-found' | 'storage-unavailable' }
+
+export type PipelineCancelResult = { ok: true } | { ok: false; error: 'not-found' | 'not-active' }
+
+export type PipelineDiscardResult =
+  | { ok: true }
+  | { ok: false; error: 'not-found' | 'active' | 'cleanup-failed' }
 
 export type SettingsNotice = 'defaults-applied' | 'storage-unavailable'
 export type SettingsGetResult =
@@ -177,6 +281,12 @@ export type ChatEvent =
   | { projectId: string; turnId: string; type: 'done' }
   | { projectId: string; turnId: string; type: 'error'; message: string }
 
+/** A change signal; the renderer re-fetches pipeline:status. */
+export interface PipelineEvent {
+  projectId: string
+  runId: string
+}
+
 export type ActivityEventBody =
   | { type: 'run-started' }
   | { type: 'tool-started'; toolUseId: string; tool: string; summary: string }
@@ -223,6 +333,13 @@ export interface DeskApi {
   settingsGet(req: SettingsGetRequest): Promise<SettingsGetResult>
   settingsSet(req: SettingsSetRequest): Promise<SettingsSetResult>
   appInfo(): Promise<AppInfoResult>
+  pipelinePlans(req: PipelinePlansRequest): Promise<PipelinePlansResult>
+  pipelineStart(req: PipelineStartRequest): Promise<PipelineStartResult>
+  pipelineStatus(req: PipelineStatusRequest): Promise<PipelineStatusResult>
+  pipelineCancel(req: PipelineCancelRequest): Promise<PipelineCancelResult>
+  pipelineDiscard(req: PipelineDiscardRequest): Promise<PipelineDiscardResult>
+  /** Subscribe to pipeline change signals; returns an unsubscribe function. */
+  onPipelineEvent(listener: (event: PipelineEvent) => void): () => void
   /** Subscribe to activity events; returns an unsubscribe function. */
   onActivityEvent(listener: (event: ActivityEvent) => void): () => void
 }

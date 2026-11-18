@@ -297,7 +297,10 @@ describe('Settings gaps: keyboard on the Settings tab', () => {
     Object.assign(api, {
       activityHistory: vi.fn().mockResolvedValue([]),
       onActivityEvent: vi.fn().mockReturnValue(() => undefined),
-      usageSummary: vi.fn().mockReturnValue(new Promise(() => undefined))
+      usageSummary: vi.fn().mockReturnValue(new Promise(() => undefined)),
+      pipelinePlans: vi.fn().mockReturnValue(new Promise(() => undefined)),
+      pipelineStatus: vi.fn().mockReturnValue(new Promise(() => undefined)),
+      onPipelineEvent: vi.fn().mockReturnValue(() => undefined)
     })
   })
 
@@ -327,6 +330,7 @@ describe('Settings gaps: keyboard on the Settings tab', () => {
   it('ArrowRight from Usage selects Settings and End on Settings keeps it selected', () => {
     render(<Workspace projectId={P1} />)
     fireEvent.keyDown(tab('Activity'), { key: 'ArrowRight' })
+    fireEvent.keyDown(tab('Pipeline'), { key: 'ArrowRight' })
     fireEvent.keyDown(tab('Usage'), { key: 'ArrowRight' })
     expect(tab('Settings')).toHaveAttribute('aria-selected', 'true')
     fireEvent.keyDown(tab('Settings'), { key: 'End' })

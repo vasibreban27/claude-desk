@@ -3,6 +3,11 @@ import {
   usageSummaryRequestSchema,
   chatHistoryRequestSchema,
   chatSendRequestSchema,
+  pipelineCancelRequestSchema,
+  pipelineDiscardRequestSchema,
+  pipelinePlansRequestSchema,
+  pipelineStartRequestSchema,
+  pipelineStatusRequestSchema,
   projectsRefreshRequestSchema,
   settingsGetRequestSchema,
   settingsSetRequestSchema,
@@ -13,6 +18,11 @@ import {
   type UsageSummaryResult,
   type ChatHistoryResult,
   type ChatSendResult,
+  type PipelineCancelResult,
+  type PipelineDiscardResult,
+  type PipelinePlansResult,
+  type PipelineStartResult,
+  type PipelineStatusResult,
   type ProjectsListResult,
   type ProjectsPickAndAddResult,
   type ProjectsRefreshResult
@@ -22,6 +32,7 @@ import type { ProjectStore } from '../projects/store'
 import type { ChatService } from '../chat/service'
 import { emptySummary, type RunStore } from '../db'
 import { createSettingsStore, type SettingsStore } from '../db/settingsStore'
+import type { PipelineService } from '../pipeline/service'
 import { needsSessionReset } from '../../shared/settings'
 
 export interface HandlerDeps {
@@ -35,6 +46,8 @@ export interface HandlerDeps {
   /** Created in unavailable mode when the database could not be opened. */
   settingsStore?: SettingsStore
   readToolkitInfo?: () => AppInfoResult['toolkit']
+  /** Undefined when the pipeline could not be set up; pipeline calls then report storage-unavailable. */
+  pipeline?: PipelineService
 }
 
 export interface Handlers {
@@ -47,6 +60,11 @@ export interface Handlers {
   settingsGet(payload: unknown): Promise<SettingsGetResult>
   settingsSet(payload: unknown): Promise<SettingsSetResult>
   appInfo(): Promise<AppInfoResult>
+  pipelinePlans(payload: unknown): Promise<PipelinePlansResult>
+  pipelineStart(payload: unknown): Promise<PipelineStartResult>
+  pipelineStatus(payload: unknown): Promise<PipelineStatusResult>
+  pipelineCancel(payload: unknown): Promise<PipelineCancelResult>
+  pipelineDiscard(payload: unknown): Promise<PipelineDiscardResult>
   /**
    * `route` runs before the turn starts (events may be emitted synchronously) and returns
    * an undo function that is called when the send is rejected.
@@ -64,6 +82,8 @@ function requestedDays(payload: unknown): number {
 export function createHandlers(deps: HandlerDeps): Handlers {
   const settingsStore = deps.settingsStore ?? createSettingsStore(null)
   const readToolkitInfo = deps.readToolkitInfo ?? (() => ({ status: 'unset' as const, path: null, version: null }))
+  const pipeline = deps.pipeline
+  const errName = (err: unknown): string => (err instanceof Error ? err.name : 'unknown')
   return {
     async listProjects() {
       try {
@@ -167,6 +187,69 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       } catch (err) {
         console.error('app:info failed:', err instanceof Error ? err.name : 'unknown')
         return { toolkit: { status: 'invalid', path: null, version: null } }
+      }
+    },
+
+    async pipelinePlans(payload) {
+      const req = pipelinePlansRequestSchema.strict().safeParse(payload)
+      if (!req.success) return { ok: false, error: 'not-found' }
+      if (!pipeline) return { ok: false, error: 'unreadable' }
+      try {
+        return await pipeline.listPlans(req.data.projectId)
+      } catch (err) {
+        console.error('pipeline:plans failed:', errName(err))
+        return { ok: false, error: 'unreadable' }
+      }
+    },
+
+    async pipelineStart(payload) {
+      const req = pipelineStartRequestSchema.strict().safeParse(payload)
+      if (!req.success) {
+        const idOk = pipelinePlansRequestSchema.safeParse(payload).success
+        return { ok: false, error: idOk ? 'invalid-plan' : 'not-found' }
+      }
+      if (!pipeline) return { ok: false, error: 'storage-unavailable' }
+      try {
+        return await pipeline.start(req.data.projectId, req.data.planFile)
+      } catch (err) {
+        console.error('pipeline:start failed:', errName(err))
+        return { ok: false, error: 'start-failed' }
+      }
+    },
+
+    async pipelineStatus(payload) {
+      const req = pipelineStatusRequestSchema.strict().safeParse(payload)
+      if (!req.success) return { ok: false, error: 'not-found' }
+      if (!pipeline) return { ok: false, error: 'storage-unavailable' }
+      try {
+        return await pipeline.status(req.data.projectId)
+      } catch (err) {
+        console.error('pipeline:status failed:', errName(err))
+        return { ok: false, error: 'storage-unavailable' }
+      }
+    },
+
+    async pipelineCancel(payload) {
+      const req = pipelineCancelRequestSchema.strict().safeParse(payload)
+      if (!req.success) return { ok: false, error: 'not-found' }
+      if (!pipeline) return { ok: false, error: 'not-found' }
+      try {
+        return await pipeline.cancel(req.data.projectId, req.data.runId)
+      } catch (err) {
+        console.error('pipeline:cancel failed:', errName(err))
+        return { ok: false, error: 'not-found' }
+      }
+    },
+
+    async pipelineDiscard(payload) {
+      const req = pipelineDiscardRequestSchema.strict().safeParse(payload)
+      if (!req.success) return { ok: false, error: 'not-found' }
+      if (!pipeline) return { ok: false, error: 'cleanup-failed' }
+      try {
+        return await pipeline.discard(req.data.projectId, req.data.runId)
+      } catch (err) {
+        console.error('pipeline:discard failed:', errName(err))
+        return { ok: false, error: 'cleanup-failed' }
       }
     },
 

@@ -57,6 +57,12 @@ beforeEach(() => {
     }),
     settingsGet: vi.fn().mockResolvedValue({ ok: true, settings: defaultSettings(), notice: null }),
     settingsSet: vi.fn(),
+    pipelinePlans: vi.fn().mockResolvedValue({ ok: true, plans: [] }),
+    pipelineStart: vi.fn(),
+    pipelineStatus: vi.fn().mockResolvedValue({ ok: true, run: null }),
+    pipelineCancel: vi.fn(),
+    pipelineDiscard: vi.fn(),
+    onPipelineEvent: vi.fn().mockReturnValue(() => undefined),
     appInfo: vi.fn().mockResolvedValue({ toolkit: { status: 'unset', path: null, version: null } })
   }
   try {
@@ -223,12 +229,20 @@ describe('workspace', () => {
     await selectAlpha()
     const activity = screen.getByRole('tab', { name: 'Activity' })
     fireEvent.keyDown(activity, { key: 'ArrowRight' })
+    const pipeline = screen.getByRole('tab', { name: 'Pipeline' })
+    expect(pipeline).toHaveAttribute('aria-selected', 'true')
+    expect(pipeline).toHaveFocus()
+    expect(screen.getByRole('tabpanel', { name: 'Pipeline' })).toBeInTheDocument()
+    expect(localStorage.getItem('claude-desk:workspace-tab')).toBe('pipeline')
+    fireEvent.keyDown(pipeline, { key: 'ArrowRight' })
     const usage = screen.getByRole('tab', { name: 'Usage' })
     expect(usage).toHaveAttribute('aria-selected', 'true')
     expect(usage).toHaveFocus()
     expect(screen.getByRole('tabpanel', { name: 'Usage' })).toBeInTheDocument()
     expect(localStorage.getItem('claude-desk:workspace-tab')).toBe('usage')
     fireEvent.keyDown(usage, { key: 'ArrowLeft' })
+    expect(screen.getByRole('tab', { name: 'Pipeline' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Pipeline' }), { key: 'ArrowLeft' })
     expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true')
   })
 

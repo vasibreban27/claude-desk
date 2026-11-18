@@ -3,6 +3,11 @@ import {
   chatHistoryRequestSchema,
   chatMessageSchema,
   chatSendRequestSchema,
+  pipelineCancelRequestSchema,
+  pipelineDiscardRequestSchema,
+  pipelinePlansRequestSchema,
+  pipelineStartRequestSchema,
+  pipelineStatusRequestSchema,
   projectSchema,
   projectsRefreshRequestSchema
 } from './ipc'
@@ -76,5 +81,30 @@ describe('entity schemas', () => {
     expect(chatMessageSchema.safeParse(msg).success).toBe(true)
     expect(chatMessageSchema.safeParse({ ...msg, role: 'system' }).success).toBe(false)
     expect(chatMessageSchema.safeParse({ ...msg, at: 'now' }).success).toBe(false)
+  })
+})
+
+describe('pipeline request schemas', () => {
+  const start = (planFile: string) =>
+    pipelineStartRequestSchema.safeParse({ projectId: uuid, planFile }).success
+
+  it('accepts only safe plan file names', () => {
+    expect(start('a.md')).toBe(true)
+    expect(start('my-plan_2.md')).toBe(true)
+    for (const bad of ['../x.md', 'a/b.md', 'a\\b.md', '.md', 'C:x.md', 'a.md ', 'a.md\n', `${'a'.repeat(98)}.md`]) {
+      expect(start(bad)).toBe(false)
+    }
+    expect(start(`${'a'.repeat(97)}.md`)).toBe(true)
+  })
+
+  it('rejects a bad projectId or a missing runId', () => {
+    expect(pipelinePlansRequestSchema.safeParse({ projectId: 'nope' }).success).toBe(false)
+    expect(pipelineStatusRequestSchema.safeParse({ projectId: 'nope' }).success).toBe(false)
+    expect(pipelineStartRequestSchema.safeParse({ projectId: 'nope', planFile: 'a.md' }).success).toBe(false)
+    expect(pipelineCancelRequestSchema.safeParse({ projectId: uuid }).success).toBe(false)
+    expect(pipelineDiscardRequestSchema.safeParse({ projectId: uuid }).success).toBe(false)
+    expect(pipelineCancelRequestSchema.safeParse({ projectId: 'x', runId: 'r' }).success).toBe(false)
+    expect(pipelineCancelRequestSchema.safeParse({ projectId: uuid, runId: 'r' }).success).toBe(true)
+    expect(pipelineDiscardRequestSchema.safeParse({ projectId: uuid, runId: 'r' }).success).toBe(true)
   })
 })

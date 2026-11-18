@@ -68,3 +68,38 @@
 .settings__path {
   word-break: break-all;
 }
+.settings__check {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: var(--space-2);
+}
+.settings__field input[type='text'] {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: var(--space-1) var(--space-2);
+}
+.settings__check textarea {
+  min-height: 4rem;
+}
+.settings__error {
+  color: var(--color-danger, #c0392b);
+  font-size: 0.85em;
+  margin: 0;
+}
+.settings__small-button {
+  align-self: flex-start;
+  font: inherit;
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+}
+.settings__small-button:focus-visible,
+.settings__field input[type='text']:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}

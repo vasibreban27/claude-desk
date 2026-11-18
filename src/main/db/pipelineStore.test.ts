@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { migrate } from './migrations'
-import { createPipelineStore, type NewPipelineRun, type PipelineStore } from './pipelineStore'
+import { createPipelineStore, withChangeEvents, type NewPipelineRun, type PipelineStore } from './pipelineStore'
 
 function newRun(id: string): NewPipelineRun {
   return {
@@ -130,5 +130,61 @@ describe('pipelineStore', () => {
     expect(s.getRun('r1')).toEqual(un)
     expect(s.listTasks('r1')).toEqual(un)
     expect(s.markInterrupted()).toEqual(un)
+  })
+  it('finds the latest run of a project', () => {
+    let t = 1000
+    const s = createPipelineStore(db, () => (t += 10))
+    expect(s.latestRunForProject('p')).toEqual({ ok: true, value: null })
+    s.createRun(newRun('r1'))
+    s.createRun(newRun('r2'))
+    s.createRun({ ...newRun('r3'), projectId: 'other' })
+    const r = s.latestRunForProject('p')
+    expect(r.ok && r.value?.id).toBe('r2')
+  })
+
+  it('deletes a run and its tasks together', () => {
+    store.createRun(newRun('r1'))
+    store.createRun(newRun('r2'))
+    expect(store.deleteRun('r1')).toEqual({ ok: true, value: true })
+    expect(store.getRun('r1')).toEqual({ ok: false, error: 'not-found' })
+    expect(store.listTasks('r1')).toEqual({ ok: true, value: [] })
+    expect(store.listTasks('r2')).toMatchObject({ ok: true })
+    expect(db.prepare('SELECT COUNT(*) AS n FROM pipeline_tasks').get()).toEqual({ n: 2 })
+    expect(store.deleteRun('r1')).toEqual({ ok: false, error: 'not-found' })
+  })
+
+  it('reports storage-unavailable for the new queries without a database', () => {
+    const down = createPipelineStore(null)
+    expect(down.latestRunForProject('p')).toEqual({ ok: false, error: 'storage-unavailable' })
+    expect(down.deleteRun('r1')).toEqual({ ok: false, error: 'storage-unavailable' })
+  })
+
+  describe('withChangeEvents', () => {
+    it('emits one event per successful write and keeps the results', () => {
+      const emit = vi.fn()
+      const s = withChangeEvents(store, emit)
+      expect(s.createRun(newRun('r1')).ok).toBe(true)
+      expect(s.updateTask('r1', 'T1', { status: 'running' })).toMatchObject({ ok: true, value: { status: 'running' } })
+      expect(s.setRunStatus('r1', 'done', 5)).toMatchObject({ ok: true })
+      expect(s.deleteRun('r1')).toEqual({ ok: true, value: true })
+      expect(emit.mock.calls).toEqual([
+        [{ projectId: 'p', runId: 'r1' }],
+        [{ projectId: 'p', runId: 'r1' }],
+        [{ projectId: 'p', runId: 'r1' }],
+        [{ projectId: 'p', runId: 'r1' }]
+      ])
+    })
+
+    it('does not emit for failed writes and survives a throwing emit', () => {
+      const emit = vi.fn(() => {
+        throw new Error('listener broke')
+      })
+      const s = withChangeEvents(store, emit)
+      expect(s.updateTask('missing', 'T1', { status: 'running' })).toEqual({ ok: false, error: 'not-found' })
+      expect(emit).not.toHaveBeenCalled()
+      expect(s.createRun(newRun('r1')).ok).toBe(true)
+      expect(emit).toHaveBeenCalledTimes(1)
+      expect(store.getRun('r1').ok).toBe(true)
+    })
   })
 })
