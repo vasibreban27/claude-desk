@@ -210,7 +210,8 @@ describe('pipeline service', () => {
         projectId: PID,
         projectPath: project,
         planPath: path.join(plans, 'a.md'),
-        baseBranch: 'main'
+        baseBranch: 'main',
+        runId: expect.stringMatching(/^[0-9a-f-]{36}$/)
       })
       expect(await service.start(PID, 'a.md')).toEqual({ ok: false, error: 'busy' })
       s.finish()
@@ -267,6 +268,27 @@ describe('pipeline service', () => {
       expect(r.ok && r.run?.active).toBe(true)
     })
 
+    it('passes the generated run id to the orchestrator and is active from the first call, not after the final status', async () => {
+      writeFileSync(path.join(plans, 'a.md'), FLOW)
+      const s = started('fixed-id')
+      let seen: string | undefined
+      startRun.mockImplementationOnce(async (input) => {
+        seen = input.runId
+        seedRun(input.runId ?? 'none')
+        // the service already reports the run as active while the orchestrator is starting
+        const during = await service.status(PID)
+        expect(during.ok && during.run?.active).toBe(true)
+        return { ok: true, runId: input.runId ?? 'none', finished: s.result.ok ? s.result.finished : Promise.reject(new Error('x')) }
+      })
+      const r = await service.start(PID, 'a.md')
+      expect(r.ok && r.runId).toBe(seen)
+      const id = seen ?? ''
+      store.setRunStatus(id, 'done', 5)
+      const after = await service.status(PID)
+      expect(after.ok && after.run?.active).toBe(false)
+      s.finish()
+    })
+
     it('gives storage-unavailable when the store is down', async () => {
       const down = build({ store: createPipelineStore(null) })
       expect(await down.status(PID)).toEqual({ ok: false, error: 'storage-unavailable' })
@@ -305,8 +327,16 @@ describe('pipeline service', () => {
       })
     })
 
+    it('refuses to discard a run stored as running that is not in the active map', async () => {
+      seedRun('r1')
+      expect(await service.discard(PID, 'r1')).toEqual({ ok: false, error: 'active' })
+      expect(removeRun).not.toHaveBeenCalled()
+      expect(store.getRun('r1').ok).toBe(true)
+    })
+
     it('removes worktrees first and then deletes the rows', async () => {
       seedRun('r1')
+      store.setRunStatus('r1', 'done', 1)
       removeRun.mockImplementationOnce(async () => {
         expect(store.getRun('r1').ok).toBe(true)
         return { ok: true }
@@ -319,6 +349,7 @@ describe('pipeline service', () => {
 
     it('keeps the rows when removal fails', async () => {
       seedRun('r1')
+      store.setRunStatus('r1', 'failed', 1)
       removeRun.mockResolvedValueOnce({ ok: false, error: 'git failed' })
       expect(await service.discard(PID, 'r1')).toEqual({ ok: false, error: 'cleanup-failed' })
       expect(store.getRun('r1').ok).toBe(true)

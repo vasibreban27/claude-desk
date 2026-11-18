@@ -3,8 +3,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import type { PipelineStore, RunStatus, TaskPatch } from '../db/pipelineStore'
 import type { SettingsStore } from '../db/settingsStore'
-import type { ProjectSettings } from '../../shared/settings'
+import { effectiveLimits, type ProjectSettings } from '../../shared/settings'
 import { MAX_PLAN_BYTES, parsePlan, type ParsedPlan, type PlanTask } from './planParser'
+import { createMutex, runPool } from './queue'
 import type { WorkerRunner } from './workerRunner'
 import {
   GIT_ENV_ADDITIONS,
@@ -17,8 +18,8 @@ import {
 } from './worktrees'
 
 /**
- * Serial pipeline orchestrator (plain code, no LLM). One task at a time, wave order, each task in its own
- * worktree; a task that commits is merged into `run/<id>`. "Done" means committed and merged, not reviewed.
+ * Pipeline orchestrator (plain code, no LLM). Wave by wave, at most `maxParallel` tasks at once, each task in
+ * its own worktree; every manager mutation goes through one per-run mutex; a task that commits is merged into `run/<id>`. "Done" means committed and merged, not reviewed.
  * Never throws out of its public methods.
  */
 
@@ -29,6 +30,8 @@ export interface StartRunInput {
   /** Absolute path of the plan file. */
   planPath: string
   baseBranch: string
+  /** Pre-generated run id (the service passes it so its active flag is set from the first event). */
+  runId?: string
 }
 
 export interface TaskSummary {
@@ -140,85 +143,118 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     const tasks: PlanTask[] = plan.waves.flatMap((w) => w.tasks)
     let runReason: string | null = null
     let finalStatus: RunStatus = 'done'
+    /** Set by the first database error: no new task starts and running ones are left unsettled. */
+    let abortReason: string | null = null
+    const abortRun = (reason: string): void => {
+      if (abortReason !== null) return
+      abortReason = reason
+      handle.controller.abort()
+    }
+    const mutex = createMutex()
+    const settings = ctx.settings
+    const { maxParallel } = effectiveLimits(settings)
+
+    const runTask = async (task: PlanTask): Promise<void> => {
+      if (abortReason !== null) return
+      if (handle.cancelled) {
+        settle(task.id, 'cancelled', null)
+        return
+      }
+      const badDep = task.dependsOn.find((d) => status.get(d) !== 'done')
+      if (badDep !== undefined) {
+        settle(task.id, 'blocked', `depends on ${badDep} (${status.get(badDep) ?? 'unknown'})`)
+        return
+      }
+
+      const startedAt = now()
+      update(task.id, { status: 'running', startedAt })
+      try {
+        const wt = await mutex(() => manager.createTaskWorktree(task.id))
+        if (abortReason !== null) return
+        if (!wt.ok) {
+          settle(task.id, 'failed', cap(`worktree error: ${wt.error}`), { durationMs: now() - startedAt })
+          return
+        }
+        update(task.id, { branch: wt.branch, worktreePath: wt.path })
+        const startSha = await resolveRef(wt.path, wt.branch)
+
+        const outcome = await deps.runner({
+          task,
+          worktree: wt.path,
+          branch: wt.branch,
+          settings,
+          pluginPath: deps.pluginPath,
+          signal: handle.controller.signal
+        })
+        if (abortReason !== null) return
+        const timing: TaskPatch = {
+          durationMs: now() - startedAt,
+          turns: outcome.turns,
+          costUsd: outcome.costUsd,
+          checksResult: outcome.checksResult
+        }
+
+        if (outcome.status === 'cancelled') {
+          settle(task.id, 'cancelled', null, timing)
+          return
+        }
+        if (outcome.status === 'limit') {
+          settle(task.id, 'failed', 'limit reached', timing)
+          return
+        }
+        if (outcome.blocked !== null) {
+          settle(task.id, 'failed', cap(`blocked: ${outcome.blocked}`), timing)
+          return
+        }
+        if (outcome.status === 'error') {
+          log(`pipeline: worker error in ${task.id}: ${outcome.error ?? 'unknown'}`)
+          settle(task.id, 'failed', 'worker error', timing)
+          return
+        }
+        // Resolving the end commit and merging share the mutex: merges never overlap.
+        const done = await mutex(async () => {
+          const endSha = await resolveRef(wt.path, wt.branch)
+          if (endSha === startSha) return { endSha, merged: null }
+          return { endSha, merged: await manager.mergeTask(task.id) }
+        })
+        if (abortReason !== null) return
+        const { endSha, merged } = done
+        if (merged === null) {
+          settle(task.id, 'failed', 'no commit', timing)
+        } else if (!merged.ok) {
+          settle(task.id, 'failed', cap(`merge failed: ${merged.error}`), { ...timing, commitSha: endSha })
+        } else if (merged.result === 'conflict') {
+          settle(task.id, 'failed', 'merge conflict', { ...timing, commitSha: endSha })
+        } else {
+          settle(task.id, 'done', null, { ...timing, commitSha: endSha })
+        }
+      } catch (e) {
+        if (e instanceof RunAbort) throw e
+        if (abortReason !== null) return
+        log(`pipeline: task ${task.id} failed: ${short(e)}`)
+        settle(task.id, 'failed', 'worker error', { durationMs: now() - startedAt })
+      }
+    }
+
+    // A database error anywhere stops the pool; the task itself never throws out of the pool.
+    const guarded = async (task: PlanTask): Promise<void> => {
+      try {
+        await runTask(task)
+      } catch (e) {
+        abortRun(e instanceof RunAbort ? e.message : short(e))
+      }
+    }
 
     try {
-      const settings = ctx.settings
-
-      for (const task of tasks) {
-        if (handle.cancelled) {
-          settle(task.id, 'cancelled', null)
-          continue
-        }
-        const badDep = task.dependsOn.find((d) => status.get(d) !== 'done')
-        if (badDep !== undefined) {
-          settle(task.id, 'blocked', `depends on ${badDep} (${status.get(badDep) ?? 'unknown'})`)
-          continue
-        }
-
-        const startedAt = now()
-        update(task.id, { status: 'running', startedAt })
-        try {
-          const wt = await manager.createTaskWorktree(task.id)
-          if (!wt.ok) {
-            settle(task.id, 'failed', cap(`worktree error: ${wt.error}`), { durationMs: now() - startedAt })
-            continue
-          }
-          update(task.id, { branch: wt.branch, worktreePath: wt.path })
-          const startSha = await resolveRef(wt.path, wt.branch)
-
-          const outcome = await deps.runner({
-            task,
-            worktree: wt.path,
-            branch: wt.branch,
-            settings,
-            pluginPath: deps.pluginPath,
-            signal: handle.controller.signal
-          })
-          const timing: TaskPatch = {
-            durationMs: now() - startedAt,
-            turns: outcome.turns,
-            costUsd: outcome.costUsd,
-            checksResult: outcome.checksResult
-          }
-
-          if (outcome.status === 'cancelled') {
-            settle(task.id, 'cancelled', null, timing)
-            continue
-          }
-          if (outcome.status === 'limit') {
-            settle(task.id, 'failed', 'limit reached', timing)
-            continue
-          }
-          if (outcome.blocked !== null) {
-            settle(task.id, 'failed', cap(`blocked: ${outcome.blocked}`), timing)
-            continue
-          }
-          if (outcome.status === 'error') {
-            log(`pipeline: worker error in ${task.id}: ${outcome.error ?? 'unknown'}`)
-            settle(task.id, 'failed', 'worker error', timing)
-            continue
-          }
-          const endSha = await resolveRef(wt.path, wt.branch)
-          if (endSha === startSha) {
-            settle(task.id, 'failed', 'no commit', timing)
-            continue
-          }
-          const merged = await manager.mergeTask(task.id)
-          if (!merged.ok) {
-            settle(task.id, 'failed', cap(`merge failed: ${merged.error}`), { ...timing, commitSha: endSha })
-          } else if (merged.result === 'conflict') {
-            settle(task.id, 'failed', 'merge conflict', { ...timing, commitSha: endSha })
-          } else {
-            settle(task.id, 'done', null, { ...timing, commitSha: endSha })
-          }
-        } catch (e) {
-          if (e instanceof RunAbort) throw e
-          log(`pipeline: task ${task.id} failed: ${short(e)}`)
-          settle(task.id, 'failed', 'worker error', { durationMs: now() - startedAt })
-        }
+      for (const wave of plan.waves) {
+        if (abortReason !== null) break
+        await runPool(wave.tasks, maxParallel, guarded)
       }
     } catch (e) {
-      runReason = e instanceof RunAbort ? e.message : short(e)
+      abortRun(short(e))
+    }
+    if (abortReason !== null) {
+      runReason = abortReason
       finalStatus = 'failed'
       log(`pipeline: run ${runId} failed: ${runReason}`)
       // Best effort: leave no task `queued` or `running` behind a failed run.
@@ -227,7 +263,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           try {
             settle(t.id, 'failed', cap(`run failed: ${runReason}`))
           } catch {
-            break
+            // the store is still failing; the remaining rows stay as they are
           }
         }
       }
@@ -284,7 +320,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const loaded = deps.settings.get(input.projectId)
         if (loaded.notice === 'storage-unavailable') return { ok: false, error: 'settings could not be loaded' }
 
-        const runId = newRunId()
+        const runId = input.runId ?? newRunId()
         const manager = createManager({ projectPath: input.projectPath, runId })
         const started = await manager.startRun(input.baseBranch)
         if (!started.ok) return { ok: false, error: cap(started.error) }
