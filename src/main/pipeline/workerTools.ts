@@ -37,6 +37,7 @@ export interface ExecOptions {
   env: NodeJS.ProcessEnv
   timeout: number
   maxBuffer: number
+  signal?: AbortSignal
 }
 /** Resolves with output; rejects with an error that may carry `code`, `killed`, `signal`, `stdout`, `stderr`. */
 export type ExecFn = (file: string, args: string[], options: ExecOptions) => Promise<{ stdout: string; stderr: string }>
