@@ -204,6 +204,29 @@ describe('usePipeline', () => {
     expect(result.current.discardError).toBe('Could not discard the run.')
   })
 
+  it('drops a discard error when a different run is displayed', async () => {
+    const pipelineStatus = vi
+      .fn()
+      .mockResolvedValue({ ok: true, run: run() })
+    const { emit } = setup({
+      pipelineStatus,
+      pipelineDiscard: vi.fn(async () => ({ ok: false, error: 'cleanup-failed' }))
+    })
+    const { result } = renderHook(() => usePipeline(P1))
+    await waitFor(() => expect(result.current.run?.runId).toBe('r1'))
+    await act(async () => {
+      await result.current.discard()
+    })
+    expect(result.current.discardError).toMatch(/try Discard again/)
+    emit({ projectId: P1, runId: 'r1' })
+    await waitFor(() => expect(pipelineStatus.mock.calls.length).toBeGreaterThan(2))
+    expect(result.current.discardError).toMatch(/try Discard again/)
+    pipelineStatus.mockResolvedValue({ ok: true, run: { ...run(), runId: 'r2' } })
+    emit({ projectId: P1, runId: 'r2' })
+    await waitFor(() => expect(result.current.run?.runId).toBe('r2'))
+    expect(result.current.discardError).toBeNull()
+  })
+
   it('does nothing without a project', () => {
     const { api } = setup()
     const { result } = renderHook(() => usePipeline(null))

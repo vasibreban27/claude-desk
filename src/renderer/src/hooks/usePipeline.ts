@@ -55,6 +55,8 @@ interface State {
   cancelError: string | null
   discarding: boolean
   discardError: string | null
+  /** Run the discardError belongs to. */
+  discardErrorRunId: string | null
 }
 
 const empty = (projectId: string | null): State => ({
@@ -70,7 +72,8 @@ const empty = (projectId: string | null): State => ({
   cancelling: false,
   cancelError: null,
   discarding: false,
-  discardError: null
+  discardError: null,
+  discardErrorRunId: null
 })
 
 export function usePipeline(projectId: string | null): UsePipeline {
@@ -101,7 +104,15 @@ export function usePipeline(projectId: string | null): UsePipeline {
               res.error === 'not-found' ? 'The project was not found.' : 'Run storage is unavailable.'
           }
         }
-        return { ...s, run: res.run, runLoading: false, runError: null, cancelling: false }
+        const otherRun = res.run !== null && res.run.runId !== s.discardErrorRunId
+        return {
+          ...s,
+          run: res.run,
+          runLoading: false,
+          runError: null,
+          cancelling: false,
+          ...(otherRun ? { discardError: null, discardErrorRunId: null } : {})
+        }
       })
     } catch {
       if (current.current !== pid) return
@@ -158,7 +169,7 @@ export function usePipeline(projectId: string | null): UsePipeline {
       const pid = current.current
       if (!api || pid === null || startingRef.current) return
       startingRef.current = true
-      setState((s) => (s.projectId === pid ? { ...s, starting: true, startError: null } : s))
+      setState((s) => (s.projectId === pid ? { ...s, starting: true, startError: null, discardError: null, discardErrorRunId: null } : s))
       let startError: string | null = null
       try {
         const res = await api.pipelineStart({ projectId: pid, planFile })
@@ -203,7 +214,7 @@ export function usePipeline(projectId: string | null): UsePipeline {
     const runId = state.run?.runId
     if (!api || pid === null || !runId || discardingRef.current) return false
     discardingRef.current = true
-    setState((s) => (s.projectId === pid ? { ...s, discarding: true, discardError: null } : s))
+    setState((s) => (s.projectId === pid ? { ...s, discarding: true, discardError: null, discardErrorRunId: null } : s))
     let discardError: string | null = null
     try {
       const res = await api.pipelineDiscard({ projectId: pid, runId })
@@ -213,7 +224,11 @@ export function usePipeline(projectId: string | null): UsePipeline {
     }
     discardingRef.current = false
     if (current.current !== pid) return false
-    setState((s) => (s.projectId === pid ? { ...s, discarding: false, discardError } : s))
+    setState((s) =>
+      s.projectId === pid
+        ? { ...s, discarding: false, discardError, discardErrorRunId: discardError === null ? null : runId }
+        : s
+    )
     await fetchStatus(pid)
     return discardError === null
   }, [state.run?.runId, fetchStatus])
@@ -225,5 +240,7 @@ export function usePipeline(projectId: string | null): UsePipeline {
     void fetchPlans(pid)
   }, [fetchPlans])
 
-  return { ...state, start, cancel, discard, reloadPlans }
+  const { discardErrorRunId: _unused, ...exposed } = state
+  void _unused
+  return { ...exposed, start, cancel, discard, reloadPlans }
 }
