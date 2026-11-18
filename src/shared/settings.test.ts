@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import * as ipc from './ipc'
 import {
   DEFAULT_PROTECTED_PATHS,
   defaultSettings,
+  effectiveLimits,
   needsSessionReset,
   parseSettingsOrDefaults,
   projectSettingsSchema
@@ -61,6 +63,56 @@ describe('checks', () => {
     expect(withChecks([{ ...c, timeoutMs: 600001 }])).toBe(false)
     expect(withChecks(Array.from({ length: 9 }, (_, i) => ({ ...c, name: `n${i}` })))).toBe(false)
     expect(withChecks(Array.from({ length: 8 }, (_, i) => ({ ...c, name: `n${i}` })))).toBe(true)
+  })
+})
+
+describe('limits', () => {
+  const base = defaultSettings()
+  const bad = [0, 4.5, '2', NaN, Infinity, 1000]
+
+  it('accepts values in range and rejects the rest', () => {
+    for (const v of [1, 2, 4]) expect(ok({ ...base, maxParallel: v })).toBe(true)
+    for (const v of [...bad, 5]) expect(ok({ ...base, maxParallel: v })).toBe(false)
+    for (const v of [5, 40, 100]) expect(ok({ ...base, maxTurns: v })).toBe(true)
+    for (const v of [...bad.filter((x) => x !== 1000), 4, 101]) {
+      expect(ok({ ...base, maxTurns: v })).toBe(false)
+    }
+    for (const v of [1, 20, 120]) expect(ok({ ...base, taskTimeoutMinutes: v })).toBe(true)
+    for (const v of [...bad.filter((x) => x !== 1000), 121, 1000]) {
+      expect(ok({ ...base, taskTimeoutMinutes: v })).toBe(false)
+    }
+  })
+
+  it('fills defaults for stored settings without the fields', () => {
+    const { maxParallel: _a, maxTurns: _b, taskTimeoutMinutes: _c, ...legacy } = base
+    void [_a, _b, _c]
+    const r = parseSettingsOrDefaults(JSON.stringify(legacy))
+    expect(r.case).toBe('ok')
+    expect(r.settings).toMatchObject({ maxParallel: 2, maxTurns: 40, taskTimeoutMinutes: 20 })
+    expect(base).toMatchObject({ maxParallel: 2, maxTurns: 40, taskTimeoutMinutes: 20 })
+  })
+
+  it('effectiveLimits applies the defaults', () => {
+    expect(effectiveLimits({})).toEqual({ maxParallel: 2, maxTurns: 40, timeCapMs: 1200000 })
+    expect(
+      effectiveLimits({ maxParallel: 3, maxTurns: 10, taskTimeoutMinutes: 5, })
+    ).toEqual({ maxParallel: 3, maxTurns: 10, timeCapMs: 300000 })
+    expect(effectiveLimits({ maxParallel: undefined })).toMatchObject({ maxParallel: 2 })
+  })
+
+  it('exports the constants through @shared/ipc', () => {
+    expect(ipc.MAX_PARALLEL_LIMIT).toBe(4)
+    expect(ipc.DEFAULT_MAX_PARALLEL).toBe(2)
+    expect(ipc.MAX_TURNS_RANGE.max).toBe(100)
+    expect(ipc.TIME_LIMIT_MINUTES_RANGE.max).toBe(120)
+  })
+
+  it('rejects 1000 workers in a settings:set payload', () => {
+    const r = ipc.settingsSetRequestSchema.safeParse({
+      projectId: crypto.randomUUID(),
+      settings: { ...base, maxParallel: 1000 }
+    })
+    expect(r.success).toBe(false)
   })
 })
 
