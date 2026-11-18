@@ -19,6 +19,7 @@ const api: DeskApi = {
   settingsGet: (req) => ipcRenderer.invoke(IPC.settingsGet, req),
   settingsSet: (req) => ipcRenderer.invoke(IPC.settingsSet, req),
   appInfo: () => ipcRenderer.invoke(IPC.appInfo),
+  toolkitList: () => ipcRenderer.invoke(IPC.toolkitList),
   pipelinePlans: (req) => ipcRenderer.invoke(IPC.pipelinePlans, req),
   pipelineStart: (req) => ipcRenderer.invoke(IPC.pipelineStart, req),
   pipelineStatus: (req) => ipcRenderer.invoke(IPC.pipelineStatus, req),

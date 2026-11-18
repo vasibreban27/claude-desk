@@ -300,6 +300,7 @@ describe('Settings gaps: keyboard on the Settings tab', () => {
       usageSummary: vi.fn().mockReturnValue(new Promise(() => undefined)),
       pipelinePlans: vi.fn().mockReturnValue(new Promise(() => undefined)),
       pipelineStatus: vi.fn().mockReturnValue(new Promise(() => undefined)),
+      toolkitList: vi.fn().mockReturnValue(new Promise(() => undefined)),
       onPipelineEvent: vi.fn().mockReturnValue(() => undefined)
     })
   })
@@ -320,8 +321,8 @@ describe('Settings gaps: keyboard on the Settings tab', () => {
     localStorage.setItem('claude-desk:workspace-tab', 'settings')
     render(<Workspace projectId={P1} />)
     fireEvent.keyDown(tab('Settings'), { key: 'ArrowLeft' })
-    expect(tab('Usage')).toHaveAttribute('aria-selected', 'true')
-    fireEvent.keyDown(tab('Usage'), { key: 'Home' })
+    expect(tab('Toolkit')).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(tab('Toolkit'), { key: 'Home' })
     fireEvent.keyDown(tab('Activity'), { key: 'ArrowLeft' })
     expect(tab('Settings')).toHaveAttribute('aria-selected', 'true')
     expect(tab('Settings')).toHaveFocus()
@@ -332,6 +333,7 @@ describe('Settings gaps: keyboard on the Settings tab', () => {
     fireEvent.keyDown(tab('Activity'), { key: 'ArrowRight' })
     fireEvent.keyDown(tab('Pipeline'), { key: 'ArrowRight' })
     fireEvent.keyDown(tab('Usage'), { key: 'ArrowRight' })
+    fireEvent.keyDown(tab('Toolkit'), { key: 'ArrowRight' })
     expect(tab('Settings')).toHaveAttribute('aria-selected', 'true')
     fireEvent.keyDown(tab('Settings'), { key: 'End' })
     expect(tab('Settings')).toHaveAttribute('aria-selected', 'true')

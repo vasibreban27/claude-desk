@@ -286,6 +286,16 @@ describe('settings and app info', () => {
     })
   })
 
+  it('toolkit:list validates the scan result and maps failures', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const info = { status: 'valid' as const, path: '/t', version: null }
+    const listing = { plugin: null, agents: [], skills: [], hooks: [], problems: [] }
+    expect(await setup({ readToolkitInfo: () => info, scanToolkit: async () => listing }).h.toolkitList()).toEqual({ ok: true, listing })
+    expect(await setup({ readToolkitInfo: () => info, scanToolkit: async () => ({ bad: 1 }) }).h.toolkitList()).toEqual({ ok: false, error: 'unreadable' })
+    expect(await setup({ readToolkitInfo: () => info, scanToolkit: async () => { throw new Error('x') } }).h.toolkitList()).toEqual({ ok: false, error: 'unreadable' })
+    expect(await setup({}).h.toolkitList()).toEqual({ ok: false, error: 'unset' })
+  })
+
   it('app:info returns the toolkit info and never throws', async () => {
     const info = { status: 'valid' as const, path: '/t', version: '1.0.0' }
     expect(await setup({ readToolkitInfo: () => info }).h.appInfo()).toEqual({ toolkit: info })

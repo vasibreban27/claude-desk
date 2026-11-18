@@ -267,7 +267,7 @@ describe('Workspace settings tab', () => {
   it('adds a third Settings tab with the same keyboard pattern and stores the key', async () => {
     render(<Workspace projectId={P1} />)
     const tabs = screen.getAllByRole('tab').map((t) => t.textContent)
-    expect(tabs).toEqual(['Activity', 'Pipeline', 'Usage', 'Settings'])
+    expect(tabs).toEqual(['Activity', 'Pipeline', 'Usage', 'Toolkit', 'Settings'])
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Activity' }), { key: 'End' })
     const settings = screen.getByRole('tab', { name: 'Settings' })
     expect(settings).toHaveAttribute('aria-selected', 'true')

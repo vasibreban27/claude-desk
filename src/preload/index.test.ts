@@ -45,6 +45,7 @@ describe('preload bridge', () => {
         'settingsGet',
         'settingsSet',
         'appInfo',
+        'toolkitList',
         'pipelinePlans',
         'pipelineStart',
         'pipelineStatus',

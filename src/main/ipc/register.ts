@@ -137,6 +137,7 @@ export function registerIpc(
   ipcMain.handle(IPC.settingsGet, (event, payload: unknown) => make(event).settingsGet(payload))
   ipcMain.handle(IPC.settingsSet, (event, payload: unknown) => make(event).settingsSet(payload))
   ipcMain.handle(IPC.appInfo, (event) => make(event).appInfo())
+  ipcMain.handle(IPC.toolkitList, (event) => make(event).toolkitList())
   ipcMain.handle(IPC.pipelinePlans, (event, payload: unknown) => make(event).pipelinePlans(payload))
   ipcMain.handle(IPC.pipelineStart, (event, payload: unknown) => make(event).pipelineStart(payload))
   ipcMain.handle(IPC.pipelineStatus, (event, payload: unknown) => make(event).pipelineStatus(payload))
@@ -159,7 +160,7 @@ export function registerIpc(
   })
 
   return () => {
-    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.settingsGet, IPC.settingsSet, IPC.appInfo,
+    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.settingsGet, IPC.settingsSet, IPC.appInfo, IPC.toolkitList,
       IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineDiscard]) {
       ipcMain.removeHandler(channel)
     }
