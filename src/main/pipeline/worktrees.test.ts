@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -339,6 +339,143 @@ describe('removal', () => {
     expect(fs.existsSync(t.path)).toBe(true)
     expect(fs.existsSync(path.join(repo, 'node_modules', 'sentinel.txt'))).toBe(true)
     real(path.join(t.path, 'node_modules'))
+  })
+
+  describe('leftover folder after a failed removal (F7)', () => {
+    /** Runs real git for the manager (so the repo and worktrees are real). */
+    const realGit: GitExec = async (file, args, o) => {
+      try {
+        const stdout = execFileSync(file, args, {
+          cwd: o.cwd,
+          env: o.env,
+          encoding: 'utf8',
+          timeout: o.timeout,
+          maxBuffer: o.maxBuffer,
+          stdio: ['ignore', 'pipe', 'pipe']
+        })
+        return { stdout }
+      } catch (e) {
+        // Like execFile: the exit status is reported as `code`.
+        const err = e as Error & { status?: number | null }
+        throw Object.assign(err, { code: err.status })
+      }
+    }
+    const taskDir = (): string => path.join(wtRoot(), `${R8}-t1`)
+    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+    it('removes an empty folder git no longer knows (the retry after a locked removal), plus its branch', async () => {
+      const m = mgr()
+      await m.startRun('main')
+      fs.mkdirSync(taskDir())
+      g(repo, 'branch', `task/${R8}-t1`)
+      expect(await m.removeTask('t1')).toEqual({ ok: true })
+      expect(fs.existsSync(taskDir())).toBe(false)
+      expect(g(repo, 'branch', '--list', 'task/*').trim()).toBe('')
+    })
+
+    it('recovers on retry after a failed removal left an empty folder, with a hardened prune', async () => {
+      const calls: string[][] = []
+      let locked = true
+      const exec: GitExec = async (file, args, o) => {
+        calls.push(args)
+        const out = await realGit(file, args, o)
+        if (locked && args.includes('worktree') && args.includes('remove')) {
+          // What git does on Windows when a process holds the folder: contents gone, worktree de-registered,
+          // the folder itself stays and the delete is refused.
+          fs.mkdirSync(taskDir(), { recursive: true })
+          throw Object.assign(new Error('git failed'), {
+            stderr: `error: failed to delete '${fwd(taskDir())}': Permission denied\n`,
+            code: 255
+          })
+        }
+        return out
+      }
+      const m = mgr({ exec })
+      await m.startRun('main')
+      const t = await m.createTaskWorktree('t1')
+      if (!t.ok) throw new Error(t.error)
+
+      vi.spyOn(fs, 'rmdirSync').mockImplementation(() => {
+        throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' })
+      })
+      const first = await m.removeTask('t1')
+      vi.restoreAllMocks()
+      expect(first.ok).toBe(false)
+      if (!first.ok) expect(first.error).toMatch(/Permission denied/)
+      expect(fs.readdirSync(taskDir())).toEqual([])
+      expect(g(repo, 'worktree', 'list')).not.toContain(`${R8}-t1`)
+
+      locked = false
+      calls.length = 0
+      expect(await m.removeTask('t1')).toEqual({ ok: true })
+      expect(fs.existsSync(taskDir())).toBe(false)
+      expect(g(repo, 'branch', '--list', 'task/*').trim()).toBe('')
+      expect(fs.readFileSync(path.join(repo, 'node_modules', 'sentinel.txt'), 'utf8')).toBe('keep\n')
+      const prune = calls.filter((a) => a.includes('worktree') && a.includes('prune'))
+      expect(prune.length).toBeGreaterThan(0)
+      for (const a of prune) expect(a.slice(0, GIT_PREFIX.length)).toEqual([...GIT_PREFIX])
+    })
+
+    it.runIf(process.platform === 'win32')(
+      'recovers after a real lock: a process holds the worktree folder, removal fails, the process exits, removal works',
+      async () => {
+        const m = mgr()
+        await m.startRun('main')
+        const t = await m.createTaskWorktree('t1')
+        if (!t.ok) throw new Error(t.error)
+        const locker = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { cwd: t.path, stdio: 'ignore' })
+        try {
+          await sleep(800)
+          const first = await m.removeTask('t1')
+          expect(first.ok).toBe(false)
+          expect(fs.existsSync(taskDir())).toBe(true)
+        } finally {
+          locker.kill()
+          await new Promise<void>((r) => (locker.exitCode !== null ? r() : locker.once('exit', () => r())))
+          await sleep(500)
+        }
+        expect(await m.removeTask('t1')).toEqual({ ok: true })
+        expect(fs.existsSync(taskDir())).toBe(false)
+        expect(g(repo, 'branch', '--list', 'task/*').trim()).toBe('')
+        expect(fs.readFileSync(path.join(repo, 'node_modules', 'sentinel.txt'), 'utf8')).toBe('keep\n')
+      }
+    )
+
+    it('removeRun also clears an empty leftover task folder and the integration worktree', async () => {
+      const m = mgr()
+      await m.startRun('main')
+      fs.mkdirSync(taskDir())
+      g(repo, 'branch', `task/${R8}-t1`)
+      expect(await m.removeRun()).toEqual({ ok: true })
+      expect(fs.readdirSync(wtRoot())).toEqual([])
+      expect(g(repo, 'branch', '--list', 'task/*', 'run/*').trim()).toBe('')
+    })
+
+    it('keeps a leftover folder that is not empty and reports the failure', async () => {
+      const m = mgr()
+      await m.startRun('main')
+      fs.mkdirSync(taskDir())
+      fs.writeFileSync(path.join(taskDir(), 'keep.txt'), 'mine\n')
+      const r = await m.removeTask('t1')
+      expect(r.ok).toBe(false)
+      expect(fs.readFileSync(path.join(taskDir(), 'keep.txt'), 'utf8')).toBe('mine\n')
+    })
+
+    it('keeps a leftover that is a link, even to an empty folder, and never touches its target', async () => {
+      const m = mgr()
+      await m.startRun('main')
+      const target = path.join(base, 'elsewhere')
+      fs.mkdirSync(target)
+      fs.symlinkSync(target, taskDir(), process.platform === 'win32' ? 'junction' : 'dir')
+      try {
+        const r = await m.removeTask('t1')
+        expect(r.ok).toBe(false)
+        expect(fs.lstatSync(taskDir()).isSymbolicLink()).toBe(true)
+        expect(fs.existsSync(target)).toBe(true)
+      } finally {
+        fs.unlinkSync(taskDir())
+      }
+    })
   })
 
   it('removeRun removes every task worktree, the integration worktree and all branches, twice', async () => {
