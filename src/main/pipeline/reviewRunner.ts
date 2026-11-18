@@ -1,4 +1,5 @@
 import { query, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk'
+import { logToolUse, type LogSink } from './pipelineLog'
 import { FINDINGS_MAX_COUNT, type Finding, type ReviewerName } from '../../shared/review'
 import { effectiveLimits, type ProjectSettings } from '../../shared/settings'
 import { guardPreToolUse, type GuardOutput } from '../chat/tools'
@@ -37,6 +38,8 @@ export interface ReviewRunArgs {
   settings: ProjectSettings
   pluginPath: string
   signal?: AbortSignal
+  /** Live log: one short line per tool call. */
+  onLog?: LogSink
 }
 
 export type ReviewRunner = (args: ReviewRunArgs) => Promise<ReviewOutcome>
@@ -128,7 +131,11 @@ export function buildReviewerOptions(
   maxTurns: number = REVIEW_MAX_TURNS
 ): BuiltReviewer {
   const tools = createReviewTools({ reviewer: args.reviewer, worktree: args.worktree, startSha: args.startSha })
-  const guard: HookCallback = async (input) => guardReviewerToolUse(input, args.worktree, args.settings.protectedPaths)
+  const guard: HookCallback = async (input) => {
+    const out = guardReviewerToolUse(input, args.worktree, args.settings.protectedPaths)
+    logToolUse(args.onLog, input, out, args.worktree)
+    return out
+  }
   const options: Options = {
     cwd: args.worktree,
     settingSources: [],

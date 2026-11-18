@@ -55,6 +55,8 @@ describe('preload bridge', () => {
         'pipelineCancel',
         'pipelineDiscard',
         'pipelineMerge',
+        'pipelineLog',
+        'onPipelineLog',
         'onPipelineEvent',
         'usageSummary'
       ].sort()

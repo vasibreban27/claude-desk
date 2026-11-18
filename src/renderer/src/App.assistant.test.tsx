@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import { ASSISTANT_PROJECT_ID, defaultSettings, type ChatEvent, type Project } from '@shared/ipc'
+import { ASSISTANT_PROJECT_ID, defaultSettings, type ChatEvent, type PipelineLogEntry, type PipelineRunView, type Project } from '@shared/ipc'
 import { App } from './App'
 
 afterEach(cleanup)
@@ -16,6 +16,7 @@ const P: Project = {
   addedAt: '2026-01-01T00:00:00.000Z'
 }
 let emit: (e: ChatEvent) => void = () => undefined
+let emitLog: (e: PipelineLogEntry) => void = () => undefined
 let api: Record<string, ReturnType<typeof vi.fn>>
 
 beforeEach(() => {
@@ -38,7 +39,12 @@ beforeEach(() => {
     pipelineStatus: vi.fn().mockReturnValue(new Promise(() => undefined)),
     pipelinePlans: vi.fn().mockResolvedValue({ ok: true, plans: [] }),
     pipelineStart: vi.fn().mockResolvedValue({ ok: true, runId: 'r1' }),
-    onPipelineEvent: vi.fn().mockReturnValue(() => undefined)
+    onPipelineEvent: vi.fn().mockReturnValue(() => undefined),
+    pipelineLog: vi.fn().mockResolvedValue([]),
+    onPipelineLog: vi.fn().mockImplementation((l: (e: PipelineLogEntry) => void) => {
+      emitLog = l
+      return () => undefined
+    })
   }
   ;(window as unknown as { api: unknown }).api = api
   try {
@@ -79,5 +85,54 @@ describe('assistant to planner flow', () => {
     await waitFor(() => expect(api['pipelineStart']).toHaveBeenCalledWith({ projectId: P.id, planFile: 'todo-api.md' }))
     await waitFor(() => expect(screen.queryByRole('group', { name: 'Plan ready' })).toBeNull())
     expect(screen.getByRole('tab', { name: 'Pipeline' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('shows live pipeline lines in Activity and the latest line on the running task', async () => {
+    api['listProjects']?.mockResolvedValue([P])
+    const run: PipelineRunView = {
+      runId: 'r1',
+      planFile: 'todo.md',
+      status: 'running',
+      active: true,
+      baseBranch: 'main',
+      integrationBranch: 'run/r1',
+      createdAt: '2026-11-18T12:00:00.000Z',
+      finishedAt: null,
+      tasks: [
+        {
+          taskId: 'T1',
+          title: 'Schemas',
+          wave: 1,
+          status: 'running',
+          reason: null,
+          commit: null,
+          checks: null,
+          durationMs: null,
+          costUsd: null,
+          stage: null,
+          fixRounds: null,
+          findings: null
+        } as PipelineRunView['tasks'][number]
+      ]
+    }
+    api['pipelineStatus']?.mockResolvedValue({ ok: true, run })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /todo-fastapi/ }))
+    await act(async () => undefined)
+    const line: PipelineLogEntry = {
+      projectId: P.id,
+      runId: 'r1',
+      seq: 0,
+      at: '2026-11-18T12:00:01.000Z',
+      taskId: 'T1',
+      role: 'worker',
+      agent: null,
+      text: 'Write app/schemas.py',
+      tone: 'info'
+    }
+    act(() => emitLog(line))
+    expect(await screen.findByRole('list', { name: 'Pipeline activity' })).toHaveTextContent('Write app/schemas.py')
+    fireEvent.click(screen.getByRole('tab', { name: 'Pipeline' }))
+    expect(await screen.findByLabelText('T1 latest')).toHaveTextContent('worker: Write app/schemas.py')
   })
 })

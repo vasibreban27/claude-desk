@@ -6,6 +6,8 @@ import {
   pipelineCancelRequestSchema,
   pipelineDiscardRequestSchema,
   pipelineMergeRequestSchema,
+  pipelineLogRequestSchema,
+  type PipelineLogResult,
   type PipelineMergeResult,
   pipelinePlansRequestSchema,
   pipelineStartRequestSchema,
@@ -58,6 +60,8 @@ export interface HandlerDeps {
   readToolkitInfo?: () => AppInfoResult['toolkit']
   scanToolkit?: (folder: string) => Promise<unknown>
   appSettings?: AppSettings
+  /** Live pipeline log (history only; lines are broadcast by the log itself). */
+  pipelineLog?: { history(projectId: string): PipelineLogResult }
   gitRun?: (cwd: string, args: string[]) => Promise<void>
   /** Undefined when the pipeline could not be set up; pipeline calls then report storage-unavailable. */
   pipeline?: PipelineService
@@ -83,6 +87,7 @@ export interface Handlers {
   pipelineCancel(payload: unknown): Promise<PipelineCancelResult>
   pipelineDiscard(payload: unknown): Promise<PipelineDiscardResult>
   pipelineMerge(payload: unknown): Promise<PipelineMergeResult>
+  pipelineLog(payload: unknown): Promise<PipelineLogResult>
   /**
    * `route` runs before the turn starts (events may be emitted synchronously) and returns
    * an undo function that is called when the send is rejected.
@@ -321,6 +326,16 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       } catch (err) {
         console.error('pipeline:discard failed:', errName(err))
         return { ok: false, error: 'cleanup-failed' }
+      }
+    },
+
+    async pipelineLog(payload) {
+      const req = pipelineLogRequestSchema.strict().safeParse(payload)
+      if (!req.success || !deps.pipelineLog) return []
+      try {
+        return deps.pipelineLog.history(req.data.projectId)
+      } catch {
+        return []
       }
     },
 

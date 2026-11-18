@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import type { PipelineRunView, PipelineTaskView, PlanEntry } from '@shared/ipc'
+import type { PipelineLogEntry, PipelineRunView, PipelineTaskView, PlanEntry } from '@shared/ipc'
 import type { UsePipeline } from '../../hooks/usePipeline'
 import { MergedBanner, RunFinished, type MergedInfo } from './RunFinished'
 import './pipeline.css'
@@ -8,6 +8,8 @@ export type PipelinePanelProps = Omit<UsePipeline, 'projectId' | 'reloadPlans'> 
   reloadPlans?: () => void
   /** Needed for Merge into main; without it the finished run shows no merge button. */
   projectId?: string | null
+  /** Latest live log line per task (shown on running tasks). */
+  latestByTask?: Record<string, PipelineLogEntry>
 }
 
 export function formatDuration(ms: number): string {
@@ -82,7 +84,7 @@ function Findings({ findings }: { findings: NonNullable<PipelineTaskView['findin
   )
 }
 
-function TaskRow({ task }: { task: PipelineTaskView }) {
+function TaskRow({ task, latest }: { task: PipelineTaskView; latest?: PipelineLogEntry | undefined }) {
   const stage = stageLabel(task)
   return (
     <li className="pipeline__task">
@@ -97,6 +99,11 @@ function TaskRow({ task }: { task: PipelineTaskView }) {
           <span className="pipeline__badge">{task.findings ? 'Reviewed and merged' : 'Merged, not reviewed'}</span>
         )}
       </div>
+      {task.status === 'running' && latest && (
+        <div className="pipeline__latest" aria-label={`${task.taskId} latest`}>
+          {latest.role === 'reviewer' ? (latest.agent ?? 'reviewer') : latest.role}: {latest.text}
+        </div>
+      )}
       <div className="pipeline__muted">
         {task.commit && <span>commit {task.commit}</span>}
         {task.checks && <span>checks {task.checks}</span>}
@@ -184,9 +191,11 @@ function RunView({
   discardError,
   onCancel,
   onDiscard,
-  finished
+  finished,
+  latestByTask
 }: {
   finished?: ReactNode
+  latestByTask?: Record<string, PipelineLogEntry> | undefined
   run: PipelineRunView
   cancelling: boolean
   cancelError: string | null
@@ -257,7 +266,7 @@ function RunView({
             {run.tasks
               .filter((t) => t.wave === w)
               .map((t) => (
-                <TaskRow key={t.taskId} task={t} />
+                <TaskRow key={t.taskId} task={t} latest={latestByTask?.[t.taskId]} />
               ))}
           </ul>
         </div>
@@ -293,6 +302,7 @@ export function PipelinePanel(p: PipelinePanelProps) {
       {run && (
         <RunView
           run={run}
+          latestByTask={p.latestByTask}
           finished={
             run.status === 'done' && !run.active && p.projectId ? (
               <RunFinished

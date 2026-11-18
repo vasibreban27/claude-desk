@@ -3,10 +3,12 @@ import { projectSettingsSchema, type ProjectSettings } from './settings'
 
 import type { PipelineStage, TaskFindingsView } from './review'
 import type { ToolkitListResult } from './toolkit'
+import type { PipelineLogEntry, PipelineLogRequest, PipelineLogResult } from './pipelineLog'
 
 export * from './settings'
 export * from './review'
 export * from './toolkit'
+export * from './pipelineLog'
 
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
 
@@ -40,7 +42,9 @@ export const IPC = {
   pipelineCancel: 'pipeline:cancel',
   pipelineDiscard: 'pipeline:discard',
   pipelineMerge: 'pipeline:merge',
-  pipelineEvent: 'pipeline:event'
+  pipelineEvent: 'pipeline:event',
+  pipelineLog: 'pipeline:log',
+  pipelineLogEvent: 'pipeline:log-event'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -394,6 +398,10 @@ export interface DeskApi {
   pipelineMerge(req: PipelineMergeRequest): Promise<PipelineMergeResult>
   /** Subscribe to pipeline change signals; returns an unsubscribe function. */
   onPipelineEvent(listener: (event: PipelineEvent) => void): () => void
+  /** The latest run's live log lines for a project (in memory, capped). */
+  pipelineLog(req: PipelineLogRequest): Promise<PipelineLogResult>
+  /** Subscribe to live pipeline log lines; returns an unsubscribe function. */
+  onPipelineLog(listener: (entry: PipelineLogEntry) => void): () => void
   /** Subscribe to activity events; returns an unsubscribe function. */
   onActivityEvent(listener: (event: ActivityEvent) => void): () => void
 }

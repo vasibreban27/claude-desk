@@ -17,6 +17,8 @@ import { createMutex, runPool } from './queue'
 import type { WorkerOutcome, WorkerRunner } from './workerRunner'
 import { runChecksGate, type ChecksGateArgs, type ChecksGateResult } from './checksGate'
 import { MAX_REPORTED_PATHS, uncommittedWork } from './uncommitted'
+import type { PipelineLogInput } from './pipelineLog'
+import type { PipelineLogRole, PipelineLogTone } from '../../shared/pipelineLog'
 import { createReviewRunner, type ReviewOutcome, type ReviewRunner } from './reviewRunner'
 import {
   GIT_ENV_ADDITIONS,
@@ -88,6 +90,8 @@ export interface OrchestratorDeps {
    */
   uncommitted?: (cwd: string) => Promise<string[]>
   readPlan?: (planPath: string) => Promise<string>
+  /** Live, short progress lines for the Activity tab. Never throws into a run. */
+  onLog?: (projectId: string, line: PipelineLogInput) => void
   newRunId?: () => string
   now?: () => number
   log?: (message: string) => void
@@ -170,9 +174,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   async function execute(
     runId: string,
     plan: ParsedPlan,
-    ctx: { settings: ProjectSettings; manager: WorktreeManager; handle: ActiveRun }
+    ctx: { settings: ProjectSettings; manager: WorktreeManager; handle: ActiveRun; projectId: string }
   ): Promise<RunSummary> {
     const { manager, handle } = ctx
+    const say = (taskId: string | null, role: PipelineLogRole, text: string, tone: PipelineLogTone = 'info', agent: string | null = null): void => {
+      try {
+        deps.onLog?.(ctx.projectId, { runId, taskId, role, agent, text, tone })
+      } catch {
+        // the live log never breaks a run
+      }
+    }
     const update = (taskId: string, patch: TaskPatch): void => {
       const r = deps.store.updateTask(runId, taskId, patch)
       if (!r.ok) throw new RunAbort(`database error: ${r.error}`)
@@ -181,6 +192,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     const reasons = new Map<string, string | null>()
     const settle = (taskId: string, st: 'failed' | 'blocked' | 'cancelled' | 'done', reason: string | null, extra: TaskPatch = {}): void => {
       update(taskId, { status: st, reason, finishedAt: now(), stage: null, ...extra })
+      say(taskId, 'pipeline', st === 'done' ? 'merged into the run branch' : `${st}${reason ? `: ${reason}` : ''}`, st === 'done' ? 'ok' : 'error')
       status.set(taskId, st)
       reasons.set(taskId, reason)
     }
@@ -212,6 +224,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const startedAt = now()
       update(task.id, { status: 'running', startedAt })
+      say(task.id, 'pipeline', `started: ${task.title} (${task.worker})`)
       // Totals over the first worker run, fix rounds and reviewers (each runner reports its own call's value).
       let turnsTotal: number | null = null
       let costTotal: number | null = null
@@ -262,7 +275,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           branch: wt.branch,
           settings,
           pluginPath: deps.pluginPath,
-          signal
+          signal,
+          onLog: (l) => say(task.id, 'worker', l.text, l.tone)
         })
         if (abortReason !== null) return
         absorb(outcome)
@@ -310,6 +324,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 return
               }
               checksResult = gate.status
+              say(task.id, 'pipeline', gate.status === 'failed' ? `checks failed: ${gate.check}` : 'checks passed', gate.status === 'failed' ? 'error' : 'ok')
               if (gate.status === 'failed') {
                 fix = { kind: 'checks', text: `Check "${gate.check}":\n${gate.output}` }
                 failReason = 'checks failed'
@@ -322,7 +337,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               for (const reviewer of reviewers) {
                 let rv: ReviewOutcome
                 try {
-                  rv = await runReview({ reviewer, task, worktree: wt.path, startSha, settings, pluginPath: deps.pluginPath, signal })
+                  rv = await runReview({
+                    reviewer,
+                    task,
+                    worktree: wt.path,
+                    startSha,
+                    settings,
+                    pluginPath: deps.pluginPath,
+                    signal,
+                    onLog: (l) => say(task.id, 'reviewer', l.text, l.tone, reviewer)
+                  })
                 } catch (e) {
                   if (abortReason !== null) return
                   log(`pipeline: reviewer ${reviewer} failed in ${task.id}: ${short(e)}`)
@@ -341,6 +365,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     rv.status === 'no-report' ? 'reviewer did not report' : rv.status === 'limit' ? 'reviewer limit reached' : 'reviewer error'
                   settle(task.id, 'failed', `review: ${why}`, timing())
                   return
+                }
+                {
+                  const b = rv.findings.filter(isBlocking).length
+                  say(task.id, 'reviewer', `review: ${b} blocking, ${rv.findings.length - b} minor`, b > 0 ? 'error' : 'ok', reviewer)
                 }
                 all.push(...rv.findings)
               }
@@ -371,6 +399,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             rounds += 1
             fixRounds = rounds
             update(task.id, { stage: 'fixing', fixRounds: rounds })
+            say(task.id, 'pipeline', `fix round ${rounds}: ${failReason}`)
             outcome = await deps.runner({
               task,
               worktree: wt.path,
@@ -378,7 +407,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               settings,
               pluginPath: deps.pluginPath,
               signal,
-              fix: { kind: fix.kind, text: fix.text, sessionId: outcome.sessionId ?? null }
+              fix: { kind: fix.kind, text: fix.text, sessionId: outcome.sessionId ?? null },
+              onLog: (l) => say(task.id, 'fix', l.text, l.tone)
             })
             if (abortReason !== null) return
             absorb(outcome)
@@ -431,6 +461,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
     }
 
+    say(null, 'pipeline', `run started: ${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'} in ${plan.waves.length} ${plan.waves.length === 1 ? 'wave' : 'waves'}`)
     try {
       for (const wave of plan.waves) {
         if (abortReason !== null) break
@@ -461,6 +492,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (values.includes('cancelled')) finalStatus = 'cancelled'
       else if (values.some((s) => s === 'failed' || s === 'blocked')) finalStatus = 'failed'
     }
+    say(null, 'pipeline', `run ${finalStatus}${runReason ? `: ${runReason}` : ''}`, finalStatus === 'done' ? 'ok' : 'error')
     const writeStatus = (): boolean => {
       try {
         const r = deps.store.setRunStatus(runId, finalStatus, now())
@@ -544,7 +576,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const handle: ActiveRun = { cancelled: false, controller: new AbortController() }
         active.set(runId, handle)
-        const finished = execute(runId, parsed.plan, { settings: loaded.settings, manager, handle })
+        const finished = execute(runId, parsed.plan, { settings: loaded.settings, manager, handle, projectId: input.projectId })
           .catch((e): RunSummary => ({ runId, status: 'failed', reason: short(e), tasks: [] }))
           .finally(() => active.delete(runId))
         return { ok: true, runId, finished }

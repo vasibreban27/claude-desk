@@ -48,6 +48,29 @@ describe('run_command', () => {
     expect(fn).not.toHaveBeenCalled()
   })
 
+  it('logs one outcome line per work-tool call, never the full output', async () => {
+    const lines: { text: string; tone: string }[] = []
+    const fn = vi.fn<ExecFn>(async () => ({ stdout: 'line1\nline2 secret', stderr: '' }))
+    const tools = createWorkerTools({
+      taskId: 'T1',
+      worktree: '/wt',
+      branch: 'b',
+      owns: ['src/'],
+      checks: [],
+      onBlocked: vi.fn(),
+      exec: fn,
+      env: { PATH: '' },
+      platform: 'linux',
+      allowCommands: true,
+      onLog: (l) => lines.push(l)
+    })
+    await tools.handlers.run_command({ command: 'npm', args: ['install', 'x'] })
+    await tools.handlers.run_command({ command: 'bash', args: [] })
+    expect(lines[0]).toEqual({ text: 'run_command npm install x: npm finished', tone: 'ok' })
+    expect(lines[1]?.tone).toBe('error')
+    expect(lines.some((l) => l.text.includes('secret'))).toBe(false)
+  })
+
   it('reports a failing command with its exit code', async () => {
     const { h } = setup(true, async () => {
       throw Object.assign(new Error('x'), { code: 1, stdout: '', stderr: 'ERR! 404' })

@@ -78,6 +78,8 @@ describe('IPC channels', () => {
         'pipeline:cancel',
         'pipeline:discard',
         'pipeline:merge',
+        'pipeline:log',
+        'pipeline:log-event',
         'pipeline:event'
       ].sort()
     )

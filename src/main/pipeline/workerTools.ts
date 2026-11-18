@@ -185,6 +185,8 @@ export interface WorkerToolsDeps {
   onBlocked: (reason: string) => void
   /** Project setting: enables the allow-listed `run_command` tool. */
   allowCommands?: boolean
+  /** Receives one short outcome line per work-tool call (live pipeline log). */
+  onLog?: (line: { text: string; tone: 'ok' | 'error' }) => void
   exec?: ExecFn
   env?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
@@ -489,7 +491,33 @@ ${out}` : ''}`)
     }
   }
 
-  const handlers: WorkerHandlers = { run_check, git_commit, report_blocked, run_command }
+  /** Wraps a handler so each call adds one outcome line to the live log (never the full output). */
+  const logged =
+    (name: keyof WorkerHandlers, fn: (input: unknown) => Promise<TextResult>) =>
+    async (input: unknown): Promise<TextResult> => {
+      const r = await fn(input)
+      if (deps.onLog) {
+        try {
+          const first = (r.content[0]?.text ?? '').split(/\r?\n/)[0] ?? ''
+          const raw = (typeof input === 'object' && input !== null ? input : {}) as { command?: unknown; args?: unknown }
+          const what =
+            name === 'run_command' && typeof raw.command === 'string'
+              ? `run_command ${raw.command} ${Array.isArray(raw.args) ? raw.args.filter((a) => typeof a === 'string').join(' ') : ''}`.trim()
+              : name
+          deps.onLog({ text: `${what}: ${first}`, tone: r.isError === true ? 'error' : 'ok' })
+        } catch {
+          // logging never changes a tool result
+        }
+      }
+      return r
+    }
+
+  const handlers: WorkerHandlers = {
+    run_check: logged('run_check', run_check),
+    git_commit: logged('git_commit', git_commit),
+    report_blocked: logged('report_blocked', report_blocked),
+    run_command: logged('run_command', run_command)
+  }
 
   return {
     handlers,

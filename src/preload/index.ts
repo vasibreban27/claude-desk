@@ -4,7 +4,8 @@ import {
   type ActivityEvent,
   type ChatEvent,
   type DeskApi,
-  type PipelineEvent
+  type PipelineEvent,
+  type PipelineLogEntry
 } from '../shared/ipc'
 
 /** Minimal typed bridge: each method maps to exactly one contract channel. ipcRenderer is never exposed. */
@@ -29,6 +30,14 @@ const api: DeskApi = {
   pipelineCancel: (req) => ipcRenderer.invoke(IPC.pipelineCancel, req),
   pipelineDiscard: (req) => ipcRenderer.invoke(IPC.pipelineDiscard, req),
   pipelineMerge: (req) => ipcRenderer.invoke(IPC.pipelineMerge, req),
+  pipelineLog: (req) => ipcRenderer.invoke(IPC.pipelineLog, req),
+  onPipelineLog: (listener) => {
+    const wrapped = (_e: IpcRendererEvent, entry: PipelineLogEntry): void => listener(entry)
+    ipcRenderer.on(IPC.pipelineLogEvent, wrapped)
+    return () => {
+      ipcRenderer.removeListener(IPC.pipelineLogEvent, wrapped)
+    }
+  },
   onPipelineEvent: (listener) => {
     const wrapped = (_e: IpcRendererEvent, event: PipelineEvent): void => listener(event)
     ipcRenderer.on(IPC.pipelineEvent, wrapped)

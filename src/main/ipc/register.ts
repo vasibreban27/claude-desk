@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { ASSISTANT_PROJECT_ID, IPC, type ActivityEvent, type ChatEvent, type PipelineEvent } from '../../shared/ipc'
+import { ASSISTANT_PROJECT_ID, IPC, type ActivityEvent, type ChatEvent, type PipelineEvent, type PipelineLogEntry } from '../../shared/ipc'
 import { ChatService } from '../chat/service'
 import { sdkRunner } from '../chat/runner'
 import { readGitStatus } from '../git/status'
@@ -10,6 +10,7 @@ import { withChangeEvents } from '../db/pipelineStore'
 import { createOrchestrator, type Orchestrator } from '../pipeline/orchestrator'
 import { createPipelineService, type PipelineService } from '../pipeline/service'
 import { createWorkerRunner } from '../pipeline/workerRunner'
+import { createPipelineLog, type PipelineLog } from '../pipeline/pipelineLog'
 import type { SettingsStore } from '../db/settingsStore'
 import type { AppSettings } from '../projects/appSettings'
 import { readToolkitInfo } from '../config'
@@ -31,10 +32,19 @@ function broadcastPipelineEvent(event: PipelineEvent): void {
  * The store emits a change event after each write; the orchestrator is created once (on first use, when the
  * toolkit path is known) with the real worker runner.
  */
+function broadcastPipelineLog(entry: PipelineLogEntry): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    const wc = win.webContents
+    if (!wc.isDestroyed()) wc.send(IPC.pipelineLogEvent, entry)
+  }
+}
+
 function buildPipeline(
   rawStore: PipelineStore,
   settings: SettingsStore,
-  projects: ProjectStore
+  projects: ProjectStore,
+  pipelineLog: PipelineLog
 ): PipelineService {
   // 4a crash recovery: runs left `running` by a killed app are failed at registration, not on first start.
   try {
@@ -56,7 +66,8 @@ function buildPipeline(
           settings,
           runner,
           pluginPath: toolkit.path,
-          log: (m) => console.error(m)
+          log: (m) => console.error(m),
+          onLog: (projectId, line) => pipelineLog.add(projectId, line)
         })
       }
       return orchestrator.startRun(input)
@@ -120,13 +131,15 @@ export function registerIpc(
     return result.canceled || first === undefined ? undefined : first
   }
 
-  const pipeline = pipelineStore ? buildPipeline(pipelineStore, settingsStore, store) : undefined
+  const pipelineLog = createPipelineLog(broadcastPipelineLog)
+  const pipeline = pipelineStore ? buildPipeline(pipelineStore, settingsStore, store, pipelineLog) : undefined
 
   const make = (event: IpcMainInvokeEvent) =>
     createHandlers({ store, readGitStatus, pickFolder: () => pickFolder(event), chat,
       settingsStore,
       readToolkitInfo,
       ...(appSettings ? { appSettings } : {}),
+      pipelineLog,
       ...(pipeline ? { pipeline } : {}),
       ...(runStore ? { runStore } : {})
     })
@@ -158,6 +171,7 @@ export function registerIpc(
   ipcMain.handle(IPC.pipelineCancel, (event, payload: unknown) => make(event).pipelineCancel(payload))
   ipcMain.handle(IPC.pipelineDiscard, (event, payload: unknown) => make(event).pipelineDiscard(payload))
   ipcMain.handle(IPC.pipelineMerge, (event, payload: unknown) => make(event).pipelineMerge(payload))
+  ipcMain.handle(IPC.pipelineLog, (event, payload: unknown) => make(event).pipelineLog(payload))
   ipcMain.handle(IPC.chatSend, async (event, payload: unknown) => {
     try {
       await refreshPaths()
@@ -176,7 +190,7 @@ export function registerIpc(
 
   return () => {
     for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.settingsGet, IPC.settingsSet, IPC.appInfo, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick,
-      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineDiscard, IPC.pipelineMerge]) {
+      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog]) {
       ipcMain.removeHandler(channel)
     }
     targets.clear()
