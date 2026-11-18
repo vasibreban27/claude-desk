@@ -244,6 +244,20 @@ describe('pipeline service', () => {
       expect(await service.status('22222222-2222-4222-8222-222222222222')).toEqual({ ok: false, error: 'not-found' })
     })
 
+    it('maps stage, fix rounds and findings into the task view', async () => {
+      seedRun('r3')
+      const findings = {
+        blocking: 1,
+        minor: 0,
+        items: [{ reviewer: 'reviewer' as const, severity: 'blocker' as const, file: 'a.ts', line: 3, text: 'bad' }]
+      }
+      store.updateTask('r3', 'T1', { stage: 'fixing', fixRounds: 1, findings })
+      const r = await service.status(PID)
+      if (!r.ok || r.run === null) throw new Error('expected a run')
+      expect(r.run.tasks[0]).toMatchObject({ stage: 'fixing', fixRounds: 1, findings })
+      expect(r.run.tasks[1]).toMatchObject({ stage: null, fixRounds: null, findings: null })
+    })
+
     it('returns the latest run as a view in wave order', async () => {
       seedRun('r1')
       seedRun('r2')

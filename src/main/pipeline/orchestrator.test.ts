@@ -6,6 +6,10 @@ import type { SettingsStore } from '../db/settingsStore'
 import { defaultSettings } from '../../shared/settings'
 import { createOrchestrator, type OrchestratorDeps, type StartRunInput } from './orchestrator'
 import type { WorkerOutcome, WorkerRunArgs } from './workerRunner'
+import type { ChecksGateResult } from './checksGate'
+import type { ReviewOutcome, ReviewRunArgs } from './reviewRunner'
+import type { Finding } from '../../shared/review'
+import type { ProjectSettings } from '../../shared/settings'
 import type { MergeResult, WorktreeManager } from './worktrees'
 
 const task = (id: string, owns: string, deps: string): string =>
@@ -48,12 +52,18 @@ const finishedOutcome = (over: Partial<WorkerOutcome> = {}): WorkerOutcome => ({
   ...over
 })
 
+const clean = (over: Partial<ReviewOutcome> = {}): ReviewOutcome => ({ status: 'finished', findings: [], turns: 2, costUsd: 0.02, ...over })
+const finding = (severity: Finding['severity']): Finding => ({ reviewer: 'reviewer', severity, file: 'a.ts', line: 1, text: 'bad' })
+
 function setup(opts: {
   runner?: (a: WorkerRunArgs) => Promise<WorkerOutcome>
   merge?: (id: string) => Promise<MergeResult>
   heads?: (branch: string, call: number) => string
   settings?: SettingsStore
   plan?: string
+  cfg?: Partial<ProjectSettings>
+  gate?: (n: number) => ChecksGateResult | Promise<ChecksGateResult>
+  review?: (a: ReviewRunArgs, n: number) => ReviewOutcome | Promise<ReviewOutcome>
 }) {
   const db = new Database(':memory:')
   migrate(db)
@@ -72,13 +82,19 @@ function setup(opts: {
     return (opts.runner ?? (async () => finishedOutcome()))(a)
   })
   const settings: SettingsStore = opts.settings ?? {
-    get: () => ({ settings: defaultSettings(), notice: null }),
+    get: () => ({ settings: { ...defaultSettings(), ...opts.cfg }, notice: null }),
     set: () => ({ ok: false, error: 'invalid' })
   }
+  let gateCalls = 0
+  let reviewCalls = 0
+  const gate = vi.fn(async () => (opts.gate ? opts.gate(++gateCalls) : ({ status: 'passed' } as ChecksGateResult)))
+  const reviewRunner = vi.fn(async (a: ReviewRunArgs) => (opts.review ? opts.review(a, ++reviewCalls) : clean({ costUsd: null })))
   const deps: OrchestratorDeps = {
     store,
     settings,
     runner,
+    gate,
+    reviewRunner,
     pluginPath: '/plugin',
     createManager: () => manager,
     readPlan: async () => opts.plan ?? PLAN,
@@ -93,7 +109,7 @@ function setup(opts: {
       return () => (t += 10)
     })()
   }
-  return { orch: createOrchestrator(deps), store, manager, runner, order, deps }
+  return { orch: createOrchestrator(deps), store, manager, runner, order, deps, gate, reviewRunner }
 }
 
 describe('orchestrator', () => {
@@ -587,5 +603,213 @@ describe('orchestrator: parallel pool', () => {
     }
     expect((await r.finished).status).toBe('done')
     expect(h.max()).toBe(2)
+  })
+})
+
+describe('orchestrator: review loop', () => {
+  const ONE = ['# Plan: one', '', '## 7. Tasks', '', '### Wave 1', '', task('T1', 'a.ts', 'none')].join('\n')
+  const flowPlan = (sensitive: string): string =>
+    [
+      'Format: flow-plan/1',
+      '',
+      '# Plan: flow',
+      '',
+      '## Wave 1: only',
+      '',
+      '### T1: title T1',
+      '- Status: [ ] todo',
+      '- Worker: node-developer',
+      '- Size: S',
+      `- Sensitive: ${sensitive}`,
+      '- Contract: none',
+      '- Owns: `a.ts`',
+      '- Read first: `a.ts`',
+      '- Depends on: none',
+      '- Done when: `npm test`',
+      '- Acceptance criteria:',
+      '  - T1 works',
+      ''
+    ].join('\n')
+  const CHECK = { name: 'test', command: 'npm', args: ['test'], timeoutMs: 1000 }
+  const checksCfg = { checks: [CHECK] } as unknown as Partial<ProjectSettings>
+  const moving = (_r: string, call: number): string => (call === 1 ? 'start' : `h${call}`)
+
+  async function run(c: ReturnType<typeof setup>) {
+    const r = await c.orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    const summary = await r.finished
+    const rows = c.store.listTasks(r.runId)
+    if (!rows.ok) throw new Error('no tasks')
+    return { summary, t1: rows.value[0] }
+  }
+
+  it('sends a failing check back to the same worker, then merges with fixRounds 1', async () => {
+    const seen: WorkerRunArgs[] = []
+    const c = setup({
+      plan: ONE,
+      cfg: { ...checksCfg, autoFixRounds: 2 },
+      heads: moving,
+      runner: async (a) => {
+        seen.push(a)
+        return finishedOutcome({ sessionId: `s${seen.length}` })
+      },
+      gate: (k) => (k === 1 ? { status: 'failed', check: 'test', output: 'boom' } : { status: 'passed' }),
+      review: () => clean()
+    })
+    const { summary, t1 } = await run(c)
+    expect(summary.status).toBe('done')
+    expect(seen).toHaveLength(2)
+    expect(seen[1]?.fix).toMatchObject({ kind: 'checks', sessionId: 's1' })
+    expect(seen[1]?.fix?.text).toContain('boom')
+    expect(c.reviewRunner).toHaveBeenCalledTimes(1)
+    expect(t1).toMatchObject({ status: 'done', fixRounds: 1, stage: null, checksResult: 'passed' })
+    expect(t1?.costUsd).toBeCloseTo(0.01 + 0.01 + 0.02)
+    expect(c.manager.mergeTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails with review: blocking findings when no rounds remain, stores findings, never merges', async () => {
+    const c = setup({
+      plan: ONE,
+      cfg: { autoFixRounds: 0, reviewers: ['reviewer'] },
+      heads: moving,
+      review: () => clean({ findings: [finding('blocker'), finding('nit')] })
+    })
+    const { summary, t1 } = await run(c)
+    expect(summary.tasks[0]).toMatchObject({ status: 'failed', reason: 'review: blocking findings' })
+    expect(t1?.findings).toMatchObject({ blocking: 1, minor: 1 })
+    expect(t1?.findings?.items).toHaveLength(2)
+    expect(t1?.stage).toBeNull()
+    expect(c.manager.mergeTask).not.toHaveBeenCalled()
+  })
+
+  it('fixes blocking findings in a round and merges; minor findings never block', async () => {
+    const seen: WorkerRunArgs[] = []
+    const c = setup({
+      plan: ONE,
+      cfg: { autoFixRounds: 1 },
+      heads: moving,
+      runner: async (a) => {
+        seen.push(a)
+        return finishedOutcome()
+      },
+      review: (_a, k) => clean({ findings: k === 1 ? [finding('major')] : [finding('minor')] })
+    })
+    const { summary, t1 } = await run(c)
+    expect(summary.status).toBe('done')
+    expect(seen[1]?.fix?.kind).toBe('review')
+    expect(t1).toMatchObject({ fixRounds: 1 })
+    expect(t1?.findings).toMatchObject({ blocking: 0, minor: 1 })
+  })
+
+  it('a fix round without a new commit fails with no commit after fix', async () => {
+    const c = setup({
+      plan: ONE,
+      cfg: { autoFixRounds: 2 },
+      heads: (_r, call) => (call === 1 ? 'start' : 'same'),
+      review: () => clean({ findings: [finding('blocker')] })
+    })
+    const { summary } = await run(c)
+    expect(summary.tasks[0]).toMatchObject({ status: 'failed', reason: 'no commit after fix' })
+    expect(c.manager.mergeTask).not.toHaveBeenCalled()
+  })
+
+  it('a worker that reports blocked in a fix round fails the task', async () => {
+    let n = 0
+    const c = setup({
+      plan: ONE,
+      cfg: { autoFixRounds: 2 },
+      heads: moving,
+      runner: async () => (++n === 2 ? finishedOutcome({ blocked: 'need x' }) : finishedOutcome()),
+      review: () => clean({ findings: [finding('blocker')] })
+    })
+    const { summary } = await run(c)
+    expect(summary.tasks[0]).toMatchObject({ status: 'failed', reason: 'blocked: need x' })
+    expect(c.manager.mergeTask).not.toHaveBeenCalled()
+  })
+
+  it('exhausted rounds on a failing check fail with checks failed', async () => {
+    const c = setup({
+      plan: ONE,
+      cfg: { ...checksCfg, autoFixRounds: 1 },
+      heads: moving,
+      gate: () => ({ status: 'failed', check: 'test', output: 'boom' })
+    })
+    const { summary, t1 } = await run(c)
+    expect(summary.tasks[0]).toMatchObject({ status: 'failed', reason: 'checks failed' })
+    expect(t1).toMatchObject({ fixRounds: 1, checksResult: 'failed' })
+    expect(c.reviewRunner).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['no-report', 'review: reviewer did not report'],
+    ['limit', 'review: reviewer limit reached'],
+    ['error', 'review: reviewer error']
+  ] as const)('a reviewer that ends with %s fails the task', async (status, reason) => {
+    const c = setup({ plan: ONE, heads: moving, review: () => clean({ status }) })
+    const { summary, t1 } = await run(c)
+    expect(summary.tasks[0]).toMatchObject({ status: 'failed', reason })
+    expect(t1?.costUsd).toBeCloseTo(0.03)
+    expect(c.manager.mergeTask).not.toHaveBeenCalled()
+  })
+
+  it('merges as in 4c with no reviewers and no checks, and runs neither', async () => {
+    const c = setup({ plan: ONE, cfg: { reviewers: [], checks: [] } })
+    const { summary, t1 } = await run(c)
+    expect(summary.status).toBe('done')
+    expect(c.gate).not.toHaveBeenCalled()
+    expect(c.reviewRunner).not.toHaveBeenCalled()
+    expect(t1).toMatchObject({ fixRounds: null, findings: null })
+  })
+
+  it('runs the security-auditor only for Sensitive: yes tasks', async () => {
+    const both = { reviewers: ['reviewer', 'security-auditor'] } as Partial<ProjectSettings>
+    const plain = setup({ plan: flowPlan('no'), cfg: both, heads: moving })
+    await run(plain)
+    expect(plain.reviewRunner.mock.calls.map((c) => c[0].reviewer)).toEqual(['reviewer'])
+    const sens = setup({ plan: flowPlan('yes'), cfg: both, heads: moving })
+    await run(sens)
+    expect(sens.reviewRunner.mock.calls.map((c) => c[0].reviewer)).toEqual(['reviewer', 'security-auditor'])
+  })
+
+  it('cancel during a review cancels the task, clears the stage and keeps the reviewer cost', async () => {
+    let orch: ReturnType<typeof setup>['orch'] | null = null
+    let runId = ''
+    const c = setup({
+      plan: ONE,
+      heads: moving,
+      review: () => {
+        orch?.cancel(runId)
+        return clean({ status: 'cancelled', costUsd: 0.05 })
+      }
+    })
+    orch = c.orch
+    const r = await c.orch.startRun({ ...input, runId: 'rid-1' })
+    if (!r.ok) throw new Error(r.error)
+    runId = r.runId
+    const summary = await r.finished
+    expect(summary.tasks[0]?.status).toBe('cancelled')
+    const rows = c.store.listTasks(r.runId)
+    if (!rows.ok) throw new Error('no tasks')
+    expect(rows.value[0]).toMatchObject({ status: 'cancelled', stage: null })
+    expect(rows.value[0]?.costUsd).toBeCloseTo(0.06)
+  })
+
+  it('a database error on a stage write fails the run and leaves no task running', async () => {
+    const c = setup({ plan: ONE, heads: moving })
+    const real = c.deps.store
+    const store: PipelineStore = {
+      ...real,
+      updateTask: (rid, tid, patch) =>
+        patch.stage === 'review' ? { ok: false, error: 'storage-error' } : real.updateTask(rid, tid, patch)
+    }
+    const orch = createOrchestrator({ ...c.deps, store })
+    const r = await orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    const summary = await r.finished
+    expect(summary.status).toBe('failed')
+    const rows = real.listTasks(r.runId)
+    if (!rows.ok) throw new Error('no tasks')
+    expect(rows.value.every((t) => t.status !== 'running' && t.status !== 'queued')).toBe(true)
+    expect(rows.value[0]?.stage).toBeNull()
   })
 })

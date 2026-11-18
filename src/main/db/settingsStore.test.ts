@@ -96,6 +96,31 @@ describe('SettingsStore', () => {
     })
   })
 
+  it('keeps stored autoFixRounds, reviewers and the three limits when a caller omits them', () => {
+    const store = createSettingsStore(db)
+    store.set(P, {
+      ...custom(),
+      autoFixRounds: 4,
+      reviewers: ['reviewer', 'security-auditor'],
+      maxParallel: 3,
+      maxTurns: 60,
+      taskTimeoutMinutes: 30
+    })
+    const { autoFixRounds, reviewers, maxParallel, maxTurns, taskTimeoutMinutes, ...legacy } = custom()
+    void [autoFixRounds, reviewers, maxParallel, maxTurns, taskTimeoutMinutes]
+    const r = store.set(P, legacy)
+    expect(r.ok).toBe(true)
+    expect(store.get(P).settings).toMatchObject({
+      autoFixRounds: 4,
+      reviewers: ['reviewer', 'security-auditor'],
+      maxParallel: 3,
+      maxTurns: 60,
+      taskTimeoutMinutes: 30
+    })
+    store.set(P, { ...legacy, autoFixRounds: 0, reviewers: [] })
+    expect(store.get(P).settings).toMatchObject({ autoFixRounds: 0, reviewers: [], maxParallel: 3 })
+  })
+
   it('without a database: defaults and storage-unavailable', () => {
     const store = createSettingsStore(null)
     expect(store.get(P)).toEqual({ settings: defaultSettings(), notice: 'storage-unavailable' })
