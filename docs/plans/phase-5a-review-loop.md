@@ -212,7 +212,7 @@ Internal: `src/shared/review.ts` (finding schema, `isBlocking`, caps), `checksGa
 ## Wave 4: smoke
 
 ### T8: Smoke: integration test and manual check
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: M
 - Sensitive: no
@@ -253,3 +253,4 @@ Internal: `src/shared/review.ts` (finding schema, `isBlocking`, caps), `checksGa
 - W3 T6 notes: the loop runs only when there are checks or reviewers (otherwise the 4c path runs unchanged); reviewers run one after another; `turns` sums worker calls only; `settle` always writes `stage: null`; only the `setup` helper of `orchestrator.test.ts` changed (injects a fake gate and a fake reviewer).
 - W3 test-writer: 32 cases added (`orchestrator.test.ts`, `service.test.ts`, `settingsStore.test.ts`), no production bugs found.
 - W3 fix round 2 (of 4 in total): the integration tests (`tests/phase-4a-flow`, `4b-1-flow`, `4c-flow`, and the two live tests) used `defaultSettings()` whose default `reviewers` is now `["reviewer"]`, so the real reviewer runner ran inside the tests and flipped the F3 outcome; they now use `reviewers: []`, and 4a-flow has a throwing `reviewRunner` guard (accepted: test files outside T6 `Owns`). Product note: a project with default settings and no checks now runs a reviewer on every task (cost, and `auto` model of the worker is unrelated: the reviewer is fixed to sonnet).
+- W4 T8: `tests/phase-5a-flow.test.ts` (3 tests, about 42 s, real git) mocks only `createWorkerRunner` and `createReviewRunner`; the "maxParallel never exceeded (review included)" test uses `maxParallel` 1 (stricter than the plan wording). The launched-app steps in `docs/notes/phase-5a-manual-check.md` have NOT been run (Results table says "not run"); step 8 checks cost across a resume live (per call or cumulative).
