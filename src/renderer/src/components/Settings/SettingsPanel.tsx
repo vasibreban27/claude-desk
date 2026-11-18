@@ -9,6 +9,7 @@ import {
   type LimitErrors,
   type LimitValues
 } from './LimitsEditor'
+import { ReviewEditor, reviewFromSettings, validateReview, type ReviewValues } from './ReviewEditor'
 import './settings.css'
 
 const MODEL_LABELS: Record<ModelChoice, string> = {
@@ -58,6 +59,9 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
   const [clientInvalid, setClientInvalid] = useState(false)
   const [limits, setLimits] = useState<LimitValues>(() => limitsFromSettings(initial))
   const [limitErrors, setLimitErrors] = useState<LimitErrors>({})
+  const [review, setReview] = useState<ReviewValues>(() => reviewFromSettings(initial))
+  const reviewValidation = validateReview(review)
+  const reviewError = reviewValidation.error
 
   function submit(ev: FormEvent) {
     ev.preventDefault()
@@ -67,6 +71,7 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
     const limitValidation = validateLimits(limits)
     setLimitErrors(limitValidation.errors)
     const limitsOk = Object.keys(limitValidation.errors).length === 0
+    const reviewOk = reviewValidation.error === null
     const parsed = projectSettingsSchema.safeParse({
       version: 1,
       model,
@@ -74,10 +79,11 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
       allowGitRead,
       allowPlanWrites,
       checks: validation.errors.size === 0 ? validation.checks : undefined,
-      ...(limitsOk ? limitValidation.values : {})
+      ...(limitsOk ? limitValidation.values : {}),
+      ...(reviewOk ? reviewValidation.values : {})
     })
     setClientInvalid(!parsed.success)
-    if (parsed.success && validation.errors.size === 0 && limitsOk) onSave(parsed.data)
+    if (parsed.success && validation.errors.size === 0 && limitsOk && reviewOk) onSave(parsed.data)
   }
 
   const errorText = clientInvalid ? SAVE_ERRORS['client-invalid'] : saveError ? SAVE_ERRORS[saveError] : null
@@ -151,6 +157,14 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
           onEdit()
         }}
       />
+      <ReviewEditor
+        values={review}
+        error={reviewError}
+        onChange={(next) => {
+          setReview(next)
+          onEdit()
+        }}
+      />
       <ChecksEditor
         rows={rows}
         errors={checkErrors}
@@ -164,7 +178,7 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
           Some checks are invalid. Fix the marked fields and save again.
         </p>
       ) : null}
-      <button type="submit" className="settings__save" disabled={saving}>
+      <button type="submit" className="settings__save" disabled={saving || reviewError !== null}>
         {saving ? 'Saving...' : 'Save'}
       </button>
       {errorText ? (
@@ -174,7 +188,7 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
       ) : null}
       {showSaved ? (
         <p role="status" className="settings__message">
-          Settings saved. They apply to the next message.
+          Settings saved. They apply to the next message or run.
         </p>
       ) : null}
       {showSaved && sessionReset ? (

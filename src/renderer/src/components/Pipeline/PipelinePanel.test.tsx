@@ -41,7 +41,10 @@ const run = (over: Partial<PipelineRunView> = {}): PipelineRunView => ({
       checks: 'passed',
       turns: 3,
       costUsd: 0.5,
-      durationMs: 65000
+      durationMs: 65000,
+      stage: null,
+      fixRounds: null,
+      findings: null
     },
     {
       taskId: 'T2',
@@ -55,7 +58,10 @@ const run = (over: Partial<PipelineRunView> = {}): PipelineRunView => ({
       checks: null,
       turns: null,
       costUsd: null,
-      durationMs: null
+      durationMs: null,
+      stage: null,
+      fixRounds: null,
+      findings: null
     }
   ],
   ...over
@@ -231,6 +237,41 @@ describe('PipelinePanel', () => {
     render(<PipelinePanel {...props({ run: run({ tasks: tasks.map((x) => ({ ...x, wave: 1 })) }) })} />)
     expect(screen.getByLabelText('Run summary')).toHaveTextContent('2 running, 1 queued, 1 done · ~$0.7500 total')
     expect(screen.getAllByText('running', { selector: '.pipeline__task .pipeline__status' })).toHaveLength(2)
+  })
+
+  it('shows the stage and round next to the status of a running task', () => {
+    const base = run().tasks[0]!
+    const task = { ...base, status: 'running' as const, stage: 'fixing' as const, fixRounds: 1 }
+    render(<PipelinePanel {...props({ run: run({ tasks: [task] }) })} />)
+    expect(screen.getByText('fixing, round 1')).toBeInTheDocument()
+  })
+
+  it('shows findings of a failed task as plain text', () => {
+    const base = run().tasks[0]!
+    const items = Array.from({ length: 20 }, (_, i) => ({
+      reviewer: 'reviewer' as const,
+      severity: i === 0 ? ('blocker' as const) : ('nit' as const),
+      file: `src/f${i}.ts`,
+      line: i === 0 ? 7 : null,
+      text: i === 0 ? '<img src=x onerror=alert(1)>' : `note ${i}`
+    }))
+    const task = {
+      ...base,
+      status: 'failed' as const,
+      reason: 'review: blocking findings',
+      findings: { blocking: 1, minor: 19, items }
+    }
+    const { container } = render(<PipelinePanel {...props({ run: run({ tasks: [task] }) })} />)
+    expect(screen.getByText('1 blocking, 19 minor')).toBeInTheDocument()
+    expect(screen.getByText(/blocker · reviewer · src\/f0\.ts:7: <img src=x onerror=alert\(1\)>/)).toBeInTheDocument()
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.querySelectorAll('.pipeline__findings li')).toHaveLength(20)
+  })
+
+  it('shows no stage or findings for a task without them', () => {
+    render(<PipelinePanel {...props({ run: run() })} />)
+    expect(screen.queryByText(/blocking,/)).toBeNull()
+    expect(screen.queryByText(/round/)).toBeNull()
   })
 
   it('does not render Discard while the status is running, even if not active', () => {
