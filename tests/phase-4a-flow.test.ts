@@ -93,7 +93,7 @@ describe('phase 4a pipeline, end to end (real git, in-memory db, fake workers)',
   })
 
   function settings(): SettingsStore {
-    return { get: () => ({ settings: defaultSettings(), notice: null }), set: () => ({ ok: false, error: 'invalid' }) }
+    return { get: () => ({ settings: { ...defaultSettings(), reviewers: [] }, notice: null }), set: () => ({ ok: false, error: 'invalid' }) }
   }
 
   /** A runner that behaves like a worker: guarded writes, then the real git_commit tool. */
@@ -156,8 +156,13 @@ describe('phase 4a pipeline, end to end (real git, in-memory db, fake workers)',
     return { runId: r.runId, summary: await r.finished }
   }
 
+  // Regression (T-fix2): default settings must not reach the real reviewer runner; fail loudly if the review loop runs.
+  const noReviewer = (): never => {
+    throw new Error('review loop must not run when reviewers is empty')
+  }
+
   const make = (runner: (a: WorkerRunArgs) => Promise<WorkerOutcome>): Orchestrator =>
-    createOrchestrator({ store, settings: settings(), runner, pluginPath: base })
+    createOrchestrator({ store, settings: settings(), runner, pluginPath: base, reviewRunner: noReviewer })
 
   const run = (runId: string) => {
     const r = store.getRun(runId)

@@ -91,6 +91,7 @@ async function runOnce(toolkit: string, limit: number): Promise<Measured> {
     const settings = createSettingsStore(db)
     const saved = settings.set('live', {
       ...defaultSettings(),
+      reviewers: [],
       model: 'opus',
       maxParallel: limit,
       checks: [{ name: 'verify', executable: 'node', args: ['check.mjs'], timeoutMs: 60_000 }]
