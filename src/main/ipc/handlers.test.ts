@@ -286,6 +286,22 @@ describe('settings and app info', () => {
     })
   })
 
+  it('projects:create validates the payload, uses the stored root and never takes a path', async () => {
+    const appSettings = { getProjectsRoot: async () => null, setProjectsRoot: async () => undefined }
+    const h = setup({ appSettings }).h
+    expect(await h.createProject({ name: '../x' })).toEqual({ ok: false, error: 'invalid-name' })
+    expect(await h.createProject({ name: 'ok-name', path: '/etc' })).toEqual({ ok: false, error: 'invalid-name' })
+    expect(await h.createProject({ name: 'ok-name' })).toEqual({ ok: false, error: 'no-root' })
+  })
+
+  it('projects:root-pick stores the picked folder', async () => {
+    let root: string | null = null
+    const appSettings = { getProjectsRoot: async () => root, setProjectsRoot: async (r: string) => { root = r } }
+    const h = setup({ appSettings, pickFolder: async () => '/projects' }).h
+    expect(await h.projectsRootPick()).toEqual({ root: '/projects' })
+    expect(await h.projectsRootGet()).toEqual({ root: '/projects' })
+  })
+
   it('toolkit:list validates the scan result and maps failures', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
     const info = { status: 'valid' as const, path: '/t', version: null }
