@@ -246,6 +246,36 @@ describe('PipelinePanel', () => {
     expect(screen.getByText('fixing, round 1')).toBeInTheDocument()
   })
 
+  it('shows fix rounds of a finished task whose stage is null', () => {
+    const base = run().tasks[0]!
+    const task = { ...base, status: 'done' as const, stage: null, fixRounds: 1 }
+    render(<PipelinePanel {...props({ run: run({ tasks: [task] }) })} />)
+    expect(screen.getByText('fix rounds: 1')).toBeInTheDocument()
+  })
+
+  it('shows fix rounds and findings of a failed task', () => {
+    const base = run().tasks[0]!
+    const task = {
+      ...base,
+      status: 'failed' as const,
+      reason: 'review: blocking findings',
+      stage: null,
+      fixRounds: 2,
+      findings: { blocking: 1, minor: 0, items: [] }
+    }
+    render(<PipelinePanel {...props({ run: run({ tasks: [task] }) })} />)
+    expect(screen.getByText('fix rounds: 2')).toBeInTheDocument()
+    expect(screen.getByText('1 blocking, 0 minor')).toBeInTheDocument()
+  })
+
+  it('does not show the round number twice for a running task', () => {
+    const base = run().tasks[0]!
+    const task = { ...base, status: 'running' as const, stage: 'fixing' as const, fixRounds: 2 }
+    render(<PipelinePanel {...props({ run: run({ tasks: [task] }) })} />)
+    expect(screen.getByText('fixing, round 2')).toBeInTheDocument()
+    expect(screen.queryByText(/fix rounds/)).toBeNull()
+  })
+
   it('shows findings of a failed task as plain text', () => {
     const base = run().tasks[0]!
     const items = Array.from({ length: 20 }, (_, i) => ({

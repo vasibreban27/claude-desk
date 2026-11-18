@@ -85,6 +85,9 @@ function TaskRow({ task }: { task: PipelineTaskView }) {
         <strong>{task.taskId}</strong> {task.title}
         <span className={`pipeline__status pipeline__status--${task.status}`}>{task.status}</span>
         {stage && <span className="pipeline__badge">{stage}</span>}
+        {!stage && task.fixRounds !== null && task.fixRounds > 0 && (
+          <span className="pipeline__badge">fix rounds: {task.fixRounds}</span>
+        )}
         {task.status === 'done' && <span className="pipeline__badge">Committed, not reviewed</span>}
       </div>
       <div className="pipeline__muted">
