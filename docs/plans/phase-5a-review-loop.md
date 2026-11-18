@@ -192,7 +192,7 @@ Internal: `src/shared/review.ts` (finding schema, `isBlocking`, caps), `checksGa
 ## Wave 3: the loop
 
 ### T6: Orchestrator: gate, reviewers and fix rounds before the merge
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: M
 - Sensitive: yes
@@ -246,3 +246,10 @@ Internal: `src/shared/review.ts` (finding schema, `isBlocking`, caps), `checksGa
 - W2 T3 note: `findings_json` stores the whole `{blocking, minor, items}` view; the migration 3 test now uses `MIGRATIONS.slice(0, 3)`. T7 note: the Reviewers group is a plain div (a fieldset broke ChecksEditor tests that count groups).
 - W2 fix round 1 (of 4 in total): `SettingsPanel.test.tsx` expected payload updated to follow `defaultSettings()` (accepted: a test file outside T7 `Owns`).
 - W2 verify: related-tests run took 153 s for 31 files (`STOP: slow-tests`, advisory, same cause as wave 1).
+- W3 auditor S1 `orchestrator.ts:265,356-360` (RECOMMENDED fix, the gate is the point of 5a): the gate runs on the worktree's working tree (uncommitted edits included) but the merge takes the branch ref and nothing checks it equals the gated and reviewed sha. A prompt-injected worker can commit a broken file A with `git_commit`, put a passing version of A in the working tree uncommitted, pass the gate and the review, and land the unchecked commit on `run/<id>`. Not a security boundary (nothing reaches the base branch without the merge policy), so minor. Fix: before each gate pass run `git status --porcelain` in the worktree with the hardened argv and fail with "uncommitted changes" when dirty; inside the merge mutex require `endSha` equals the last gated and reviewed sha (or merge that sha explicitly).
+- W3 reviewer F1 `orchestrator.ts:~268`: when `runReview` throws after the user cancelled, the task settles `failed` (`review: reviewer error`) instead of `cancelled`; add `if (signal.aborted) settle(... 'cancelled')` in the catch (the default runner returns `cancelled`, so only a throwing custom runner is affected).
+- W3 reviewer F2 `orchestrator.ts:~215`: cost and turns are summed over worker runs and reviewers; whether `total_cost_usd` on a resumed session is per call or cumulative is still unverified (spike open question): check live before relying on `costUsd` (T8 or a live note).
+- W3 reviewer F3 `orchestrator.ts` loop: `findingsView` is not cleared when a later round's gate fails before the reviewers run, so the stored findings show round 1's; cosmetic, the reason is correct.
+- W3 T6 notes: the loop runs only when there are checks or reviewers (otherwise the 4c path runs unchanged); reviewers run one after another; `turns` sums worker calls only; `settle` always writes `stage: null`; only the `setup` helper of `orchestrator.test.ts` changed (injects a fake gate and a fake reviewer).
+- W3 test-writer: 32 cases added (`orchestrator.test.ts`, `service.test.ts`, `settingsStore.test.ts`), no production bugs found.
+- W3 fix round 2 (of 4 in total): the integration tests (`tests/phase-4a-flow`, `4b-1-flow`, `4c-flow`, and the two live tests) used `defaultSettings()` whose default `reviewers` is now `["reviewer"]`, so the real reviewer runner ran inside the tests and flipped the F3 outcome; they now use `reviewers: []`, and 4a-flow has a throwing `reviewRunner` guard (accepted: test files outside T6 `Owns`). Product note: a project with default settings and no checks now runs a reviewer on every task (cost, and `auto` model of the worker is unrelated: the reviewer is fixed to sonnet).
