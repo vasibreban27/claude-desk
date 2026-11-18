@@ -103,22 +103,70 @@ describe('pipelineStore', () => {
     expect(store.markInterrupted()).toEqual({ ok: false, error: 'storage-error' })
   })
 
-  it('markInterrupted fails running tasks and their runs only', () => {
+  it('markInterrupted fails a run with a running task, fails that task and cancels its queued tasks', () => {
     store.createRun(newRun('r1'))
     store.createRun(newRun('r2'))
     store.updateTask('r1', 'T1', { status: 'running' })
     store.updateTask('r2', 'T1', { status: 'done' })
     store.setRunStatus('r2', 'done', 5)
 
-    expect(store.markInterrupted(2000)).toEqual({ ok: true, value: 1 })
+    expect(store.markInterrupted(2000)).toEqual({ ok: true, value: 2 })
     const t1 = store.listTasks('r1')
     expect(t1.ok && t1.value[0]).toMatchObject({ status: 'failed', reason: 'interrupted', finishedAt: 2000 })
-    expect(t1.ok && t1.value[1]).toMatchObject({ status: 'queued', reason: null })
+    expect(t1.ok && t1.value[1]).toMatchObject({ status: 'cancelled', reason: 'interrupted', finishedAt: 2000 })
     expect(store.getRun('r1')).toMatchObject({ value: { status: 'failed', finishedAt: 2000 } })
     expect(store.getRun('r2')).toMatchObject({ value: { status: 'done', finishedAt: 5 } })
     const t2 = store.listTasks('r2')
     expect(t2.ok && t2.value[0]).toMatchObject({ status: 'done', reason: null })
     expect(store.markInterrupted(3000)).toEqual({ ok: true, value: 0 })
+  })
+
+  it('markInterrupted fails a run that was killed between waves (no task running) and cancels its queued tasks', () => {
+    store.createRun(newRun('r1'))
+    store.updateTask('r1', 'T1', { status: 'done', commitSha: 'abc1234' })
+
+    expect(store.markInterrupted(2000)).toEqual({ ok: true, value: 1 })
+    expect(store.getRun('r1')).toMatchObject({ value: { status: 'failed', finishedAt: 2000 } })
+    const t = store.listTasks('r1')
+    expect(t.ok && t.value[0]).toMatchObject({ status: 'done', reason: null, commitSha: 'abc1234' })
+    expect(t.ok && t.value[1]).toMatchObject({ status: 'cancelled', reason: 'interrupted', finishedAt: 2000 })
+    expect(store.markInterrupted(3000)).toEqual({ ok: true, value: 0 })
+  })
+
+  it('markInterrupted fails a run killed right after it was created (every task still queued)', () => {
+    store.createRun(newRun('r1'))
+
+    expect(store.markInterrupted(2000)).toEqual({ ok: true, value: 2 })
+    expect(store.getRun('r1')).toMatchObject({ value: { status: 'failed', finishedAt: 2000 } })
+    const t = store.listTasks('r1')
+    expect(t.ok && t.value.map((x) => [x.status, x.reason])).toEqual([
+      ['cancelled', 'interrupted'],
+      ['cancelled', 'interrupted']
+    ])
+  })
+
+  it('markInterrupted leaves finished runs and their tasks alone, whatever state those tasks are in', () => {
+    store.createRun(newRun('failedRun'))
+    store.createRun(newRun('cancelledRun'))
+    store.createRun(newRun('doneRun'))
+    store.updateTask('failedRun', 'T1', { status: 'failed', reason: 'worker error' })
+    store.setRunStatus('failedRun', 'failed', 7) // T2 stays queued: an older run, or a sweep that did not finish
+    store.updateTask('cancelledRun', 'T1', { status: 'cancelled' })
+    store.updateTask('cancelledRun', 'T2', { status: 'cancelled' })
+    store.setRunStatus('cancelledRun', 'cancelled', 8)
+    store.updateTask('doneRun', 'T1', { status: 'done' })
+    store.updateTask('doneRun', 'T2', { status: 'done' })
+    store.setRunStatus('doneRun', 'done', 9)
+
+    expect(store.markInterrupted(2000)).toEqual({ ok: true, value: 0 })
+    expect(store.getRun('failedRun')).toMatchObject({ value: { status: 'failed', finishedAt: 7 } })
+    expect(store.getRun('cancelledRun')).toMatchObject({ value: { status: 'cancelled', finishedAt: 8 } })
+    expect(store.getRun('doneRun')).toMatchObject({ value: { status: 'done', finishedAt: 9 } })
+    const t = store.listTasks('failedRun')
+    expect(t.ok && t.value.map((x) => [x.status, x.reason])).toEqual([
+      ['failed', 'worker error'],
+      ['queued', null]
+    ])
   })
 
   it('returns the unavailable result without a database', () => {
