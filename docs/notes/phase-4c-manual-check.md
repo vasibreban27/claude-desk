@@ -24,6 +24,24 @@ The automated flow (`tests/phase-4c-flow.test.ts`) drives the real IPC handlers,
 
 ## Results
 
-Status: built and verified by tests and review, not launched. Steps 1-11 have not been run by hand yet.
+Status: steps 1-10 run and passed on 2026-11-18; step 11 (optional) not run; crash recovery gap found and fixed (below).
 
-Fill in after running: date <date>; steps passed <list>; failed steps and observations <text>.
+Driven through Playwright against the built app (`out/`, `electron .`) on Windows, with a throwaway git repo (`parallel3.md` with 3 independent tasks, `long3.md` with 3 long tasks) and a temp `--user-data-dir`. Real SDK sessions on Haiku (set in Settings), total cost about $0.03. The native folder picker was stubbed in main.
+
+| Step | Result | Observed |
+|---|---|---|
+| 1 | pass | Window launched, no console errors. |
+| 2 | pass | Settings show "Workers at once", "Max turns per task" and "Time limit per task (minutes)" with 2, 40 and 20; the hints say cost and load grow with the number, that it applies to the next run, and that a task's `Model` wins. |
+| 3 | pass | 5 workers is refused ("Enter a whole number from 1 to 4."); 3, 15 and 10 save and stay after reopening Settings, together with the check and the model. The save message still reads "They apply to the next message" (wrong for the limits; plan Follow-ups, phase review F2). |
+| 4 | pass | The run appears at once as `running`; the first 4 s go to serialized worktree creation. |
+| 5 | pass | All 3 tasks `running` at the same time (header "3 running"), total cost grew as tasks reported ($0.0029, $0.0055, $0.0080), each done task "Committed, not reviewed", run `done` in 36 s. |
+| 6 | pass | With 3 tasks `running`, Cancel showed "Cancelling..." at once and never flipped back; all 3 tasks and the run were `cancelled` about 3.8 s after the click; the button disappeared; nothing left `running`. |
+| 7 | pass | With "Workers at once" 1 the tasks ran strictly one by one (never 2 `running`) in 75 s, against 36 s with 3 workers. |
+| 8 | pass | `run/<id8>` holds one.txt, two.txt and three.txt, with one merge per task by `claude-desk`, in completion order; 3 task branches. |
+| 9 | pass | Discard removed the run, its 3 task branches and worktrees (about 10-14 s for 3 tasks; the dialog stays up meanwhile). |
+| 10 | pass | `main` unchanged after all runs, `git status` clean, no remote, nothing pushed. |
+| 11 | not run | Optional. The live timing test (`phase-4c-timing.md`) gave the cost-level evidence. |
+
+### Crash recovery gap, found by the review and reproduced here
+
+Seeding two crashed runs into the app's database (one killed between waves with no task `running`, one killed mid-wave) and starting the previous build showed two problems: the between-waves run stayed `running` forever (database `finished_at` empty), showing neither Discard nor Cancel, so nothing in the app could clear it; and a mid-wave run showed "1 queued, 2 failed" (a task that never started stayed `queued` under a `failed` run). Cause: `markInterrupted` in `src/main/db/pipelineStore.ts` only failed a run that still had a `running` task and only touched `running` tasks. Fixed: every `running` run becomes `failed`; its `running` tasks fail and its `queued` tasks are cancelled, both with reason `interrupted`. Confirmed on the rebuilt app with the same data: the stuck run became `failed` ("1 done, 2 cancelled"), the mid-wave run read "2 failed, 1 cancelled", and Discard worked on both.
