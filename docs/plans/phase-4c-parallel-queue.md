@@ -76,7 +76,7 @@ Internal: `effectiveLimits(settings) -> { maxParallel, maxTurns, timeCapMs }` (s
 ## Wave 1: spike and contract
 
 ### T1: Spike: concurrent git, shared node_modules, live concurrent sessions
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: M
 - Sensitive: no
@@ -94,7 +94,7 @@ Internal: `effectiveLimits(settings) -> { maxParallel, maxTurns, timeCapMs }` (s
   - Given the scripts used When the spike ends Then they live outside the repo (scratch folder) and nothing under `src/` changes.
 
 ### T2: Settings contract: maxParallel, maxTurns, taskTimeoutMinutes
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: S
 - Sensitive: yes
@@ -228,3 +228,8 @@ Internal: `effectiveLimits(settings) -> { maxParallel, maxTurns, timeCapMs }` (s
   - Given the note When read Then it has a "Results" section that says whether the steps were run, and says "built and verified by tests and review, not launched" if they were not.
 
 ## Follow-ups
+- W1 reviewer F1 `settingsStore.ts:set`: `set` preserves stored `checks` when absent but not the new limit fields; a caller that omits `maxParallel`, `maxTurns` or `taskTimeoutMinutes` resets them to the defaults. T5's tab always sends all three; merge them like `checks` if any other caller can send partial settings.
+- W1 auditor note: `effectiveLimits` does not validate; T3 and T4 must pass settings that already went through `projectSettingsSchema` (as `settingsStore.get` does).
+- W1 T1 spike follow-up (outside T3/T4 `Owns`): add `-c gc.auto=0 -c maintenance.auto=false` to the git argv (`GIT_PREFIX` in `worktrees.ts`, and the prefix in `workerTools.ts` for `git_commit`). Every commit spawns a detached `git maintenance run --auto`; 0 failures in 240 calls, so defence in depth, not needed for correctness.
+- W1 T1 spike caveats: 3 live Haiku sessions took 11.8 s concurrent against 24.0 s serial (about 2.0x), but cost 0.0079 against 0.0043 USD (1.8x, probably prompt-cache warm-up; one sample of tiny tasks); `maxParallel` 4 was not tested live; the live script used a simplified `git_commit` and no path-guard hook, not `createWorkerRunner`.
+- W1 spike result: no STOP condition. 0 of 80 concurrent `worktree add` and 0 of 240 sibling add/commit calls failed; 15 parallel vitest runs over the shared `node_modules` junction all passed (they wrote only `.vite/vitest/*/results.json` and `.vitest-cache/`). The mutex is not strictly required by git, but the plan builds it anyway.
