@@ -66,6 +66,7 @@ beforeEach(() => {
     pipelineStatus: vi.fn().mockResolvedValue({ ok: true, run: null }),
     pipelineCancel: vi.fn(),
     pipelineDiscard: vi.fn(),
+    pipelineMerge: vi.fn(),
     onPipelineEvent: vi.fn().mockReturnValue(() => undefined),
     appInfo: vi.fn().mockResolvedValue({ toolkit: { status: 'unset', path: null, version: null } })
   }

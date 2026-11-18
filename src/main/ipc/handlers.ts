@@ -5,6 +5,8 @@ import {
   chatSendRequestSchema,
   pipelineCancelRequestSchema,
   pipelineDiscardRequestSchema,
+  pipelineMergeRequestSchema,
+  type PipelineMergeResult,
   pipelinePlansRequestSchema,
   pipelineStartRequestSchema,
   pipelineStatusRequestSchema,
@@ -80,6 +82,7 @@ export interface Handlers {
   pipelineStatus(payload: unknown): Promise<PipelineStatusResult>
   pipelineCancel(payload: unknown): Promise<PipelineCancelResult>
   pipelineDiscard(payload: unknown): Promise<PipelineDiscardResult>
+  pipelineMerge(payload: unknown): Promise<PipelineMergeResult>
   /**
    * `route` runs before the turn starts (events may be emitted synchronously) and returns
    * an undo function that is called when the send is rejected.
@@ -318,6 +321,18 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       } catch (err) {
         console.error('pipeline:discard failed:', errName(err))
         return { ok: false, error: 'cleanup-failed' }
+      }
+    },
+
+    async pipelineMerge(payload) {
+      const req = pipelineMergeRequestSchema.strict().safeParse(payload)
+      if (!req.success) return { ok: false, error: 'not-found' }
+      if (!pipeline) return { ok: false, error: 'git-failed' }
+      try {
+        return await pipeline.merge(req.data.projectId, req.data.runId)
+      } catch (err) {
+        console.error('pipeline:merge failed:', errName(err))
+        return { ok: false, error: 'git-failed' }
       }
     },
 

@@ -152,12 +152,37 @@ describe('PipelinePanel', () => {
     expect(screen.queryByText('Merged, not reviewed')).toBeNull()
   })
 
-  it('says work is only merged into the run branch and does not call a done run finished', () => {
-    render(<PipelinePanel {...props({ run: run({ status: 'done', active: false }) })} />)
+  it('says work is only merged into the run branch while a run is not finished', () => {
+    render(<PipelinePanel {...props({ run: run({ status: 'failed', active: false }) })} />)
     expect(screen.getByRole('status')).toHaveTextContent(/merged into run\/r1 only/)
     expect(screen.getByRole('status')).toHaveTextContent(/Nothing is merged into main or pushed/)
-    expect(screen.getByText('tasks committed, not reviewed')).toBeInTheDocument()
-    expect(screen.queryByText(/reviewed and|finished/i)).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Run finished' })).toBeNull()
+  })
+
+  it('shows Run finished for a done run and merges into main only after confirming', async () => {
+    const pipelineMerge = vi.fn().mockResolvedValue({ ok: true, baseBranch: 'main', head: 'abc1234', planCommitted: true, cleanedUp: true })
+    ;(window as unknown as { api: unknown }).api = { pipelineMerge }
+    const done = run({ status: 'done', active: false })
+    render(<PipelinePanel {...props({ run: done })} projectId="p1" />)
+    expect(screen.getByRole('region', { name: 'Run finished' })).toHaveTextContent(/Run finished/)
+    fireEvent.click(screen.getByRole('button', { name: 'Merge into main' }))
+    expect(pipelineMerge).not.toHaveBeenCalled()
+    const dialog = screen.getByRole('alertdialog', { name: 'Confirm merge' })
+    expect(dialog).toHaveTextContent(/Nothing is pushed/)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Merge into main' }))
+    expect(await screen.findByRole('status', { name: 'Merged' })).toHaveTextContent(/Merged into main at abc1234, plan committed/)
+    expect(pipelineMerge).toHaveBeenCalledWith({ projectId: 'p1', runId: done.runId })
+    expect(screen.queryByRole('region', { name: 'Run finished' })).toBeNull()
+  })
+
+  it('shows why a merge was refused and keeps the run', async () => {
+    const pipelineMerge = vi.fn().mockResolvedValue({ ok: false, error: 'dirty' })
+    ;(window as unknown as { api: unknown }).api = { pipelineMerge }
+    render(<PipelinePanel {...props({ run: run({ status: 'done', active: false }) })} projectId="p1" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Merge into main' }))
+    fireEvent.click(within(screen.getByRole('alertdialog', { name: 'Confirm merge' })).getByRole('button', { name: 'Merge into main' }))
+    expect(await screen.findByText('The project has uncommitted changes.')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Run finished' })).toBeInTheDocument()
   })
 
   it('cancels an active run and shows Cancelling...', () => {

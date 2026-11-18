@@ -39,6 +39,7 @@ export const IPC = {
   pipelineStatus: 'pipeline:status',
   pipelineCancel: 'pipeline:cancel',
   pipelineDiscard: 'pipeline:discard',
+  pipelineMerge: 'pipeline:merge',
   pipelineEvent: 'pipeline:event'
 } as const
 
@@ -129,6 +130,20 @@ export const pipelineDiscardRequestSchema = z.object({
   runId: z.string().min(1)
 })
 export type PipelineDiscardRequest = z.infer<typeof pipelineDiscardRequestSchema>
+
+/** Fast-forwards the base branch of the project to a finished run's branch (the user's click is the policy). */
+export const pipelineMergeRequestSchema = z.object({
+  projectId: z.uuid(),
+  runId: z.string().min(1).max(100)
+})
+export type PipelineMergeRequest = z.infer<typeof pipelineMergeRequestSchema>
+export type PipelineMergeResult =
+  | { ok: true; baseBranch: string; head: string; planCommitted: boolean; cleanedUp: boolean }
+  | {
+      ok: false
+      error: 'not-found' | 'not-finished' | 'wrong-branch' | 'dirty' | 'not-fast-forward' | 'git-failed'
+      message?: string
+    }
 
 // --- Results ----------------------------------------------------------------
 
@@ -376,6 +391,7 @@ export interface DeskApi {
   pipelineStatus(req: PipelineStatusRequest): Promise<PipelineStatusResult>
   pipelineCancel(req: PipelineCancelRequest): Promise<PipelineCancelResult>
   pipelineDiscard(req: PipelineDiscardRequest): Promise<PipelineDiscardResult>
+  pipelineMerge(req: PipelineMergeRequest): Promise<PipelineMergeResult>
   /** Subscribe to pipeline change signals; returns an unsubscribe function. */
   onPipelineEvent(listener: (event: PipelineEvent) => void): () => void
   /** Subscribe to activity events; returns an unsubscribe function. */

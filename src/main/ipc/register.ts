@@ -157,6 +157,7 @@ export function registerIpc(
   ipcMain.handle(IPC.pipelineStatus, (event, payload: unknown) => make(event).pipelineStatus(payload))
   ipcMain.handle(IPC.pipelineCancel, (event, payload: unknown) => make(event).pipelineCancel(payload))
   ipcMain.handle(IPC.pipelineDiscard, (event, payload: unknown) => make(event).pipelineDiscard(payload))
+  ipcMain.handle(IPC.pipelineMerge, (event, payload: unknown) => make(event).pipelineMerge(payload))
   ipcMain.handle(IPC.chatSend, async (event, payload: unknown) => {
     try {
       await refreshPaths()
@@ -175,7 +176,7 @@ export function registerIpc(
 
   return () => {
     for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.settingsGet, IPC.settingsSet, IPC.appInfo, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick,
-      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineDiscard]) {
+      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineDiscard, IPC.pipelineMerge]) {
       ipcMain.removeHandler(channel)
     }
     targets.clear()

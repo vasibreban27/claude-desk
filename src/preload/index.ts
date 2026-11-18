@@ -28,6 +28,7 @@ const api: DeskApi = {
   pipelineStatus: (req) => ipcRenderer.invoke(IPC.pipelineStatus, req),
   pipelineCancel: (req) => ipcRenderer.invoke(IPC.pipelineCancel, req),
   pipelineDiscard: (req) => ipcRenderer.invoke(IPC.pipelineDiscard, req),
+  pipelineMerge: (req) => ipcRenderer.invoke(IPC.pipelineMerge, req),
   onPipelineEvent: (listener) => {
     const wrapped = (_e: IpcRendererEvent, event: PipelineEvent): void => listener(event)
     ipcRenderer.on(IPC.pipelineEvent, wrapped)

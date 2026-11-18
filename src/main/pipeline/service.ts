@@ -5,6 +5,7 @@ import type {
   AppInfo,
   PipelineCancelResult,
   PipelineDiscardResult,
+  PipelineMergeResult,
   PipelinePlansResult,
   PipelineRunView,
   PipelineStartResult,
@@ -17,6 +18,7 @@ import { readGitStatus, type GitStatusResult } from '../git/status'
 import type { ProjectStore } from '../projects/store'
 import type { Orchestrator } from './orchestrator'
 import { MAX_PLAN_BYTES, parsePlan, type PlanError } from './planParser'
+import { mergeRunIntoBase, type MergeRunArgs, type MergeRunResult } from './mergeRun'
 import { createWorktreeManager, type WorktreeManager, type WorktreeManagerOptions } from './worktrees'
 
 /**
@@ -35,6 +37,8 @@ export interface PipelineService {
   status(projectId: string): Promise<PipelineStatusResult>
   cancel(projectId: string, runId: string): Promise<PipelineCancelResult>
   discard(projectId: string, runId: string): Promise<PipelineDiscardResult>
+  /** Fast-forwards the base branch to a finished run, commits its plan file, then removes the run's worktrees. */
+  merge(projectId: string, runId: string): Promise<PipelineMergeResult>
 }
 
 export interface PipelineServiceDeps {
@@ -47,6 +51,7 @@ export interface PipelineServiceDeps {
   createManager?: (opts: WorktreeManagerOptions) => WorktreeManager
   newRunId?: () => string
   log?: (message: string) => void
+  mergeRun?: (args: MergeRunArgs) => Promise<MergeRunResult>
 }
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -317,6 +322,32 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
       } catch (e) {
         log(`pipeline: discard failed: ${errText(e)}`)
         return { ok: false, error: 'cleanup-failed' }
+      }
+    },
+
+    async merge(projectId, runId) {
+      try {
+        const owned = await ownedRun(projectId, runId)
+        if (owned === null) return { ok: false, error: 'not-found' }
+        if (activeRuns.get(projectId) === runId || owned.run.status !== 'done') return { ok: false, error: 'not-finished' }
+        const planFile = path.basename(owned.run.planPath)
+        if (!PLAN_FILE_PATTERN.test(planFile)) return { ok: false, error: 'git-failed', message: 'unexpected plan file name' }
+        const merged = await (deps.mergeRun ?? mergeRunIntoBase)({
+          projectPath: owned.project.path,
+          baseBranch: owned.run.baseBranch,
+          runBranch: owned.run.integrationBranch,
+          planFile
+        })
+        if (!merged.ok) return { ok: false, error: merged.error, message: merged.message }
+        // The work is in the base branch now: remove the run's worktrees and branches, then its row.
+        let cleanedUp = false
+        const removed = await createManager({ projectPath: owned.project.path, runId }).removeRun()
+        if (removed.ok) cleanedUp = deps.store.deleteRun(runId).ok
+        else log(`pipeline: merged run ${runId} but could not remove its worktrees: ${removed.error}`)
+        return { ok: true, baseBranch: owned.run.baseBranch, head: merged.head, planCommitted: merged.planCommitted, cleanedUp }
+      } catch (e) {
+        log(`pipeline: merge failed: ${errText(e)}`)
+        return { ok: false, error: 'git-failed' }
       }
     }
   }
