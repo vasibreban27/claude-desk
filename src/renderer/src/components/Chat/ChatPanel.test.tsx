@@ -18,6 +18,8 @@ function setup(props: Partial<ChatPanelProps> = {}) {
   const send = vi.fn().mockResolvedValue(undefined)
   const all: ChatPanelProps = {
     hasProject: true,
+    proposal: null,
+    clearProposal: vi.fn(),
     messages: [],
     loading: false,
     busy: false,

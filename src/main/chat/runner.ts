@@ -14,6 +14,7 @@ import { DEFAULT_PROTECTED_PATHS, defaultSettings, type ProjectSettings } from '
 import { GIT_ALLOWED_TOOLS, GIT_SERVER_NAME, createGitMcpServer } from './gitTools'
 import { createProtectedMatcher } from './protectedPaths'
 import { frameProjectContext, loadProjectContext } from './projectContext'
+import { assistantOptions } from './assistant'
 import { ALLOWED_TOOLS, guardPreToolUse, isDenied, type ToolPolicy } from './tools'
 
 /** What the chat service needs from the SDK; the renderer never sees raw SDK objects. */
@@ -22,6 +23,7 @@ export type RunnerItem =
   | { kind: 'session'; sessionId: string }
   | { kind: 'activity'; draft: ActivityDraft }
   | { kind: 'usage'; usage: RunUsage; agents: AgentUsage[] }
+  | { kind: 'proposal'; name: string; brief: string }
 
 export interface RunnerArgs {
   prompt: string
@@ -31,6 +33,8 @@ export interface RunnerArgs {
   /** The project's settings for this turn, read once by the service; absent means the safe defaults. */
   settings?: ProjectSettings
   signal?: AbortSignal
+  /** Workspace assistant: no plugins, no built-in tools, only the proposal tool. */
+  assistant?: boolean
 }
 
 /** The per-turn guard policy derived from the settings. */
@@ -212,7 +216,7 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
         preset: 'claude_code' as const,
         ...(context ? { append: frameProjectContext(context) } : {})
       },
-      plugins: [{ type: 'local', path: args.pluginPath }],
+      plugins: args.assistant ? [] : [{ type: 'local', path: args.pluginPath }],
       includePartialMessages: true,
       allowedTools,
       ...(settings.model !== 'auto' ? { model: settings.model } : {}),
@@ -227,6 +231,7 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
           }
         : {}),
       hooks: buildHooks((draft) => queue.push({ kind: 'activity', draft }), args.cwd, policy),
+      ...(args.assistant ? assistantOptions((p) => queue.push({ kind: 'proposal', ...p })) : {}),
       abortController,
       ...(args.resume ? { resume: args.resume } : {})
     }

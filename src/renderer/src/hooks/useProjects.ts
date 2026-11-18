@@ -18,6 +18,8 @@ export interface UseProjects {
   adding: boolean
   add: () => Promise<void>
   select: (id: string) => Promise<void>
+  /** Adds a project created elsewhere (the assistant) to the list and selects it. */
+  adopt: (project: Project) => void
 }
 
 export function useProjects(): UseProjects {
@@ -84,5 +86,10 @@ export function useProjects(): UseProjects {
     }
   }, [])
 
-  return { projects, selectedId, loading, loadError, addError, adding, add, select }
+  const adopt = useCallback((project: Project) => {
+    setProjects((prev) => [...prev.filter((p) => p.id !== project.id), project])
+    setSelectedId(project.id)
+  }, [])
+
+  return { projects, selectedId, loading, loadError, addError, adding, add, select, adopt }
 }

@@ -14,6 +14,9 @@ export interface UseChat {
   busy: boolean
   error: string | null
   send: (text: string) => Promise<void>
+  /** A project the assistant proposed; nothing exists until the user confirms. */
+  proposal: { name: string; brief: string } | null
+  clearProposal: () => void
 }
 
 interface ChatState {
@@ -22,6 +25,7 @@ interface ChatState {
   loading: boolean
   busy: boolean
   error: string | null
+  proposal: { name: string; brief: string } | null
 }
 
 const empty = (projectId: string | null): ChatState => ({
@@ -29,7 +33,8 @@ const empty = (projectId: string | null): ChatState => ({
   messages: [],
   loading: projectId !== null,
   busy: false,
-  error: null
+  error: null,
+  proposal: null
 })
 
 function applyEvent(state: ChatState, event: ChatEvent): ChatState {
@@ -44,6 +49,7 @@ function applyEvent(state: ChatState, event: ChatEvent): ChatState {
     const created: ChatMessage = { id, role: 'assistant', text: event.text, at: new Date().toISOString() }
     return { ...state, messages: [...state.messages, created] }
   }
+  if (event.type === 'proposal') return { ...state, proposal: { name: event.name, brief: event.brief } }
   if (event.type === 'done') return { ...state, busy: false }
   return { ...state, busy: false, error: event.message }
 }
@@ -119,5 +125,6 @@ export function useChat(projectId: string | null): UseChat {
     [projectId]
   )
 
-  return { messages: state.messages, loading: state.loading, busy: state.busy, error: state.error, send }
+  const clearProposal = useCallback(() => setState((s) => ({ ...s, proposal: null })), [])
+  return { messages: state.messages, loading: state.loading, busy: state.busy, error: state.error, send, proposal: state.proposal, clearProposal }
 }
