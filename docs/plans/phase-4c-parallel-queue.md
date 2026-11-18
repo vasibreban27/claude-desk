@@ -113,7 +113,7 @@ Internal: `effectiveLimits(settings) -> { maxParallel, maxTurns, timeCapMs }` (s
 ## Wave 2: scheduler, runner, settings tab, pipeline tab
 
 ### T3: Scheduler: pool, per-run mutex, cancel-all, service race fixes
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: M
 - Sensitive: yes
@@ -137,7 +137,7 @@ Internal: `effectiveLimits(settings) -> { maxParallel, maxTurns, timeCapMs }` (s
   - Given `maxParallel` is read When a run starts Then it comes from `effectiveLimits(settings)` at start (a later settings change does not affect a running run).
 
 ### T4: Worker runner: caps from settings, apply the task Model
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: S
 - Sensitive: yes
@@ -154,7 +154,7 @@ Internal: `effectiveLimits(settings) -> { maxParallel, maxTurns, timeCapMs }` (s
   - Given the existing runner behaviour When the tests run Then all earlier tests pass (turn limit, time limit, cancel, error mapping).
 
 ### T5: Settings tab: workers at once, turn cap, time limit
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Size: S
 - Sensitive: no
@@ -171,7 +171,7 @@ Internal: `effectiveLimits(settings) -> { maxParallel, maxTurns, timeCapMs }` (s
   - Given the existing settings tests When they run Then they pass with updated payload expectations, and editing another setting and saving keeps the checks and the new values.
 
 ### T6: Pipeline tab: parallel display and status hook fixes
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Size: M
 - Sensitive: no
@@ -233,3 +233,8 @@ Internal: `effectiveLimits(settings) -> { maxParallel, maxTurns, timeCapMs }` (s
 - W1 T1 spike follow-up (outside T3/T4 `Owns`): add `-c gc.auto=0 -c maintenance.auto=false` to the git argv (`GIT_PREFIX` in `worktrees.ts`, and the prefix in `workerTools.ts` for `git_commit`). Every commit spawns a detached `git maintenance run --auto`; 0 failures in 240 calls, so defence in depth, not needed for correctness.
 - W1 T1 spike caveats: 3 live Haiku sessions took 11.8 s concurrent against 24.0 s serial (about 2.0x), but cost 0.0079 against 0.0043 USD (1.8x, probably prompt-cache warm-up; one sample of tiny tasks); `maxParallel` 4 was not tested live; the live script used a simplified `git_commit` and no path-guard hook, not `createWorkerRunner`.
 - W1 spike result: no STOP condition. 0 of 80 concurrent `worktree add` and 0 of 240 sibling add/commit calls failed; 15 parallel vitest runs over the shared `node_modules` junction all passed (they wrote only `.vite/vitest/*/results.json` and `.vitest-cache/`). The mutex is not strictly required by git, but the plan builds it anyway.
+- W2 reviewer F1 `orchestrator.ts:189,220`: after a database error, a task whose runner or merge had already finished is swept to `failed` ("run failed: ...") even though its commit is merged into `run/<id>`; record the sha and `done` best-effort in the sweep, or say "may already be merged" in the reason.
+- W2 reviewer F2 `orchestrator.ts:288`, `service.ts:301`: if both final-status writes fail the stored status stays `running`; once the run leaves the active map the discard guard returns `active`, so the run can only be cleared after a restart (`markInterrupted`); retry `setRunStatus` later, or let discard handle a `running` run that is not in the active map.
+- W2 reviewer F3 `orchestrator.ts:159-172`: the cancel check happens before the task is marked `running`; a cancel between it and the runner call relies on the runner honouring a pre-aborted signal (the real runner does); re-check `handle.cancelled` after the worktree is created.
+- W2 T4: the `MAX_TURNS` and `TIME_CAP_MS` exports in `workerRunner.ts` are now unused (the runner reads `effectiveLimits`); remove them later.
+- W2 flaky (not caused by 4c): `src/main/chat/gitTools.test.ts` "does not lazy-fetch missing objects in a partial clone (S3)" timed out at about 31 s once in a full parallel run; it passed alone (50/50) and in a second full run (1331 passed). Same kind of single failure as the 4a follow-up "W1 flaky".
