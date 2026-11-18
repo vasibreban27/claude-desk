@@ -1,4 +1,6 @@
 import type Database from 'better-sqlite3'
+import { z } from 'zod'
+import { FINDINGS_MAX_COUNT, findingSchema, type PipelineStage, type TaskFindingsView } from '../../shared/review'
 
 export const TASK_STATUSES = ['queued', 'running', 'done', 'failed', 'blocked', 'cancelled'] as const
 export const RUN_STATUSES = ['running', 'done', 'failed', 'cancelled'] as const
@@ -7,6 +9,13 @@ export const CHECKS_RESULTS = ['passed', 'failed', 'none'] as const
 export type TaskStatus = (typeof TASK_STATUSES)[number]
 export type RunStatus = (typeof RUN_STATUSES)[number]
 export type ChecksResult = (typeof CHECKS_RESULTS)[number]
+export const PIPELINE_STAGES = ['checks', 'review', 'fixing'] as const satisfies readonly PipelineStage[]
+
+const findingsViewSchema = z.object({
+  blocking: z.number().int().min(0),
+  minor: z.number().int().min(0),
+  items: z.array(findingSchema).max(FINDINGS_MAX_COUNT)
+})
 
 export type StoreError = 'invalid' | 'not-found' | 'storage-unavailable' | 'storage-error'
 export type StoreResult<T> = { ok: true; value: T } | { ok: false; error: StoreError }
@@ -63,6 +72,10 @@ export interface PipelineTaskRow {
   startedAt: number | null
   finishedAt: number | null
   durationMs: number | null
+  stage: PipelineStage | null
+  fixRounds: number | null
+  /** Null when nothing is stored or the stored value is unreadable. */
+  findings: TaskFindingsView | null
 }
 
 /** Optional fields to write together with a status change or on their own. */
@@ -78,6 +91,9 @@ export interface TaskPatch {
   startedAt?: number | null
   finishedAt?: number | null
   durationMs?: number | null
+  stage?: PipelineStage | null
+  fixRounds?: number | null
+  findings?: TaskFindingsView | null
 }
 
 export interface PipelineStore {
@@ -161,7 +177,10 @@ const PATCH_COLUMNS: Record<keyof TaskPatch, string> = {
   costUsd: 'cost_usd',
   startedAt: 'started_at',
   finishedAt: 'finished_at',
-  durationMs: 'duration_ms'
+  durationMs: 'duration_ms',
+  stage: 'stage',
+  fixRounds: 'fix_rounds',
+  findings: 'findings_json'
 }
 
 interface RunDbRow {
@@ -196,6 +215,9 @@ interface TaskDbRow {
   started_at: number | null
   finished_at: number | null
   duration_ms: number | null
+  stage: PipelineStage | null
+  fix_rounds: number | null
+  findings_json: string | null
 }
 
 function toRun(r: RunDbRow): PipelineRunRow {
@@ -223,6 +245,16 @@ function parseDeps(json: string): string[] {
   }
 }
 
+function parseFindings(json: string | null): TaskFindingsView | null {
+  if (json === null) return null
+  try {
+    const r = findingsViewSchema.safeParse(JSON.parse(json))
+    return r.success ? r.data : null
+  } catch {
+    return null
+  }
+}
+
 function toTask(r: TaskDbRow): PipelineTaskRow {
   return {
     runId: r.run_id,
@@ -241,7 +273,10 @@ function toTask(r: TaskDbRow): PipelineTaskRow {
     costUsd: r.cost_usd,
     startedAt: r.started_at,
     finishedAt: r.finished_at,
-    durationMs: r.duration_ms
+    durationMs: r.duration_ms,
+    stage: isOneOf(PIPELINE_STAGES, r.stage) ? r.stage : null,
+    fixRounds: r.fix_rounds,
+    findings: parseFindings(r.findings_json)
   }
 }
 
@@ -294,7 +329,7 @@ export function createPipelineStore(
   })
   const updateRunStmt = db.prepare('UPDATE pipeline_runs SET status = ?, finished_at = ? WHERE id = ?')
   const interruptTasks = db.prepare(
-    `UPDATE pipeline_tasks SET status = 'failed', reason = 'interrupted', finished_at = ?
+    `UPDATE pipeline_tasks SET status = 'failed', reason = 'interrupted', finished_at = ?, stage = NULL
      WHERE status = 'running'`
   )
   // Tasks of a run that never started (queued) are cancelled, not left queued under a failed run.
@@ -364,6 +399,25 @@ export function createPipelineStore(
       ) {
         return { ok: false, error: 'invalid' }
       }
+      if (patch.stage !== undefined && patch.stage !== null && !isOneOf(PIPELINE_STAGES, patch.stage)) {
+        return { ok: false, error: 'invalid' }
+      }
+      if (
+        patch.fixRounds !== undefined &&
+        patch.fixRounds !== null &&
+        (!Number.isInteger(patch.fixRounds) || patch.fixRounds < 0)
+      ) {
+        return { ok: false, error: 'invalid' }
+      }
+      let findingsJson: string | null | undefined
+      if (patch.findings !== undefined) {
+        if (patch.findings === null) findingsJson = null
+        else {
+          const parsed = findingsViewSchema.safeParse(patch.findings)
+          if (!parsed.success) return { ok: false, error: 'invalid' }
+          findingsJson = JSON.stringify(parsed.data)
+        }
+      }
       const keys = (Object.keys(patch) as (keyof TaskPatch)[]).filter(
         (k) => k in PATCH_COLUMNS && patch[k] !== undefined
       )
@@ -372,7 +426,9 @@ export function createPipelineStore(
           if (selectTask.get(runId, taskId) === undefined) return { ok: false, error: 'not-found' }
           if (keys.length > 0) {
             const sets = keys.map((k) => `${PATCH_COLUMNS[k]} = ?`).join(', ')
-            const values = keys.map((k) => patch[k] as string | number | null)
+            const values = keys.map((k) =>
+              k === 'findings' ? (findingsJson as string | null) : (patch[k] as string | number | null)
+            )
             db.prepare(`UPDATE pipeline_tasks SET ${sets} WHERE run_id = ? AND task_id = ?`).run(
               ...values,
               runId,
