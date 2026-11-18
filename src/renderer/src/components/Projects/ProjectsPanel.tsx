@@ -1,8 +1,12 @@
 import type { UseProjects } from '../../hooks/useProjects'
+import { useState } from 'react'
+import type { Project } from '@shared/ipc'
 import { ThemeToggle } from '../ThemeToggle'
+import { RemoveProjectDialog } from './RemoveProjectDialog'
 import './projects.css'
 
-export function ProjectsPanel({ projects, selectedId, loading, loadError, addError, adding, add, select }: UseProjects) {
+export function ProjectsPanel({ projects, selectedId, loading, loadError, addError, adding, add, select, remove }: UseProjects) {
+  const [removing, setRemoving] = useState<Project | null>(null)
   return (
     <div className="projects">
       <div className="projects__body">
@@ -30,7 +34,7 @@ export function ProjectsPanel({ projects, selectedId, loading, loadError, addErr
           {projects.map((p) => {
             const branch = p.branch ?? 'detached'
             return (
-              <li key={p.id}>
+              <li key={p.id} className="projects__row">
                 <button
                   type="button"
                   className="projects__item"
@@ -44,16 +48,32 @@ export function ProjectsPanel({ projects, selectedId, loading, loadError, addErr
                     <span className="projects__branch" title={branch}>
                       {branch}
                     </span>
-                    <span className={p.dirty ? 'badge badge--dirty' : 'badge badge--clean'}>
-                      {p.dirty ? 'dirty' : 'clean'}
-                    </span>
+                    {p.missing ? (
+                      <span className="badge badge--dirty">missing</span>
+                    ) : (
+                      <span className={p.dirty ? 'badge badge--dirty' : 'badge badge--clean'}>
+                        {p.dirty ? 'dirty' : 'clean'}
+                      </span>
+                    )}
                   </span>
+                </button>
+                <button
+                  type="button"
+                  className="projects__remove"
+                  aria-label={`Remove ${p.name}`}
+                  title="Remove project"
+                  onClick={() => setRemoving(p)}
+                >
+                  ×
                 </button>
               </li>
             )
           })}
         </ul>
       </div>
+      {removing && (
+        <RemoveProjectDialog project={removing} onRemove={(del) => remove(removing.id, del)} onClose={() => setRemoving(null)} />
+      )}
       <footer className="projects__footer">
         <ThemeToggle />
       </footer>

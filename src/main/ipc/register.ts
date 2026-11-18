@@ -1,5 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import { mkdirSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ASSISTANT_PROJECT_ID, IPC, type ActivityEvent, type ChatEvent, type PipelineEvent, type PipelineLogEntry } from '../../shared/ipc'
 import { ChatService } from '../chat/service'
@@ -139,6 +140,9 @@ export function registerIpc(
       settingsStore,
       readToolkitInfo,
       ...(appSettings ? { appSettings } : {}),
+      trash: (folder: string) => shell.trashItem(folder),
+      protectedFolders: () => [app.getPath('userData')],
+      folderExists: (folder: string) => stat(folder).then((s) => s.isDirectory(), () => false),
       pipelineLog,
       ...(pipeline ? { pipeline } : {}),
       ...(runStore ? { runStore } : {})
@@ -165,6 +169,11 @@ export function registerIpc(
   ipcMain.handle(IPC.projectsCreate, (event, payload: unknown) => make(event).createProject(payload))
   ipcMain.handle(IPC.projectsRootGet, (event) => make(event).projectsRootGet())
   ipcMain.handle(IPC.projectsRootPick, (event) => make(event).projectsRootPick())
+  ipcMain.handle(IPC.projectsRemove, async (event, payload: unknown) => {
+    const result = await make(event).removeProject(payload)
+    if (result.ok && typeof payload === 'object' && payload !== null) knownPaths.delete(String((payload as { id?: unknown }).id))
+    return result
+  })
   ipcMain.handle(IPC.pipelinePlans, (event, payload: unknown) => make(event).pipelinePlans(payload))
   ipcMain.handle(IPC.pipelineStart, (event, payload: unknown) => make(event).pipelineStart(payload))
   ipcMain.handle(IPC.pipelineStatus, (event, payload: unknown) => make(event).pipelineStatus(payload))
@@ -189,7 +198,7 @@ export function registerIpc(
   })
 
   return () => {
-    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.settingsGet, IPC.settingsSet, IPC.appInfo, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick,
+    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.settingsGet, IPC.settingsSet, IPC.appInfo, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick, IPC.projectsRemove,
       IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog]) {
       ipcMain.removeHandler(channel)
     }

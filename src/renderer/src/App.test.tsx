@@ -39,6 +39,7 @@ beforeEach(() => {
   api = {
     listProjects: vi.fn().mockResolvedValue([P1, P2]),
     pickAndAddProject: vi.fn(),
+    removeProject: vi.fn(),
     toolkitList: vi.fn(),
     createProject: vi.fn(),
     projectsRootGet: vi.fn().mockResolvedValue({ root: null }),
@@ -114,7 +115,7 @@ describe('projects panel', () => {
     render(<App />)
     await screen.findByText(/No projects yet/)
     fireEvent.click(screen.getByRole('button', { name: 'Add project' }))
-    const item = await screen.findByRole('button', { name: /alpha/ })
+    const item = await screen.findByRole('button', { name: /^alpha/ })
     expect(item).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByLabelText('Message')).toBeEnabled()
   })
@@ -144,7 +145,7 @@ describe('projects panel', () => {
   it('refreshes status and loads history when a project is selected', async () => {
     api.chatHistory.mockResolvedValue([{ id: 'h1', role: 'user', text: 'earlier', at: '2026-01-01T00:00:00.000Z' }])
     render(<App />)
-    fireEvent.click(await screen.findByRole('button', { name: /alpha/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^alpha/ }))
     await waitFor(() => expect(api.refreshProject).toHaveBeenCalledWith({ id: P1.id }))
     expect(await screen.findByText('earlier')).toBeInTheDocument()
     expect(api.chatHistory).toHaveBeenCalledWith({ projectId: P1.id })
@@ -163,7 +164,7 @@ describe('chat panel', () => {
 
   async function selectAlpha() {
     render(<App />)
-    fireEvent.click(await screen.findByRole('button', { name: /alpha/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^alpha/ }))
     await screen.findByText(/No messages yet/)
   }
 
@@ -213,7 +214,7 @@ describe('chat panel', () => {
 describe('workspace', () => {
   async function selectAlpha() {
     render(<App />)
-    fireEvent.click(await screen.findByRole('button', { name: /alpha/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^alpha/ }))
     await screen.findByRole('tablist', { name: 'Workspace views' })
   }
 

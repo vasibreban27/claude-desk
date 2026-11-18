@@ -72,6 +72,7 @@ describe('IPC channels', () => {
         'projects:create',
         'projects:root-get',
         'projects:root-pick',
+        'projects:remove',
         'pipeline:plans',
         'pipeline:start',
         'pipeline:status',

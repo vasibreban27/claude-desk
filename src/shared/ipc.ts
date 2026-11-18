@@ -35,6 +35,7 @@ export const IPC = {
   projectsCreate: 'projects:create',
   projectsRootGet: 'projects:root-get',
   projectsRootPick: 'projects:root-pick',
+  projectsRemove: 'projects:remove',
   toolkitList: 'toolkit:list',
   pipelinePlans: 'pipeline:plans',
   pipelineStart: 'pipeline:start',
@@ -58,7 +59,9 @@ export const projectSchema = z.object({
   /** null on a detached HEAD; unborn branch name in a repo with no commits. */
   branch: z.string().nullable(),
   dirty: z.boolean(),
-  addedAt: z.iso.datetime({ offset: true })
+  addedAt: z.iso.datetime({ offset: true }),
+  /** Set by projects:list when the folder no longer exists (never stored). */
+  missing: z.boolean().optional()
 })
 export type Project = z.infer<typeof projectSchema>
 
@@ -266,6 +269,16 @@ export type ProjectsCreateResult =
   | { ok: false; error: 'invalid-name' | 'no-root' | 'exists' | 'escape' | 'git-failed' | 'register-failed' }
 export type ProjectsRootResult = { root: string | null }
 
+export const projectsRemoveRequestSchema = z.object({
+  id: z.uuid(),
+  /** Also move the project folder to the Recycle Bin / Trash (recoverable). */
+  deleteFolder: z.boolean()
+})
+export type ProjectsRemoveRequest = z.infer<typeof projectsRemoveRequestSchema>
+export type ProjectsRemoveResult =
+  | { ok: true; folderDeleted: boolean }
+  | { ok: false; error: 'not-found' | 'busy' | 'unsafe-path' | 'trash-failed' | 'unreadable'; message?: string }
+
 export type RefreshError = 'not-found' | 'unreadable'
 export type ProjectsRefreshResult =
   | { ok: true; project: Project }
@@ -390,6 +403,7 @@ export interface DeskApi {
   createProject(req: ProjectsCreateRequest): Promise<ProjectsCreateResult>
   projectsRootGet(): Promise<ProjectsRootResult>
   projectsRootPick(): Promise<ProjectsRootResult>
+  removeProject(req: ProjectsRemoveRequest): Promise<ProjectsRemoveResult>
   pipelinePlans(req: PipelinePlansRequest): Promise<PipelinePlansResult>
   pipelineStart(req: PipelineStartRequest): Promise<PipelineStartResult>
   pipelineStatus(req: PipelineStatusRequest): Promise<PipelineStatusResult>

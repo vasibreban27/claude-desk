@@ -21,7 +21,8 @@ function setup(over: Partial<HandlerDeps> = {}) {
       list: vi.fn(async () => [project]),
       get: vi.fn(async (id: string) => (id === ID ? project : undefined)),
       add: vi.fn(async () => ({ ok: true as const, project })),
-      update: vi.fn(async (_id, s) => ({ ...project, ...s }))
+      update: vi.fn(async (_id, s) => ({ ...project, ...s })),
+      remove: vi.fn(async (id: string) => id === ID)
     },
     readGitStatus: vi.fn(async () => ({ ok: true as const, branch: 'main', dirty: true })),
     pickFolder: vi.fn(async () => '/repo'),
@@ -301,7 +302,7 @@ describe('settings and app info', () => {
     const root = mkdtempSync(join(tmpdir(), 'hcreate-'))
     try {
       const project = { id: '11111111-1111-4111-8111-111111111111', name: 'demo-app', path: join(root, 'demo-app'), branch: 'main', dirty: false, addedAt: 'x' }
-      const store = { list: async () => [], get: async () => undefined, update: async () => undefined, add: async () => ({ ok: true as const, project }) }
+      const store = { list: async () => [], get: async () => undefined, update: async () => undefined, remove: async () => false, add: async () => ({ ok: true as const, project }) }
       const set = vi.fn(() => ({ ok: true as const, settings: {} as never }))
       const h = setup({
         store,
@@ -315,6 +316,19 @@ describe('settings and app info', () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  it('projects:list marks projects whose folder is gone', async () => {
+    const h = setup({ folderExists: async () => false }).h
+    expect(await h.listProjects()).toEqual([{ ...project, missing: true }])
+  })
+
+  it('projects:remove validates the payload and never deletes a folder without a trash function', async () => {
+    const h = setup().h
+    expect(await h.removeProject({ id: 'nope', deleteFolder: false })).toEqual({ ok: false, error: 'not-found' })
+    expect(await h.removeProject({ id: ID })).toEqual({ ok: false, error: 'not-found' })
+    expect(await h.removeProject({ id: ID, deleteFolder: true })).toMatchObject({ ok: false, error: 'trash-failed' })
+    expect(await h.removeProject({ id: ID, deleteFolder: false })).toEqual({ ok: true, folderDeleted: false })
   })
 
   it('projects:root-pick stores the picked folder', async () => {

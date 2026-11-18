@@ -24,6 +24,7 @@ const api: DeskApi = {
   createProject: (req) => ipcRenderer.invoke(IPC.projectsCreate, req),
   projectsRootGet: () => ipcRenderer.invoke(IPC.projectsRootGet),
   projectsRootPick: () => ipcRenderer.invoke(IPC.projectsRootPick),
+  removeProject: (req) => ipcRenderer.invoke(IPC.projectsRemove, req),
   pipelinePlans: (req) => ipcRenderer.invoke(IPC.pipelinePlans, req),
   pipelineStart: (req) => ipcRenderer.invoke(IPC.pipelineStart, req),
   pipelineStatus: (req) => ipcRenderer.invoke(IPC.pipelineStatus, req),

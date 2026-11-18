@@ -18,6 +18,7 @@ function props(over: Partial<UseProjects> = {}): UseProjects {
     add: vi.fn().mockResolvedValue(undefined),
     select: vi.fn().mockResolvedValue(undefined),
     adopt: vi.fn(),
+    remove: vi.fn().mockResolvedValue(null),
     ...over
   }
 }
@@ -40,8 +41,8 @@ describe('ProjectsPanel', () => {
   it('marks the selected project and selects on click', () => {
     const p = props({ projects: sample, selectedId: 'a' })
     render(<ProjectsPanel {...p} />)
-    expect(screen.getByRole('button', { name: /alpha/ })).toHaveAttribute('aria-pressed', 'true')
-    const beta = screen.getByRole('button', { name: /beta/ })
+    expect(screen.getByRole('button', { name: /^alpha/ })).toHaveAttribute('aria-pressed', 'true')
+    const beta = screen.getByRole('button', { name: /^beta/ })
     expect(beta).toHaveAttribute('aria-pressed', 'false')
     fireEvent.click(beta)
     expect(p.select).toHaveBeenCalledWith('b')

@@ -19,6 +19,8 @@ export interface ProjectStore {
   add(input: NewProject): Promise<AddProjectResult>
   /** Updates branch/dirty of an existing project. */
   update(id: string, status: { branch: string | null; dirty: boolean }): Promise<Project | undefined>
+  /** Unregisters a project (the folder is not touched). False when unknown. */
+  remove(id: string): Promise<boolean>
 }
 
 /** Normalised comparison key: absolute, and case-insensitive on win32. */
@@ -98,6 +100,12 @@ export async function openJsonProjectStore(dir: string): Promise<ProjectStore> {
       projects = projects.map((p) => (p.id === id ? updated : p))
       await persist()
       return { ...updated }
+    },
+    async remove(id) {
+      if (!projects.some((p) => p.id === id)) return false
+      projects = projects.filter((p) => p.id !== id)
+      await persist()
+      return true
     }
   }
 }

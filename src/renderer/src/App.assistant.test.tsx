@@ -78,7 +78,7 @@ describe('assistant to planner flow', () => {
   it('shows the plan-ready card and starts the pipeline on click', async () => {
     api['listProjects']?.mockResolvedValue([P])
     render(<App />)
-    fireEvent.click(await screen.findByRole('button', { name: /todo-fastapi/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^todo-fastapi/ }))
     await act(async () => undefined)
     act(() => emit({ projectId: P.id, turnId: 't2', type: 'plan-ready', planFile: 'todo-api.md', problem: null }))
     fireEvent.click(await screen.findByRole('button', { name: 'Start pipeline' }))
@@ -117,7 +117,7 @@ describe('assistant to planner flow', () => {
     }
     api['pipelineStatus']?.mockResolvedValue({ ok: true, run })
     render(<App />)
-    fireEvent.click(await screen.findByRole('button', { name: /todo-fastapi/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^todo-fastapi/ }))
     await act(async () => undefined)
     const line: PipelineLogEntry = {
       projectId: P.id,

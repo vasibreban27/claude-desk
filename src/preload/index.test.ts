@@ -49,6 +49,7 @@ describe('preload bridge', () => {
         'createProject',
         'projectsRootGet',
         'projectsRootPick',
+        'removeProject',
         'pipelinePlans',
         'pipelineStart',
         'pipelineStatus',

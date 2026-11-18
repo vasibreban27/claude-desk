@@ -20,6 +20,8 @@ export interface UseProjects {
   select: (id: string) => Promise<void>
   /** Adds a project created elsewhere (the assistant) to the list and selects it. */
   adopt: (project: Project) => void
+  /** Unregisters a project; with deleteFolder also moves its folder to the Recycle Bin. Resolves an error text or null. */
+  remove: (id: string, deleteFolder: boolean) => Promise<string | null>
 }
 
 export function useProjects(): UseProjects {
@@ -91,5 +93,22 @@ export function useProjects(): UseProjects {
     setSelectedId(project.id)
   }, [])
 
-  return { projects, selectedId, loading, loadError, addError, adding, add, select, adopt }
+  const remove = useCallback(async (id: string, deleteFolder: boolean): Promise<string | null> => {
+    const api = window.api
+    if (!api) return BRIDGE_UNAVAILABLE
+    try {
+      const r = await api.removeProject({ id, deleteFolder })
+      if (!r.ok) {
+        if (r.message) return r.message
+        return r.error === 'busy' ? 'A pipeline run is active: cancel it first.' : 'Could not remove the project.'
+      }
+      setProjects((prev) => prev.filter((p) => p.id !== id))
+      setSelectedId((s) => (s === id ? null : s))
+      return null
+    } catch {
+      return 'Could not remove the project.'
+    }
+  }, [])
+
+  return { projects, selectedId, loading, loadError, addError, adding, add, select, adopt, remove }
 }
