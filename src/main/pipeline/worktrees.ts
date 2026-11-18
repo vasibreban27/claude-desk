@@ -288,11 +288,44 @@ export function createWorktreeManager(opts: WorktreeManagerOptions): WorktreeMan
     return pathExists(nm) ? 'could not unlink node_modules link' : null
   }
 
+  /**
+   * After a failed `git worktree remove`, git may already have emptied and de-registered the folder (on Windows a
+   * lock stops the last delete), so a retry fails with "is not a working tree". Deletes the leftover only when it is
+   * an EMPTY directory, a direct child of this run's worktrees folder, and not a link. Never recursive.
+   * True when the folder is gone afterwards.
+   */
+  function removeLeftoverFolder(p: string): boolean {
+    let st: fs.Stats
+    try {
+      st = fs.lstatSync(p)
+    } catch {
+      return true
+    }
+    if (path.dirname(p) !== root || !path.basename(p).startsWith(`${run8}-`)) return false
+    if (st.isSymbolicLink() || !st.isDirectory()) return false
+    try {
+      if (fs.readdirSync(p).length > 0) return false
+      fs.rmdirSync(p)
+    } catch {
+      return false
+    }
+    return !pathExists(p)
+  }
+
   async function removeWorktree(p: string, branch: string): Promise<string | null> {
     if (pathExists(p)) {
       const bad = unlinkJunction(p)
       if (bad !== null) return `refusing to remove ${path.basename(p)}: ${bad}`
-      await git(project as string, ['worktree', 'remove', '--force', '--', p])
+      try {
+        await git(project as string, ['worktree', 'remove', '--force', '--', p])
+      } catch (e) {
+        try {
+          await git(project as string, ['worktree', 'prune'])
+        } catch {
+          // the folder check below decides
+        }
+        if (!removeLeftoverFolder(p)) throw e
+      }
     }
     await git(project as string, ['worktree', 'prune'])
     if (await branchExists(branch)) await git(project as string, ['branch', '-D', '--', branch])
