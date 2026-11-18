@@ -280,7 +280,8 @@ export function createWorktreeManager(opts: WorktreeManagerOptions): WorktreeMan
     }
     if (!st.isSymbolicLink()) return null
     try {
-      fs.rmSync(nm, { recursive: false, force: false })
+      // unlinkSync never recurses and works for symlinks and junctions (rmSync fails with ERR_FS_EISDIR in Electron).
+      fs.unlinkSync(nm)
     } catch (e) {
       return `could not unlink node_modules link: ${message(e)}`.slice(0, ERROR_CAP)
     }
