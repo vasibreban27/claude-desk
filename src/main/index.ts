@@ -5,6 +5,7 @@ import { openDatabase, createRunStore, createSettingsStore, createPipelineStore,
 import type Database from 'better-sqlite3'
 import { registerIpc } from './ipc/register'
 import { openJsonProjectStore } from './projects/store'
+import { openAppSettings } from './projects/appSettings'
 import { loadEnvFile } from './config'
 
 const DB_FILE_NAME = 'claude-desk.db'
@@ -105,7 +106,7 @@ app
     const store = await openJsonProjectStore(dataDir)
     const stores = bootstrapStores(dataDir)
     database = stores.db
-    disposeIpc = registerIpc(store, stores.runStore, stores.settingsStore, stores.pipelineStore)
+    disposeIpc = registerIpc(store, stores.runStore, stores.settingsStore, stores.pipelineStore, openAppSettings(dataDir))
     createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

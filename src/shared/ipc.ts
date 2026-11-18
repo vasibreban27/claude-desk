@@ -27,6 +27,9 @@ export const IPC = {
   settingsGet: 'settings:get',
   settingsSet: 'settings:set',
   appInfo: 'app:info',
+  projectsCreate: 'projects:create',
+  projectsRootGet: 'projects:root-get',
+  projectsRootPick: 'projects:root-pick',
   toolkitList: 'toolkit:list',
   pipelinePlans: 'pipeline:plans',
   pipelineStart: 'pipeline:start',
@@ -224,6 +227,16 @@ export type ProjectsPickAndAddResult =
   | { ok: true; project: Project }
   | { ok: false; error: PickAndAddError }
 
+export const projectsCreateRequestSchema = z.object({
+  name: z.string().min(1).max(100),
+  claudeMd: z.boolean().optional()
+})
+export type ProjectsCreateRequest = z.infer<typeof projectsCreateRequestSchema>
+export type ProjectsCreateResult =
+  | { ok: true; project: Project }
+  | { ok: false; error: 'invalid-name' | 'no-root' | 'exists' | 'escape' | 'git-failed' | 'register-failed' }
+export type ProjectsRootResult = { root: string | null }
+
 export type RefreshError = 'not-found' | 'unreadable'
 export type ProjectsRefreshResult =
   | { ok: true; project: Project }
@@ -343,6 +356,9 @@ export interface DeskApi {
   settingsSet(req: SettingsSetRequest): Promise<SettingsSetResult>
   appInfo(): Promise<AppInfoResult>
   toolkitList(): Promise<ToolkitListResult>
+  createProject(req: ProjectsCreateRequest): Promise<ProjectsCreateResult>
+  projectsRootGet(): Promise<ProjectsRootResult>
+  projectsRootPick(): Promise<ProjectsRootResult>
   pipelinePlans(req: PipelinePlansRequest): Promise<PipelinePlansResult>
   pipelineStart(req: PipelineStartRequest): Promise<PipelineStartResult>
   pipelineStatus(req: PipelineStatusRequest): Promise<PipelineStatusResult>

@@ -9,6 +9,7 @@ import { createOrchestrator, type Orchestrator } from '../pipeline/orchestrator'
 import { createPipelineService, type PipelineService } from '../pipeline/service'
 import { createWorkerRunner } from '../pipeline/workerRunner'
 import type { SettingsStore } from '../db/settingsStore'
+import type { AppSettings } from '../projects/appSettings'
 import { readToolkitInfo } from '../config'
 import type { ProjectStore } from '../projects/store'
 import { createHandlers } from './handlers'
@@ -77,7 +78,8 @@ export function registerIpc(
   store: ProjectStore,
   runStore?: RunStore,
   settingsStore: SettingsStore = createSettingsStore(null),
-  pipelineStore?: PipelineStore
+  pipelineStore?: PipelineStore,
+  appSettings?: AppSettings
 ): () => void {
   const targets = new Map<string, EventTarget>()
 
@@ -116,6 +118,7 @@ export function registerIpc(
     createHandlers({ store, readGitStatus, pickFolder: () => pickFolder(event), chat,
       settingsStore,
       readToolkitInfo,
+      ...(appSettings ? { appSettings } : {}),
       ...(pipeline ? { pipeline } : {}),
       ...(runStore ? { runStore } : {})
     })
@@ -138,6 +141,9 @@ export function registerIpc(
   ipcMain.handle(IPC.settingsSet, (event, payload: unknown) => make(event).settingsSet(payload))
   ipcMain.handle(IPC.appInfo, (event) => make(event).appInfo())
   ipcMain.handle(IPC.toolkitList, (event) => make(event).toolkitList())
+  ipcMain.handle(IPC.projectsCreate, (event, payload: unknown) => make(event).createProject(payload))
+  ipcMain.handle(IPC.projectsRootGet, (event) => make(event).projectsRootGet())
+  ipcMain.handle(IPC.projectsRootPick, (event) => make(event).projectsRootPick())
   ipcMain.handle(IPC.pipelinePlans, (event, payload: unknown) => make(event).pipelinePlans(payload))
   ipcMain.handle(IPC.pipelineStart, (event, payload: unknown) => make(event).pipelineStart(payload))
   ipcMain.handle(IPC.pipelineStatus, (event, payload: unknown) => make(event).pipelineStatus(payload))
@@ -160,7 +166,7 @@ export function registerIpc(
   })
 
   return () => {
-    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.settingsGet, IPC.settingsSet, IPC.appInfo, IPC.toolkitList,
+    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.settingsGet, IPC.settingsSet, IPC.appInfo, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick,
       IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineDiscard]) {
       ipcMain.removeHandler(channel)
     }
