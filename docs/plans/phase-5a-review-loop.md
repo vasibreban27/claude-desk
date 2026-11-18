@@ -84,7 +84,7 @@ Internal: `src/shared/review.ts` (finding schema, `isBlocking`, caps), `checksGa
 ## Wave 1: spike and contracts
 
 ### T1: Spike: session resume, reviewer session, in-process tools
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: M
 - Sensitive: no
@@ -101,7 +101,7 @@ Internal: `src/shared/review.ts` (finding schema, `isBlocking`, caps), `checksGa
   - Given the measurements When the note ends Then it has a `Decision index` table with one line per question; scripts live in the scratch folder and nothing under `src/` changes.
 
 ### T2: Contracts: settings fields, finding types, view shape
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: S
 - Sensitive: yes
@@ -227,3 +227,10 @@ Internal: `src/shared/review.ts` (finding schema, `isBlocking`, caps), `checksGa
   - Given the test When it ends Then temp repos and worktrees are removed.
 
 ## Follow-ups
+- W1 spike decisions (see `docs/notes/phase-5a-spike.md`): resume with identical options works (tools and guard kept); fall back to a fresh session with the findings when no `session_id` was captured or the resume errors. The app's own reviewer prompt is enough (no `options.agent`, no plugin agent text). The spike used stand-ins for the work server and guard: T8 must re-check the real ones.
+- W1 spike caveats for T4/T5: every session's init tool list includes the account's `mcp__claude_ai_*` connector tools even with `tools` set, so the reviewer needs a deny-by-default `PreToolUse` guard like the worker's (T4); haiku rated an empty-list edge case `major`, so the reviewer prompt must define severities tightly and forbid hypothetical edge cases as blocker or major (T4); not isolated whether `total_cost_usd` on a resumed session is per call or cumulative, verify before summing costs (T5, T6); resume after `error_max_turns`, `close()` or a crash is not measured.
+- W1 auditor S1 `review.ts:15`: `FINDINGS_MAX_COUNT` is only a constant; add `findingsReportSchema = z.array(findingSchema).max(FINDINGS_MAX_COUNT)` (or truncate before parsing) at the reviewer-output boundary (T4) so an injected reviewer cannot emit thousands of findings.
+- W1 auditor S2 `review.ts:25`: `file` is display-only text (never resolve it on disk without checking it stays inside the worktree); `line` has no lower bound (add `.nonnegative()`).
+- W1 reviewer F1 `ipc.test.ts:~53`: `const uuid ='...'` lacks a space and sits below the new describe block that uses it; move it back to the top.
+- W1 transient failures (not defects, closed by later tasks): `npm run typecheck` fails in `service.ts:164` until T6 maps `stage`, `fixRounds`, `findings`; `LimitsEditor.test.tsx` "sends the three integers with the existing fields" fails until T7 makes the panel send `autoFixRounds` and `reviewers` (a save would reset them to the defaults until then).
+- W1 verify: the related-tests run covered 40 files and took 144 s (`STOP: slow-tests`, advisory): split slow real-git and live tests out of the fast suite.
