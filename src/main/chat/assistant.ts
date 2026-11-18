@@ -1,27 +1,23 @@
 import { createSdkMcpServer, tool, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import { validProjectName } from '../projects/createProject'
-import { PLAN_WORKERS } from '../pipeline/planParser'
 
 export const ASSISTANT_SERVER = 'assistant'
 export const CREATE_PROJECT_TOOL = `mcp__${ASSISTANT_SERVER}__create_project`
 export const BRIEF_MAX = 2000
 
 export const ASSISTANT_PROMPT = [
-  'You are the workspace assistant of claude-desk. You are not inside any project and have no file or shell access yourself.',
-  'Your only action is the create_project tool. When the user wants a new app or project, call it once with a short lowercase name',
-  '(letters, digits and hyphens), the worker that fits the stack (node-developer, python-developer, java-developer, frontend-developer,',
-  'database-engineer) and a brief of a few lines: the stack, the features and how to run it.',
-  'After the user confirms, the app creates the folder and git repo, writes the brief as a plan and starts a pipeline run: a worker scaffolds',
-  'the project on a branch (it can install dependencies), checks and reviewers run, and the result is merged per policy.',
-  'The tool only proposes the project. Tell the user to confirm the card, then stop.',
-  'For anything else, answer briefly in text.'
+  'You are the workspace assistant of claude-desk. You are not inside any project and have no file or shell access.',
+  'When the user wants a new app or project, call create_project once with a short lowercase name (letters, digits, hyphens)',
+  'and a brief: the user request restated in a few lines (what to build, stack if given, constraints). Do not design it yourself.',
+  'The tool only proposes the project. After the user confirms the card, the app creates the folder and git repo and opens the',
+  "project in Plan mode, where the toolkit planner (flow:plan on Opus) continues with the brief, writes the plan and the user",
+  'starts the pipeline that builds it. Tell the user to confirm the card, then stop. For anything else, answer briefly.'
 ].join(' ')
 
 export interface Proposal {
   name: string
   brief: string
-  worker: string | null
 }
 
 /** The in-process tool never creates anything: it validates and reports the proposal. */
@@ -34,14 +30,13 @@ export function createAssistantServer(onProposal: (p: Proposal) => void): Return
         'Propose a new project. Nothing is created until the user confirms in the UI.',
         {
           name: z.string().max(100),
-          brief: z.string().max(BRIEF_MAX),
-          worker: z.enum(PLAN_WORKERS as [string, ...string[]]).optional()
+          brief: z.string().max(BRIEF_MAX)
         },
         async (args) => {
           if (!validProjectName(args.name)) {
             return { content: [{ type: 'text' as const, text: 'Invalid name: use 2-49 lowercase letters, digits or hyphens, starting with a letter or digit.' }], isError: true }
           }
-          onProposal({ name: args.name, brief: args.brief, worker: args.worker ?? null })
+          onProposal({ name: args.name, brief: args.brief })
           return { content: [{ type: 'text' as const, text: 'pending: waiting for the user to confirm the project in the UI.' }] }
         }
       )

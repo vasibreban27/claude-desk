@@ -13,13 +13,12 @@ const ERRORS: Record<string, string> = {
 export interface ProposalCardProps {
   name: string
   brief: string
-  worker: string | null
-  onCreated: (project: Project, planFile: string | null) => void
+  onCreated: (project: Project) => void
   onCancel: () => void
 }
 
 /** Confirmation for an assistant-proposed project. Only the click creates anything. */
-export function ProposalCard({ name, brief, worker, onCreated, onCancel }: ProposalCardProps) {
+export function ProposalCard({ name, brief, onCreated, onCancel }: ProposalCardProps) {
   const [root, setRoot] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [working, setWorking] = useState(false)
@@ -40,8 +39,8 @@ export function ProposalCard({ name, brief, worker, onCreated, onCancel }: Propo
     setWorking(true)
     setError(null)
     try {
-      const r: ProjectsCreateResult = await window.api.createProject({ name, brief, ...(worker ? { worker } : {}) })
-      if (r.ok) onCreated(r.project, r.planFile)
+      const r: ProjectsCreateResult = await window.api.createProject({ name, enableCommands: true })
+      if (r.ok) onCreated(r.project)
       else setError(ERRORS[r.error] ?? 'Could not create the project.')
     } catch {
       setError('Could not create the project.')
@@ -58,8 +57,9 @@ export function ProposalCard({ name, brief, worker, onCreated, onCancel }: Propo
       </p>
       <p>{root === null ? 'No projects folder set.' : `Folder: ${root}${sep}${name}`}</p>
       <p>
-        A git repository is created on main, the brief is saved as docs/plans/bootstrap.md and a pipeline run starts
-        {worker ? ` (${worker})` : ''}. Its workers may run allow-listed commands such as npm install in this project.
+        A git repository is created on main and the project opens in Plan mode: the toolkit planner (flow:plan, Opus)
+        continues with this request, then you start the pipeline that builds it. Its workers may run allow-listed commands
+        such as npm install.
       </p>
       <blockquote>{brief}</blockquote>
       {error && <p role="alert">{error}</p>}

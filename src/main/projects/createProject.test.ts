@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
-import { parsePlan } from '../pipeline/planParser'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -46,21 +45,14 @@ describe('createProject', () => {
     expect(git).toHaveBeenCalledTimes(2)
     expect(git.mock.calls[0]).toEqual([expect.any(String), ['init', '-q', '-b', 'main']])
     expect(s.add).toHaveBeenCalledWith(expect.objectContaining({ branch: 'main' }))
-    expect(r.ok && r.planFile).toBe(null)
   })
 
-  it('writes and commits a bootstrap plan that parsePlan accepts when a brief is given', async () => {
+  it('commits CLAUDE.md when asked', async () => {
     const git = vi.fn(async () => undefined)
-    const r = await createProject(root, 'demo-app', { store: store(), git, readBranch: async () => 'main' }, {
-      brief: 'FastAPI CRUD\nwith `tests`',
-      worker: 'python-developer'
-    })
-    expect(r.ok && r.planFile).toBe('bootstrap.md')
-    const text = readFileSync(path.join(root, 'demo-app', 'docs', 'plans', 'bootstrap.md'), 'utf8')
-    const parsed = parsePlan(text)
-    expect(parsed.ok).toBe(true)
-    if (parsed.ok) expect(parsed.plan.waves[0]?.tasks[0]).toMatchObject({ id: 'T1', worker: 'python-developer' })
-    expect(git).toHaveBeenCalledWith(expect.any(String), ['add', '--', 'docs/plans/bootstrap.md'])
+    const r = await createProject(root, 'demo-app', { store: store(), git, readBranch: async () => 'main' }, { claudeMd: true })
+    expect(r.ok).toBe(true)
+    expect(readFileSync(path.join(root, 'demo-app', 'CLAUDE.md'), 'utf8')).toContain('demo-app')
+    expect(git).toHaveBeenCalledWith(expect.any(String), ['add', '--', 'CLAUDE.md'])
   })
 
   it('rejects invalid names, missing root and existing folders', async () => {

@@ -214,14 +214,10 @@ export function createHandlers(deps: HandlerDeps): Handlers {
           root,
           req.data.name,
           { store: deps.store, ...(deps.gitRun ? { git: deps.gitRun } : {}) },
-          {
-            claudeMd: req.data.claudeMd === true,
-            ...(req.data.brief !== undefined ? { brief: req.data.brief } : {}),
-            ...(req.data.worker !== undefined ? { worker: req.data.worker } : {})
-          }
+          { claudeMd: req.data.claudeMd === true }
         )
-        // A project the assistant bootstraps may run allow-listed commands (npm install, venv, ...) in its workers.
-        if (created.ok && created.planFile !== null) {
+        // A project the assistant creates may run allow-listed commands (npm install, venv, ...) in its workers.
+        if (created.ok && req.data.enableCommands === true) {
           const saved = settingsStore.set(created.project.id, { ...defaultSettings(), allowCommands: true })
           if (!saved.ok) console.error('projects:create: could not enable commands:', saved.error)
         }
@@ -330,7 +326,7 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       if (!req.success) return { ok: false, error: 'invalid' }
       const undo = route?.(req.data.projectId)
       try {
-        const result = deps.chat.send(req.data.projectId, req.data.text)
+        const result = deps.chat.send(req.data.projectId, req.data.text, req.data.mode ?? 'chat')
         if (!result.ok) undo?.()
         return result
       } catch (err) {

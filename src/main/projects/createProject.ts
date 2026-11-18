@@ -3,13 +3,12 @@ import { mkdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { Project } from '../../shared/ipc'
 import type { ProjectStore } from './store'
-import { BOOTSTRAP_PLAN_FILE, bootstrapPlan, bootstrapWorker } from './bootstrapPlan'
 
 export const PROJECT_NAME_RE = /^[a-z0-9][a-z0-9-]{1,48}$/
 const RESERVED = new Set(['con', 'prn', 'aux', 'nul', ...Array.from({ length: 9 }, (_, i) => `com${i + 1}`), ...Array.from({ length: 9 }, (_, i) => `lpt${i + 1}`)])
 
 export type CreateProjectError = 'invalid-name' | 'no-root' | 'exists' | 'escape' | 'git-failed' | 'register-failed'
-export type CreateProjectResult = { ok: true; project: Project; planFile: string | null } | { ok: false; error: CreateProjectError }
+export type CreateProjectResult = { ok: true; project: Project } | { ok: false; error: CreateProjectError }
 
 export type GitRun = (cwd: string, args: string[]) => Promise<void>
 
@@ -52,12 +51,11 @@ export async function createProject(
   root: string | null,
   name: string,
   deps: CreateProjectDeps,
-  options: { claudeMd?: boolean; brief?: string; worker?: string } = {}
+  options: { claudeMd?: boolean } = {}
 ): Promise<CreateProjectResult> {
   if (!validProjectName(name)) return { ok: false, error: 'invalid-name' }
   if (!root) return { ok: false, error: 'no-root' }
   const git = deps.git ?? defaultGitRun
-  const hasBrief = options.brief !== undefined && options.brief.trim() !== ''
   let realRoot: string
   try {
     realRoot = await realpath(root)
@@ -81,15 +79,9 @@ export async function createProject(
         await writeFile(path.join(real, 'CLAUDE.md'), `# ${name}\n`, { flag: 'wx' })
         files.push('CLAUDE.md')
       }
-      if (hasBrief) {
-        await mkdir(path.join(real, 'docs', 'plans'), { recursive: true })
-        const plan = bootstrapPlan(name, options.brief ?? '', bootstrapWorker(options.worker))
-        await writeFile(path.join(real, 'docs', 'plans', BOOTSTRAP_PLAN_FILE), plan, { flag: 'wx' })
-        files.push(`docs/plans/${BOOTSTRAP_PLAN_FILE}`)
-      }
       if (files.length > 0) {
         await git(real, ['add', '--', ...files])
-        await git(real, [...id, 'commit', '-q', '-m', 'docs(plan): bootstrap plan from the workspace assistant'])
+        await git(real, [...id, 'commit', '-q', '-m', 'docs: add CLAUDE.md'])
       }
     } catch {
       throw Object.assign(new Error('git'), { git: true })
@@ -97,7 +89,7 @@ export async function createProject(
     const branch = await (deps.readBranch ?? defaultReadBranch)(real).catch(() => null)
     const added = await deps.store.add({ path: real, branch, dirty: false })
     if (!added.ok) throw new Error('register')
-    return { ok: true, project: added.project, planFile: hasBrief ? BOOTSTRAP_PLAN_FILE : null }
+    return { ok: true, project: added.project }
   } catch (e) {
     if (created) await rm(target, { recursive: true, force: true }).catch(() => undefined)
     const tag = e as { escape?: boolean; git?: boolean }

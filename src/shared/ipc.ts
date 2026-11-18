@@ -73,9 +73,14 @@ export type ProjectsRefreshRequest = z.infer<typeof projectsRefreshRequestSchema
 export const chatHistoryRequestSchema = z.object({ projectId: z.uuid() })
 export type ChatHistoryRequest = z.infer<typeof chatHistoryRequestSchema>
 
+/** `plan`: the toolkit planner (flow:plan, Opus) that may write docs/plans/ only. */
+export const CHAT_MODES = ['chat', 'plan'] as const
+export type ChatMode = (typeof CHAT_MODES)[number]
+
 export const chatSendRequestSchema = z.object({
   projectId: z.uuid(),
-  text: z.string().min(1).max(CHAT_TEXT_MAX)
+  text: z.string().min(1).max(CHAT_TEXT_MAX),
+  mode: z.enum(CHAT_MODES).optional()
 })
 export type ChatSendRequest = z.infer<typeof chatSendRequestSchema>
 
@@ -233,13 +238,12 @@ export type ProjectsPickAndAddResult =
 export const projectsCreateRequestSchema = z.object({
   name: z.string().min(1).max(100),
   claudeMd: z.boolean().optional(),
-  /** The assistant's brief: becomes docs/plans/bootstrap.md and the first pipeline run. */
-  brief: z.string().max(2000).optional(),
-  worker: z.string().max(40).optional()
+  /** Lets this project's pipeline workers use the allow-listed run_command tool (npm install, venv, ...). */
+  enableCommands: z.boolean().optional()
 })
 export type ProjectsCreateRequest = z.infer<typeof projectsCreateRequestSchema>
 export type ProjectsCreateResult =
-  | { ok: true; project: Project; planFile: string | null }
+  | { ok: true; project: Project }
   | { ok: false; error: 'invalid-name' | 'no-root' | 'exists' | 'escape' | 'git-failed' | 'register-failed' }
 export type ProjectsRootResult = { root: string | null }
 
@@ -308,7 +312,8 @@ export type ChatEvent =
   | { projectId: string; turnId: string; type: 'text-delta'; text: string }
   | { projectId: string; turnId: string; type: 'done' }
   | { projectId: string; turnId: string; type: 'error'; message: string }
-  | { projectId: string; turnId: string; type: 'proposal'; name: string; brief: string; worker: string | null }
+  | { projectId: string; turnId: string; type: 'plan-ready'; planFile: string; problem: string | null }
+  | { projectId: string; turnId: string; type: 'proposal'; name: string; brief: string }
 
 /** A change signal; the renderer re-fetches pipeline:status. */
 export interface PipelineEvent {

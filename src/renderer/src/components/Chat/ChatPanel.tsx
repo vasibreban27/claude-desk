@@ -7,9 +7,11 @@ import './chat.css'
 
 export interface ChatPanelProps extends UseChat {
   hasProject: boolean
+  /** Overrides the input placeholder (assistant and plan mode). */
+  placeholder?: string
 }
 
-export function ChatPanel({ hasProject, messages, loading, busy, error, send }: ChatPanelProps) {
+export function ChatPanel({ hasProject, messages, loading, busy, error, send, placeholder }: ChatPanelProps) {
   const [draft, setDraft] = useState('')
   const [pinned, setPinned] = useState(true)
   const listRef = useRef<HTMLDivElement>(null)
@@ -138,7 +140,7 @@ export function ChatPanel({ hasProject, messages, loading, busy, error, send }: 
           value={draft}
           maxLength={CHAT_TEXT_MAX}
           disabled={disabled}
-          placeholder={hasProject ? 'Ask Claude about this project' : 'Add or select a project to chat'}
+          placeholder={placeholder ?? (hasProject ? 'Ask Claude about this project' : 'Add or select a project to chat')}
           onChange={(ev) => setDraft(ev.target.value)}
           onKeyDown={onKeyDown}
         />

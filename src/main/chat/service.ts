@@ -16,7 +16,8 @@ import {
 } from '../../shared/settings'
 import type { ActivityDraft, AgentUsage, RunUsage } from './activity'
 import type { ChatRunner } from './runner'
-import { ASSISTANT_PROJECT_ID } from '../../shared/ipc'
+import { ASSISTANT_PROJECT_ID, type ChatMode } from '../../shared/ipc'
+import { PLAN_COMMAND, findPlansWrittenSince, framePlanFormat, loadPlanFormat, type PlanFound } from './plans'
 
 interface RunState {
   projectId: string
@@ -45,6 +46,9 @@ export interface ChatServiceDeps {
   needsSessionReset?: (previous: ProjectSettings, next: ProjectSettings) => boolean
   now?: () => Date
   newId?: () => string
+  /** Plans written during a planning turn (default: mtime scan of docs/plans). */
+  findPlans?: (projectPath: string, sinceMs: number) => Promise<PlanFound[]>
+  loadPlanFormat?: (pluginPath: string) => Promise<string | null>
 }
 
 const GENERIC_ERROR = 'The Claude session failed. Check that Claude Code is logged in and try again.'
@@ -68,7 +72,7 @@ export class ChatService {
   }
 
   /** Accepts a turn synchronously; progress is reported through `emit`. */
-  send(projectId: string, text: string): ChatSendResult {
+  send(projectId: string, text: string, mode: ChatMode = 'chat'): ChatSendResult {
     const projectPath = this.deps.resolveProjectPath(projectId)
     if (projectPath === undefined) return { ok: false, error: 'not-found' }
     if (this.busy.has(projectId)) return { ok: false, error: 'busy' }
@@ -77,7 +81,7 @@ export class ChatService {
     const turnId = this.id()
     this.append(projectId, 'user', text)
     const assistant = this.append(projectId, 'assistant', '')
-    void this.runTurn(projectId, turnId, projectPath, text, assistant)
+    void this.runTurn(projectId, turnId, projectPath, text, assistant, mode)
     return { ok: true, turnId }
   }
 
@@ -86,22 +90,31 @@ export class ChatService {
     turnId: string,
     projectPath: string,
     text: string,
-    assistant: ChatMessage
+    assistant: ChatMessage,
+    mode: ChatMode = 'chat'
   ): Promise<void> {
     let run: RunState | null = null
+    const planning = mode === 'plan' && projectId !== ASSISTANT_PROJECT_ID
     // Read once, kept for the whole run: a settings change during a run applies to the next turn.
-    const settings = this.readSettings(projectId)
+    // Plan mode: the toolkit planner (flow:plan) on Opus, allowed to write docs/plans/ only.
+    const base = this.readSettings(projectId)
+    const settings: ProjectSettings = planning ? { ...base, model: 'opus', allowPlanWrites: true } : base
+    const turnStarted = (this.deps.now ?? (() => new Date()))().getTime()
     try {
       const cfg = (this.deps.loadConfig ?? (() => loadConfig()))()
       if (!cfg.ok) throw cfg.error
       run = this.startRun(projectId)
+      const resume = this.resumeId(projectId, settings)
+      const format = planning ? await (this.deps.loadPlanFormat ?? loadPlanFormat)(cfg.config.toolkitPath).catch(() => null) : null
       const stream = this.deps.runner({
-        prompt: text,
+        // A new planning session starts the toolkit's plan skill; later turns continue that conversation.
+        prompt: planning && resume === undefined ? `${PLAN_COMMAND} ${text}` : text,
         cwd: projectPath,
         pluginPath: cfg.config.toolkitPath,
-        resume: this.resumeId(projectId, settings),
+        resume,
         settings,
-        ...(projectId === ASSISTANT_PROJECT_ID ? { assistant: true } : {})
+        ...(projectId === ASSISTANT_PROJECT_ID ? { assistant: true } : {}),
+        ...(format ? { appendPrompt: framePlanFormat(format) } : {})
       })
       for await (const item of stream) {
         if (item.kind === 'session') {
@@ -110,7 +123,7 @@ export class ChatService {
         } else if (item.kind === 'activity') {
           this.recordActivity(run, item.draft)
         } else if (item.kind === 'proposal') {
-          this.deps.emit({ projectId, turnId, type: 'proposal', name: item.name, brief: item.brief, worker: item.worker })
+          this.deps.emit({ projectId, turnId, type: 'proposal', name: item.name, brief: item.brief })
         } else if (item.kind === 'usage') {
           run.usage = item
         } else {
@@ -119,6 +132,7 @@ export class ChatService {
         }
       }
       this.finishRun(run, run.usage?.usage.isError ? 'error' : 'success')
+      if (planning) await this.reportPlans(projectId, turnId, projectPath, turnStarted)
       this.busy.delete(projectId)
       this.deps.emit({ projectId, turnId, type: 'done' })
     } catch (err) {
@@ -127,6 +141,16 @@ export class ChatService {
       console.error('chat turn failed:', err instanceof Error ? err.name : 'unknown')
       const message = err instanceof ConfigError ? err.message : GENERIC_ERROR
       this.deps.emit({ projectId, turnId, type: 'error', message })
+    }
+  }
+
+  /** Emits `plan-ready` for each docs/plans/*.md written during the turn, with its parse result. Never throws. */
+  private async reportPlans(projectId: string, turnId: string, projectPath: string, since: number): Promise<void> {
+    try {
+      const found = await (this.deps.findPlans ?? findPlansWrittenSince)(projectPath, since)
+      for (const p of found) this.deps.emit({ projectId, turnId, type: 'plan-ready', planFile: p.planFile, problem: p.problem })
+    } catch (err) {
+      console.error('chat: plan scan failed:', err instanceof Error ? err.name : 'unknown')
     }
   }
 

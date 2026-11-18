@@ -23,7 +23,7 @@ export type RunnerItem =
   | { kind: 'session'; sessionId: string }
   | { kind: 'activity'; draft: ActivityDraft }
   | { kind: 'usage'; usage: RunUsage; agents: AgentUsage[] }
-  | { kind: 'proposal'; name: string; brief: string; worker: string | null }
+  | { kind: 'proposal'; name: string; brief: string }
 
 export interface RunnerArgs {
   prompt: string
@@ -35,6 +35,8 @@ export interface RunnerArgs {
   signal?: AbortSignal
   /** Workspace assistant: no plugins, no built-in tools, only the proposal tool. */
   assistant?: boolean
+  /** Extra system-prompt text for this turn (plan mode: the toolkit plan format). */
+  appendPrompt?: string
 }
 
 /** The per-turn guard policy derived from the settings. */
@@ -214,7 +216,9 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
       systemPrompt: {
         type: 'preset' as const,
         preset: 'claude_code' as const,
-        ...(context ? { append: frameProjectContext(context) } : {})
+        ...(context || args.appendPrompt
+          ? { append: [context ? frameProjectContext(context) : '', args.appendPrompt ?? ''].filter(Boolean).join('\n\n') }
+          : {})
       },
       plugins: args.assistant ? [] : [{ type: 'local', path: args.pluginPath }],
       includePartialMessages: true,

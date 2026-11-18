@@ -294,7 +294,7 @@ describe('settings and app info', () => {
     expect(await h.createProject({ name: 'ok-name' })).toEqual({ ok: false, error: 'no-root' })
   })
 
-  it('projects:create with a brief writes the plan and enables allow-listed commands for that project', async () => {
+  it('projects:create with enableCommands turns on allow-listed commands for that project', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
@@ -309,8 +309,8 @@ describe('settings and app info', () => {
         gitRun: async () => undefined,
         settingsStore: { get: () => ({ settings: {} as never, notice: null }), set } as never
       }).h
-      const r = await h.createProject({ name: 'demo-app', brief: 'a todo API', worker: 'node-developer' })
-      expect(r).toMatchObject({ ok: true, planFile: 'bootstrap.md' })
+      const r = await h.createProject({ name: 'demo-app', enableCommands: true })
+      expect(r).toMatchObject({ ok: true })
       expect(set).toHaveBeenCalledWith(project.id, expect.objectContaining({ allowCommands: true }))
     } finally {
       rmSync(root, { recursive: true, force: true })

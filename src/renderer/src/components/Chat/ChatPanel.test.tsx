@@ -20,6 +20,8 @@ function setup(props: Partial<ChatPanelProps> = {}) {
     hasProject: true,
     proposal: null,
     clearProposal: vi.fn(),
+    planReady: null,
+    clearPlanReady: vi.fn(),
     messages: [],
     loading: false,
     busy: false,
