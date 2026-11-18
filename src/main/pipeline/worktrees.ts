@@ -374,7 +374,7 @@ export function createWorktreeManager(opts: WorktreeManagerOptions): WorktreeMan
       // A Node project shares its installed node_modules with each task (linked, never copied). A project without
       // one (new, Python, Java, ...) gets none: its worker installs what it needs with run_command.
       const nodeModules = path.join(proj, 'node_modules')
-      let linkNodeModules = false
+      let linkNodeModules: boolean
       try {
         linkNodeModules = fs.statSync(nodeModules).isDirectory()
       } catch {
