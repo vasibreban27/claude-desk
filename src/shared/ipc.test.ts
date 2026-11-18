@@ -68,6 +68,7 @@ describe('IPC channels', () => {
         'settings:get',
         'settings:set',
         'app:info',
+        'toolkit:list',
         'pipeline:plans',
         'pipeline:start',
         'pipeline:status',
