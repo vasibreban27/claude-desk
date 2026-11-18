@@ -2,6 +2,13 @@ import { useId, useState, type FormEvent } from 'react'
 import { projectSettingsSchema, type ModelChoice, type ProjectSettings } from '@shared/ipc'
 import { useSettings, type SaveError } from '../../hooks/useSettings'
 import { ChecksEditor, rowsFromChecks, validateRows, type CheckRow, type RowErrors } from './ChecksEditor'
+import {
+  LimitsEditor,
+  limitsFromSettings,
+  validateLimits,
+  type LimitErrors,
+  type LimitValues
+} from './LimitsEditor'
 import './settings.css'
 
 const MODEL_LABELS: Record<ModelChoice, string> = {
@@ -49,22 +56,28 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
   const [rows, setRows] = useState<CheckRow[]>(() => rowsFromChecks(initial.checks))
   const [checkErrors, setCheckErrors] = useState<ReadonlyMap<number, RowErrors>>(new Map())
   const [clientInvalid, setClientInvalid] = useState(false)
+  const [limits, setLimits] = useState<LimitValues>(() => limitsFromSettings(initial))
+  const [limitErrors, setLimitErrors] = useState<LimitErrors>({})
 
   function submit(ev: FormEvent) {
     ev.preventDefault()
     if (saving) return
     const validation = validateRows(rows)
     setCheckErrors(validation.errors)
+    const limitValidation = validateLimits(limits)
+    setLimitErrors(limitValidation.errors)
+    const limitsOk = Object.keys(limitValidation.errors).length === 0
     const parsed = projectSettingsSchema.safeParse({
       version: 1,
       model,
       protectedPaths: parsePaths(paths),
       allowGitRead,
       allowPlanWrites,
-      checks: validation.errors.size === 0 ? validation.checks : undefined
+      checks: validation.errors.size === 0 ? validation.checks : undefined,
+      ...(limitsOk ? limitValidation.values : {})
     })
     setClientInvalid(!parsed.success)
-    if (parsed.success && validation.errors.size === 0) onSave(parsed.data)
+    if (parsed.success && validation.errors.size === 0 && limitsOk) onSave(parsed.data)
   }
 
   const errorText = clientInvalid ? SAVE_ERRORS['client-invalid'] : saveError ? SAVE_ERRORS[saveError] : null
@@ -85,7 +98,10 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
             </option>
           ))}
         </select>
-        <p className="settings__hint">Applies to the main chat. Toolkit agents keep their own model.</p>
+        <p className="settings__hint">
+          Default for the chat and for pipeline tasks whose plan has no Model (a task&apos;s Model wins). Toolkit
+          agents keep their own model.
+        </p>
       </div>
       <div className="settings__field">
         <label htmlFor={`${id}-paths`}>Protected paths</label>
@@ -127,6 +143,14 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
         </label>
         <p className="settings__hint">Lets the chat write files named docs/plans/&lt;slug&gt;.md, nothing else.</p>
       </div>
+      <LimitsEditor
+        values={limits}
+        errors={limitErrors}
+        onChange={(next) => {
+          setLimits(next)
+          onEdit()
+        }}
+      />
       <ChecksEditor
         rows={rows}
         errors={checkErrors}
