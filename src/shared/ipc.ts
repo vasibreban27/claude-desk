@@ -2,9 +2,11 @@ import { z } from 'zod'
 import { projectSettingsSchema, type ProjectSettings } from './settings'
 
 import type { PipelineStage, TaskFindingsView } from './review'
+import type { ToolkitListResult } from './toolkit'
 
 export * from './settings'
 export * from './review'
+export * from './toolkit'
 
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
 
@@ -25,6 +27,7 @@ export const IPC = {
   settingsGet: 'settings:get',
   settingsSet: 'settings:set',
   appInfo: 'app:info',
+  toolkitList: 'toolkit:list',
   pipelinePlans: 'pipeline:plans',
   pipelineStart: 'pipeline:start',
   pipelineStatus: 'pipeline:status',
@@ -339,6 +342,7 @@ export interface DeskApi {
   settingsGet(req: SettingsGetRequest): Promise<SettingsGetResult>
   settingsSet(req: SettingsSetRequest): Promise<SettingsSetResult>
   appInfo(): Promise<AppInfoResult>
+  toolkitList(): Promise<ToolkitListResult>
   pipelinePlans(req: PipelinePlansRequest): Promise<PipelinePlansResult>
   pipelineStart(req: PipelineStartRequest): Promise<PipelineStartResult>
   pipelineStatus(req: PipelineStatusRequest): Promise<PipelineStatusResult>

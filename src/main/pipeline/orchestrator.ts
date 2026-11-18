@@ -81,11 +81,30 @@ export interface OrchestratorDeps {
   reviewRunner?: ReviewRunner
   createManager?: (opts: WorktreeManagerOptions) => WorktreeManager
   resolveRef?: ResolveRef
+  /** True when the worktree has uncommitted changes (default: `git status --porcelain`; skipped when `resolveRef` is injected). */
+  isDirty?: (cwd: string) => Promise<boolean>
   readPlan?: (planPath: string) => Promise<string>
   newRunId?: () => string
   now?: () => number
   log?: (message: string) => void
 }
+
+const defaultIsDirty = (cwd: string): Promise<boolean> =>
+  new Promise((resolve, reject) => {
+    execFile(
+      'git',
+      [...GIT_PREFIX, 'status', '--porcelain', '--untracked-files=all'],
+      {
+        cwd,
+        env: { ...process.env, ...GIT_ENV_ADDITIONS },
+        timeout: GIT_TIMEOUT_MS,
+        maxBuffer: GIT_MAX_BUFFER,
+        encoding: 'utf8',
+        windowsHide: true
+      },
+      (err, stdout) => (err ? reject(err) : resolve(stdout.trim().length > 0))
+    )
+  })
 
 const defaultResolveRef: ResolveRef = (cwd, ref) =>
   new Promise((resolve, reject) => {
@@ -125,6 +144,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const log = deps.log ?? (() => undefined)
   const createManager = deps.createManager ?? createWorktreeManager
   const resolveRef = deps.resolveRef ?? defaultResolveRef
+  const isDirty = deps.isDirty ?? (deps.resolveRef ? async () => false : defaultIsDirty)
   const readPlan = deps.readPlan ?? defaultReadPlan
   const newRunId = deps.newRunId ?? randomUUID
   const active = new Map<string, ActiveRun>()
@@ -244,6 +264,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         absorb(outcome)
         if (settleWorkerStop(outcome)) return
 
+        let gatedSha: string | null = null
         const checks = settings.checks ?? []
         const reviewers = (settings.reviewers ?? [...DEFAULT_REVIEWERS]).filter(
           (r) => r !== 'security-auditor' || task.sensitive === true
@@ -258,6 +279,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let rounds = 0
           fixRounds = 0
           for (;;) {
+            if (await isDirty(wt.path)) {
+              if (abortReason !== null) return
+              settle(task.id, 'failed', 'uncommitted changes', timing())
+              return
+            }
+            if (abortReason !== null) return
             let fix: { kind: 'checks' | 'review'; text: string } | null = null
             let failReason = ''
 
@@ -350,6 +377,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             }
             head = next
           }
+          gatedSha = head
           update(task.id, { stage: null })
         }
 
@@ -357,12 +385,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const done = await mutex(async () => {
           const endSha = await resolveRef(wt.path, wt.branch)
           if (endSha === startSha) return { endSha, merged: null }
+          if (gatedSha !== null && endSha !== gatedSha) return { endSha, merged: 'unreviewed' as const }
           return { endSha, merged: await manager.mergeTask(task.id) }
         })
         if (abortReason !== null) return
         const { endSha, merged } = done
         if (merged === null) {
           settle(task.id, 'failed', 'no commit', timing())
+        } else if (merged === 'unreviewed') {
+          settle(task.id, 'failed', 'commit changed after review', timing())
         } else if (!merged.ok) {
           settle(task.id, 'failed', cap(`merge failed: ${merged.error}`), { ...timing(), commitSha: endSha })
         } else if (merged.result === 'conflict') {

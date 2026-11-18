@@ -1,0 +1,10 @@
+.toolkit { display: flex; flex-direction: column; gap: 8px; padding: 12px; height: 100%; box-sizing: border-box; }
+.toolkit__filter { padding: 6px 8px; }
+.toolkit__body { display: flex; gap: 12px; min-height: 0; flex: 1; }
+.toolkit__list { width: 40%; overflow: auto; }
+.toolkit__list h3 { margin: 8px 0 4px; font-size: 0.85em; text-transform: uppercase; opacity: 0.7; }
+.toolkit__item { display: block; width: 100%; text-align: left; padding: 4px 6px; background: none; border: 0; color: inherit; cursor: pointer; }
+.toolkit__item[aria-pressed='true'] { background: rgba(127, 127, 127, 0.25); }
+.toolkit__detail { flex: 1; overflow: auto; min-width: 0; }
+.toolkit__problems { color: #d9822b; margin: 0; padding-left: 18px; }
+.toolkit__meta { opacity: 0.8; font-size: 0.85em; }

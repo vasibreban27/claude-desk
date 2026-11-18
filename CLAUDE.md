@@ -39,7 +39,7 @@ Workers and `verify` run these, so keep them accurate.
 - Build: `npm run build` (electron-vite, output in `out/`)
 - Typecheck: `npm run typecheck` (`tsc --noEmit` for `tsconfig.node.json` and `tsconfig.web.json`)
 - Lint: `npm run lint`
-- Test: `npm test` (Vitest, single run)
+- Test: `npm test` (Vitest, fast suite ~30 s: excludes real-git, flow and live tests listed in `vitest.slow.ts`). `npm run test:slow` runs only those; `npm run test:changed` runs tests related to changes vs `main`; `npm run test:all` = fast + slow (run before a PR)
 - SQLite: `better-sqlite3` ships prebuilt binaries for Node and Electron, so there is no rebuild script; see `docs/notes/sqlite-spike.md` (fallback: `npx @electron/rebuild -f -w better-sqlite3`).
 - Single test file: `npm test -- src/shared/ipc.test.ts`; by name: `npm test -- -t "<test name>"`
 - TypeScript is pinned to 6.0.x because `typescript-eslint` does not yet support 7.

@@ -39,6 +39,7 @@ beforeEach(() => {
   api = {
     listProjects: vi.fn().mockResolvedValue([P1, P2]),
     pickAndAddProject: vi.fn(),
+    toolkitList: vi.fn(),
     refreshProject: vi.fn().mockImplementation(async ({ id }: { id: string }) => ({
       ok: true,
       project: id === P1.id ? { ...P1, dirty: true } : P2

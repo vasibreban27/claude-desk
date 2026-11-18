@@ -3,12 +3,13 @@ import { ActivityFeed } from '../Activity'
 import { UsagePanel } from '../Usage'
 import { SettingsPanel } from '../Settings'
 import { PipelinePanel } from '../Pipeline'
+import { ToolkitPanel } from '../Toolkit'
 import { usePipeline } from '../../hooks/usePipeline'
 import { useActivity } from '../../hooks/useActivity'
 import { useUsage } from '../../hooks/useUsage'
 import './workspace.css'
 
-export type WorkspaceTab = 'activity' | 'pipeline' | 'usage' | 'settings'
+export type WorkspaceTab = 'activity' | 'pipeline' | 'usage' | 'toolkit' | 'settings'
 
 export const WORKSPACE_TAB_KEY = 'claude-desk:workspace-tab'
 
@@ -16,13 +17,14 @@ const TABS: { id: WorkspaceTab; label: string }[] = [
   { id: 'activity', label: 'Activity' },
   { id: 'pipeline', label: 'Pipeline' },
   { id: 'usage', label: 'Usage' },
+  { id: 'toolkit', label: 'Toolkit' },
   { id: 'settings', label: 'Settings' }
 ]
 
 export function readStoredTab(): WorkspaceTab {
   try {
     const raw = localStorage.getItem(WORKSPACE_TAB_KEY)
-    return raw === 'usage' || raw === 'activity' || raw === 'settings' || raw === 'pipeline' ? raw : 'activity'
+    return raw === 'usage' || raw === 'toolkit' || raw === 'activity' || raw === 'settings' || raw === 'pipeline' ? raw : 'activity'
   } catch {
     return 'activity'
   }
@@ -45,6 +47,7 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
     activity: null,
     pipeline: null,
     usage: null,
+    toolkit: null,
     settings: null
   })
 
@@ -129,6 +132,8 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
           <PipelinePanel {...pipeline} />
         ) : tab === 'usage' ? (
           <UsagePanel {...usage} projectNames={projectNames} />
+        ) : tab === 'toolkit' ? (
+          <ToolkitPanel />
         ) : (
           <SettingsPanel projectId={projectId} />
         )}

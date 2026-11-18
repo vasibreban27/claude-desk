@@ -38,6 +38,7 @@ const defaultExec: ExecFn = (file, args, options) =>
 
 interface ExecErr {
   code?: unknown
+  name?: unknown
   killed?: boolean
   signal?: string | null
   stdout?: unknown
@@ -65,10 +66,12 @@ export async function runChecksGate(args: ChecksGateArgs, deps: ChecksGateDeps =
           cwd: args.worktree,
           env,
           timeout: check.timeoutMs,
-          maxBuffer: CHECK_OUTPUT_BUFFER
+          maxBuffer: CHECK_OUTPUT_BUFFER,
+          signal: args.signal
         })
       } catch (e) {
         const err = (e ?? {}) as ExecErr
+        if (err.name === 'AbortError' || err.code === 'ABORT_ERR') return { status: 'failed', check: check.name, output: 'cancelled' }
         const out = `${asText(err.stdout)}\n${asText(err.stderr)}`.trim()
         let reason: string
         if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {

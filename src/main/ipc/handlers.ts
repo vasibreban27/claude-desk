@@ -12,6 +12,8 @@ import {
   settingsGetRequestSchema,
   settingsSetRequestSchema,
   type AppInfoResult,
+  type ToolkitListResult,
+  toolkitListingSchema,
   type SettingsGetResult,
   type SettingsSetResult,
   type ActivityHistoryResult,
@@ -27,6 +29,7 @@ import {
   type ProjectsPickAndAddResult,
   type ProjectsRefreshResult
 } from '../../shared/ipc'
+import { scanToolkit } from '../toolkit/scan'
 import type { GitStatusResult } from '../git/status'
 import type { ProjectStore } from '../projects/store'
 import type { ChatService } from '../chat/service'
@@ -46,6 +49,7 @@ export interface HandlerDeps {
   /** Created in unavailable mode when the database could not be opened. */
   settingsStore?: SettingsStore
   readToolkitInfo?: () => AppInfoResult['toolkit']
+  scanToolkit?: (folder: string) => Promise<unknown>
   /** Undefined when the pipeline could not be set up; pipeline calls then report storage-unavailable. */
   pipeline?: PipelineService
 }
@@ -60,6 +64,7 @@ export interface Handlers {
   settingsGet(payload: unknown): Promise<SettingsGetResult>
   settingsSet(payload: unknown): Promise<SettingsSetResult>
   appInfo(): Promise<AppInfoResult>
+  toolkitList(): Promise<ToolkitListResult>
   pipelinePlans(payload: unknown): Promise<PipelinePlansResult>
   pipelineStart(payload: unknown): Promise<PipelineStartResult>
   pipelineStatus(payload: unknown): Promise<PipelineStatusResult>
@@ -187,6 +192,18 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       } catch (err) {
         console.error('app:info failed:', err instanceof Error ? err.name : 'unknown')
         return { toolkit: { status: 'invalid', path: null, version: null } }
+      }
+    },
+
+    async toolkitList() {
+      try {
+        const info = readToolkitInfo()
+        if (info.path === null) return { ok: false, error: 'unset' }
+        const listing = toolkitListingSchema.safeParse(await (deps.scanToolkit ?? scanToolkit)(info.path))
+        return listing.success ? { ok: true, listing: listing.data } : { ok: false, error: 'unreadable' }
+      } catch (err) {
+        console.error('toolkit:list failed:', errName(err))
+        return { ok: false, error: 'unreadable' }
       }
     },
 
