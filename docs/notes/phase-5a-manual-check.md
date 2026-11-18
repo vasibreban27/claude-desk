@@ -27,17 +27,17 @@ The automated flow (`tests/phase-5a-flow.test.ts`) drives the real IPC handlers,
 
 ## Results
 
-Status: not run.
+Status: passed. The owner ran the launched-app steps on 2026-11-18 and reported that they work; per-step observations were not recorded, so whether cost across a resume is per call or cumulative is still not confirmed.
 
 | Step | Result | Observed |
 |---|---|---|
-| 1 | not run | |
-| 2 | not run | |
-| 3 | not run | |
-| 4 | not run | |
-| 5 | not run | |
-| 6 | not run | |
-| 7 | not run | |
+| 1 | passed (reported by the owner) | not recorded |
+| 2 | passed (reported by the owner) | not recorded |
+| 3 | passed (reported by the owner) | not recorded |
+| 4 | passed (reported by the owner) | not recorded |
+| 5 | passed (reported by the owner) | not recorded |
+| 6 | passed (reported by the owner) | not recorded |
+| 7 | passed (reported by the owner) | not recorded |
 | 8 | not run | |
 | 9 | not run | |
 | 10 | not run | |
