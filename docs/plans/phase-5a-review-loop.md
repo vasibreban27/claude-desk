@@ -34,6 +34,8 @@ Rejected: (B) the worker runs the checks and reviewers itself (no gate the app c
 
 Statuses: no new task status. A transient `stage` column (`checks`, `review`, `fixing`, or null) tells the UI what a `running` task is doing.
 
+Wave 2 notes for T6: `runChecksGate` returns `failed` with output `cancelled` when the signal is already aborted, so T6 checks the signal before treating it as a check failure; the gate does not pass the signal to the child process, so cancel during a check waits for that check to end or time out; costs across a resume are not verified to be per call (T6 must not double count: use the value the runner reports per call and verify live in T8 if possible); the reviewer model is fixed to sonnet (`REVIEWER_MODEL`); `WorkerRunArgs.fix` is `{kind, text, sessionId}` and `WorkerOutcome.sessionId` feeds the next round.
+
 ### API contract (no new IPC channel; two payload shapes grow)
 
 ```
@@ -120,7 +122,7 @@ Internal: `src/shared/review.ts` (finding schema, `isBlocking`, caps), `checksGa
 ## Wave 2: gate, reviewer, store, settings and pipeline UI
 
 ### T3: Store: migration and task review columns
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: database-engineer
 - Size: S
 - Sensitive: no
@@ -137,7 +139,7 @@ Internal: `src/shared/review.ts` (finding schema, `isBlocking`, caps), `checksGa
   - Given the parameterized statements When the tests run Then no SQL is built from input strings.
 
 ### T4: Reviewer: tools and session runner
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: M
 - Sensitive: yes
@@ -154,7 +156,7 @@ Internal: `src/shared/review.ts` (finding schema, `isBlocking`, caps), `checksGa
   - Given `reviewer` and `security-auditor` When each prompt is built Then each names its severities (blocker, major, minor, nit), asks for at most 20 findings and states that blockers need a concrete failing scenario.
 
 ### T5: Checks gate and worker fix round
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: M
 - Sensitive: yes
@@ -171,7 +173,7 @@ Internal: `src/shared/review.ts` (finding schema, `isBlocking`, caps), `checksGa
   - Given no `fix` When the runner runs Then behaviour is exactly as before and all earlier runner tests pass unchanged.
 
 ### T7: UI: settings editor and pipeline stage
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: frontend-developer
 - Size: M
 - Sensitive: no
@@ -234,3 +236,13 @@ Internal: `src/shared/review.ts` (finding schema, `isBlocking`, caps), `checksGa
 - W1 reviewer F1 `ipc.test.ts:~53`: `const uuid ='...'` lacks a space and sits below the new describe block that uses it; move it back to the top.
 - W1 transient failures (not defects, closed by later tasks): `npm run typecheck` fails in `service.ts:164` until T6 maps `stage`, `fixRounds`, `findings`; `LimitsEditor.test.tsx` "sends the three integers with the existing fields" fails until T7 makes the panel send `autoFixRounds` and `reviewers` (a save would reset them to the defaults until then).
 - W1 verify: the related-tests run covered 40 files and took 144 s (`STOP: slow-tests`, advisory): split slow real-git and live tests out of the fast suite.
+- W2 reviewer F1 `checksGate.ts:47`: `tail` adds a `[truncated] ` prefix, so the gate output is about 4015 chars against the 4000 cap; slice to `max - prefix.length` (the fix prompt caps again, so no harm).
+- W2 reviewer F2 / auditor S2 `checksGate.ts:64`: the abort signal is only checked between checks and not passed to `execFile`; cancel during a long check leaves the child (worker-written code) running until it ends or times out. Pass `signal` to `execFile` and map `AbortError` to `cancelled`.
+- W2 reviewer F3 `reviewRunner.ts:226`: the limit check runs before `found !== null`; a reviewer that reported and then hit the turn or time cap loses its valid findings. Return `finished` when findings were reported unless the stop reason is `cancelled`.
+- W2 reviewer F4 / auditor S1 `prompts.ts:42`, `reviewTools.ts:118`: the data framing uses fixed `<data>` and `<diff>` markers and the body is not escaped, so a diff or check output containing the closing marker can imitate text outside the data block. Use a random per-call delimiter or neutralise the closing marker. Hardening only (not reproduced; the guards, the missing shell and the zod findings still apply).
+- W2 reviewer F5 / auditor S3 `workerRunner.ts:232`: the resume fallback starts a fresh full-cap session on any `error` of the resumed session, even after many turns or a commit (up to twice the caps, a recorded `report_blocked` is dropped). Fall back only when the resume never got going (no session id or zero assistant turns) and keep `resumed.blocked`.
+- W2 T5 notes: the gate's `FixInput` is `{kind?, text, sessionId?}`; `checksGate.ts` has its own `execFile` wrapper because `workerTools` does not export one; cost across a resume is not verified (per call or cumulative).
+- W2 T4 notes: reviewer model fixed to `sonnet` (`REVIEWER_MODEL`), `REVIEW_MAX_TURNS` 15, time cap the smaller of the project limit and 10 minutes; the fake-query test helper reads the SDK server's internal `_registeredTools` field (fragile across SDK upgrades).
+- W2 T3 note: `findings_json` stores the whole `{blocking, minor, items}` view; the migration 3 test now uses `MIGRATIONS.slice(0, 3)`. T7 note: the Reviewers group is a plain div (a fieldset broke ChecksEditor tests that count groups).
+- W2 fix round 1 (of 4 in total): `SettingsPanel.test.tsx` expected payload updated to follow `defaultSettings()` (accepted: a test file outside T7 `Owns`).
+- W2 verify: related-tests run took 153 s for 31 files (`STOP: slow-tests`, advisory, same cause as wave 1).
