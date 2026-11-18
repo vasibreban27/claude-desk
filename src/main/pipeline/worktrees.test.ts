@@ -291,17 +291,36 @@ describe('removal', () => {
     expect(await m.removeTask('t1')).toEqual({ ok: true })
   })
 
-  it('unlinks the junction before removal with a non-recursive rm', async () => {
+  it('unlinks the junction before removal with a non-recursive link primitive', async () => {
     const m = mgr()
     await m.startRun('main')
     const t = await m.createTaskWorktree('t1')
     if (!t.ok) throw new Error(t.error)
-    const spy = vi.spyOn(fs, 'rmSync')
+    const spy = vi.spyOn(fs, 'unlinkSync')
     expect(await m.removeTask('t1')).toEqual({ ok: true })
     const nmCalls = spy.mock.calls.filter(([p]) => String(p).endsWith('node_modules'))
     expect(nmCalls).toHaveLength(1)
-    expect(nmCalls[0]?.[1]).toMatchObject({ recursive: false })
     expect(fs.existsSync(path.join(repo, 'node_modules', 'sentinel.txt'))).toBe(true)
+  })
+
+  it('still removes the worktree when fs.rmSync fails on the link with ERR_FS_EISDIR (Electron)', async () => {
+    const m = mgr()
+    await m.startRun('main')
+    const t = await m.createTaskWorktree('t1')
+    if (!t.ok) throw new Error(t.error)
+    const real = fs.rmSync.bind(fs)
+    vi.spyOn(fs, 'rmSync').mockImplementation((p, opts) => {
+      if (String(p).endsWith('node_modules')) {
+        throw Object.assign(new Error('Path is a directory'), { code: 'ERR_FS_EISDIR' })
+      }
+      real(p, opts)
+    })
+    const r = await m.removeTask('t1')
+    vi.restoreAllMocks()
+    expect(r).toEqual({ ok: true })
+    expect(fs.existsSync(t.path)).toBe(false)
+    expect(g(repo, 'branch', '--list', 'task/*').trim()).toBe('')
+    expect(fs.readFileSync(path.join(repo, 'node_modules', 'sentinel.txt'), 'utf8')).toBe('keep\n')
   })
 
   it('refuses to remove a worktree whose junction could not be unlinked', async () => {
@@ -309,8 +328,8 @@ describe('removal', () => {
     await m.startRun('main')
     const t = await m.createTaskWorktree('t1')
     if (!t.ok) throw new Error(t.error)
-    const real = fs.rmSync.bind(fs)
-    vi.spyOn(fs, 'rmSync').mockImplementation(() => {
+    const real = fs.unlinkSync.bind(fs)
+    vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {
       throw new Error('EBUSY')
     })
     const r = await m.removeTask('t1')

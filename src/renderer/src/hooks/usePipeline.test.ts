@@ -132,6 +132,101 @@ describe('usePipeline', () => {
     expect(result.current.cancelling).toBe(false)
   })
 
+  it('discards, re-fetches status and resolves true', async () => {
+    const pipelineDiscard = vi.fn(async () => ({ ok: true }))
+    const pipelineStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, run: run('done') })
+      .mockResolvedValue({ ok: true, run: null })
+    setup({ pipelineDiscard, pipelineStatus })
+    const { result } = renderHook(() => usePipeline(P1))
+    await waitFor(() => expect(result.current.run).not.toBeNull())
+    let ok = false
+    await act(async () => {
+      ok = await result.current.discard()
+    })
+    expect(ok).toBe(true)
+    expect(pipelineDiscard).toHaveBeenCalledWith({ projectId: P1, runId: 'r1' })
+    expect(result.current.run).toBeNull()
+    expect(result.current.discardError).toBeNull()
+  })
+
+  it('calls discard once on a double call while pending', async () => {
+    let resolve: (v: { ok: true }) => void = () => {}
+    const pipelineDiscard = vi.fn(() => new Promise<{ ok: true }>((r) => (resolve = r)))
+    setup({ pipelineDiscard })
+    const { result } = renderHook(() => usePipeline(P1))
+    await waitFor(() => expect(result.current.run).not.toBeNull())
+    let first: Promise<boolean> = Promise.resolve(false)
+    let second: Promise<boolean> = Promise.resolve(true)
+    act(() => {
+      first = result.current.discard()
+      second = result.current.discard()
+    })
+    expect(result.current.discarding).toBe(true)
+    await act(async () => {
+      resolve({ ok: true })
+      await first
+    })
+    expect(await second).toBe(false)
+    expect(pipelineDiscard).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['active', /still active/],
+    ['not-found', /not found/],
+    ['cleanup-failed', /try Discard again/]
+  ])('shows a distinct message for discard error %s and keeps the run', async (error, re) => {
+    setup({ pipelineDiscard: vi.fn(async () => ({ ok: false, error })) })
+    const { result } = renderHook(() => usePipeline(P1))
+    await waitFor(() => expect(result.current.run).not.toBeNull())
+    let ok = true
+    await act(async () => {
+      ok = await result.current.discard()
+    })
+    expect(ok).toBe(false)
+    expect(result.current.discardError).toMatch(re)
+    expect(result.current.discarding).toBe(false)
+    expect(result.current.run).not.toBeNull()
+  })
+
+  it('shows a generic message when discard throws', async () => {
+    setup({
+      pipelineDiscard: vi.fn(async () => {
+        throw new Error('x')
+      })
+    })
+    const { result } = renderHook(() => usePipeline(P1))
+    await waitFor(() => expect(result.current.run).not.toBeNull())
+    await act(async () => {
+      await result.current.discard()
+    })
+    expect(result.current.discardError).toBe('Could not discard the run.')
+  })
+
+  it('drops a discard error when a different run is displayed', async () => {
+    const pipelineStatus = vi
+      .fn()
+      .mockResolvedValue({ ok: true, run: run() })
+    const { emit } = setup({
+      pipelineStatus,
+      pipelineDiscard: vi.fn(async () => ({ ok: false, error: 'cleanup-failed' }))
+    })
+    const { result } = renderHook(() => usePipeline(P1))
+    await waitFor(() => expect(result.current.run?.runId).toBe('r1'))
+    await act(async () => {
+      await result.current.discard()
+    })
+    expect(result.current.discardError).toMatch(/try Discard again/)
+    emit({ projectId: P1, runId: 'r1' })
+    await waitFor(() => expect(pipelineStatus.mock.calls.length).toBeGreaterThan(2))
+    expect(result.current.discardError).toMatch(/try Discard again/)
+    pipelineStatus.mockResolvedValue({ ok: true, run: { ...run(), runId: 'r2' } })
+    emit({ projectId: P1, runId: 'r2' })
+    await waitFor(() => expect(result.current.run?.runId).toBe('r2'))
+    expect(result.current.discardError).toBeNull()
+  })
+
   it('does nothing without a project', () => {
     const { api } = setup()
     const { result } = renderHook(() => usePipeline(null))

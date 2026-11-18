@@ -81,3 +81,20 @@
   color: var(--color-danger-text);
   border-radius: var(--radius-md);
 }
+.pipeline__confirm {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  margin: var(--space-2) 0;
+}
+.pipeline__confirm h4 {
+  margin: 0 0 var(--space-2);
+}
+.pipeline__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+.pipeline__btn--danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+}
