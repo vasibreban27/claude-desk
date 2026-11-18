@@ -78,6 +78,7 @@ export function buildWorkerOptions(
     branch: args.branch,
     owns: args.task.owns,
     checks: args.settings.checks ?? [],
+    allowCommands: args.settings.allowCommands === true,
     onBlocked: (reason) => {
       blocked = reason
     }
