@@ -88,7 +88,9 @@ function TaskRow({ task }: { task: PipelineTaskView }) {
         {!stage && task.fixRounds !== null && task.fixRounds > 0 && (
           <span className="pipeline__badge">fix rounds: {task.fixRounds}</span>
         )}
-        {task.status === 'done' && <span className="pipeline__badge">Committed, not reviewed</span>}
+        {task.status === 'done' && (
+          <span className="pipeline__badge">{task.findings ? 'Reviewed and merged' : 'Merged, not reviewed'}</span>
+        )}
       </div>
       <div className="pipeline__muted">
         {task.commit && <span>commit {task.commit}</span>}

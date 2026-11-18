@@ -16,6 +16,7 @@ import { MAX_PLAN_BYTES, parsePlan, type ParsedPlan, type PlanTask } from './pla
 import { createMutex, runPool } from './queue'
 import type { WorkerOutcome, WorkerRunner } from './workerRunner'
 import { runChecksGate, type ChecksGateArgs, type ChecksGateResult } from './checksGate'
+import { MAX_REPORTED_PATHS, uncommittedWork } from './uncommitted'
 import { createReviewRunner, type ReviewOutcome, type ReviewRunner } from './reviewRunner'
 import {
   GIT_ENV_ADDITIONS,
@@ -81,19 +82,22 @@ export interface OrchestratorDeps {
   reviewRunner?: ReviewRunner
   createManager?: (opts: WorktreeManagerOptions) => WorktreeManager
   resolveRef?: ResolveRef
-  /** True when the worktree has uncommitted changes (default: `git status --porcelain`; skipped when `resolveRef` is injected). */
-  isDirty?: (cwd: string) => Promise<boolean>
+  /**
+   * Uncommitted work in the worktree, generated files excluded (default: `git status --porcelain -z`;
+   * skipped when `resolveRef` is injected).
+   */
+  uncommitted?: (cwd: string) => Promise<string[]>
   readPlan?: (planPath: string) => Promise<string>
   newRunId?: () => string
   now?: () => number
   log?: (message: string) => void
 }
 
-const defaultIsDirty = (cwd: string): Promise<boolean> =>
+const defaultUncommitted = (cwd: string): Promise<string[]> =>
   new Promise((resolve, reject) => {
     execFile(
       'git',
-      [...GIT_PREFIX, 'status', '--porcelain', '--untracked-files=all'],
+      [...GIT_PREFIX, 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
       {
         cwd,
         env: { ...process.env, ...GIT_ENV_ADDITIONS },
@@ -102,7 +106,7 @@ const defaultIsDirty = (cwd: string): Promise<boolean> =>
         encoding: 'utf8',
         windowsHide: true
       },
-      (err, stdout) => (err ? reject(err) : resolve(stdout.trim().length > 0))
+      (err, stdout) => (err ? reject(err) : resolve(uncommittedWork(stdout)))
     )
   })
 
@@ -144,7 +148,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const log = deps.log ?? (() => undefined)
   const createManager = deps.createManager ?? createWorktreeManager
   const resolveRef = deps.resolveRef ?? defaultResolveRef
-  const isDirty = deps.isDirty ?? (deps.resolveRef ? async () => false : defaultIsDirty)
+  const uncommitted = deps.uncommitted ?? (deps.resolveRef ? async () => [] : defaultUncommitted)
   const readPlan = deps.readPlan ?? defaultReadPlan
   const newRunId = deps.newRunId ?? randomUUID
   const active = new Map<string, ActiveRun>()
@@ -279,16 +283,25 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let rounds = 0
           fixRounds = 0
           for (;;) {
-            if (await isDirty(wt.path)) {
-              if (abortReason !== null) return
-              settle(task.id, 'failed', 'uncommitted changes', timing())
-              return
-            }
+            // Checks and reviewers must see exactly the commit that gets merged: leftover work goes back to the worker.
+            const left = await uncommitted(wt.path)
             if (abortReason !== null) return
             let fix: { kind: 'checks' | 'review'; text: string } | null = null
             let failReason = ''
+            if (left.length > 0) {
+              const shown = left.slice(0, MAX_REPORTED_PATHS)
+              const more = left.length > shown.length ? ` (+${left.length - shown.length} more)` : ''
+              fix = {
+                kind: 'checks',
+                text:
+                  `Uncommitted files in your worktree: ${shown.join(', ')}${more}.\n` +
+                  'Commit the ones that belong to this task with git_commit. If they are generated files, add them to ' +
+                  '.gitignore when it is in your Owns, otherwise report_blocked naming them.'
+              }
+              failReason = cap(`uncommitted changes: ${shown.join(', ')}${more}`)
+            }
 
-            if (checks.length > 0) {
+            if (fix === null && checks.length > 0) {
               update(task.id, { stage: 'checks' })
               const gate = await runGate({ worktree: wt.path, checks, signal })
               if (abortReason !== null) return

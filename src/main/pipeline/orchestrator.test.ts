@@ -64,6 +64,7 @@ function setup(opts: {
   cfg?: Partial<ProjectSettings>
   gate?: (n: number) => ChecksGateResult | Promise<ChecksGateResult>
   review?: (a: ReviewRunArgs, n: number) => ReviewOutcome | Promise<ReviewOutcome>
+  uncommitted?: (cwd: string) => Promise<string[]>
 }) {
   const db = new Database(':memory:')
   migrate(db)
@@ -99,6 +100,7 @@ function setup(opts: {
     createManager: () => manager,
     readPlan: async () => opts.plan ?? PLAN,
     newRunId: () => 'abcd1234-0000',
+    ...(opts.uncommitted ? { uncommitted: opts.uncommitted } : {}),
     resolveRef: async (_cwd, ref) => {
       const n = (calls.get(ref) ?? 0) + 1
       calls.set(ref, n)
@@ -700,6 +702,35 @@ describe('orchestrator: review loop', () => {
     expect(seen[1]?.fix?.kind).toBe('review')
     expect(t1).toMatchObject({ fixRounds: 1 })
     expect(t1?.findings).toMatchObject({ blocking: 0, minor: 1 })
+  })
+
+  it('sends uncommitted files back to the worker before review, then merges', async () => {
+    const seen: WorkerRunArgs[] = []
+    let calls = 0
+    const c = setup({
+      plan: ONE,
+      cfg: { autoFixRounds: 1 },
+      heads: moving,
+      runner: async (a) => {
+        seen.push(a)
+        return finishedOutcome()
+      },
+      uncommitted: async () => (++calls === 1 ? ['app/routes.py'] : [])
+    })
+    const { summary, t1 } = await run(c)
+    expect(summary.status).toBe('done')
+    expect(seen[1]?.fix?.kind).toBe('checks')
+    expect(seen[1]?.fix?.text).toContain('app/routes.py')
+    expect(c.reviewRunner).toHaveBeenCalled()
+    expect(t1).toMatchObject({ fixRounds: 1 })
+  })
+
+  it('fails naming the files when uncommitted work remains after the fix rounds', async () => {
+    const c = setup({ plan: ONE, cfg: { autoFixRounds: 1 }, heads: moving, uncommitted: async () => ['app/routes.py'] })
+    const { summary, t1 } = await run(c)
+    expect(summary.status).toBe('failed')
+    expect(t1).toMatchObject({ status: 'failed', reason: 'uncommitted changes: app/routes.py' })
+    expect(c.reviewRunner).not.toHaveBeenCalled()
   })
 
   it('a fix round without a new commit fails with no commit after fix', async () => {

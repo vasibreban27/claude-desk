@@ -139,7 +139,17 @@ describe('PipelinePanel', () => {
     expect(screen.getByText('1 min 5 s')).toBeInTheDocument()
     expect(screen.getByText('~$0.5000')).toBeInTheDocument()
     expect(screen.getByText('tests failed')).toBeInTheDocument()
-    expect(screen.getByText('Committed, not reviewed')).toBeInTheDocument()
+    expect(screen.getByText('Merged, not reviewed')).toBeInTheDocument()
+  })
+
+  it('labels a done task with review findings as reviewed', () => {
+    const base = run()
+    const tasks = base.tasks.map((t) =>
+      t.status === 'done' ? { ...t, findings: { blocking: 0, minor: 1, items: [] } } : t
+    )
+    render(<PipelinePanel {...props({ run: { ...base, tasks } })} />)
+    expect(screen.getByText('Reviewed and merged')).toBeInTheDocument()
+    expect(screen.queryByText('Merged, not reviewed')).toBeNull()
   })
 
   it('says work is only merged into the run branch and does not call a done run finished', () => {
