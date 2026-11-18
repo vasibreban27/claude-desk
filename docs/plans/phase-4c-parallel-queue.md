@@ -211,7 +211,7 @@ Internal: `effectiveLimits(settings) -> { maxParallel, maxTurns, timeCapMs }` (s
 ## Wave 4: smoke
 
 ### T8: Live timing and launch check
-- Status: [ ] todo
+- Status: [x] verified
 - Worker: node-developer
 - Size: M
 - Sensitive: no
@@ -239,3 +239,5 @@ Internal: `effectiveLimits(settings) -> { maxParallel, maxTurns, timeCapMs }` (s
 - W2 T4: the `MAX_TURNS` and `TIME_CAP_MS` exports in `workerRunner.ts` are now unused (the runner reads `effectiveLimits`); remove them later.
 - W2 flaky (not caused by 4c): `src/main/chat/gitTools.test.ts` "does not lazy-fetch missing objects in a partial clone (S3)" timed out at about 31 s once in a full parallel run; it passed alone (50/50) and in a second full run (1331 passed). Same kind of single failure as the 4a follow-up "W1 flaky".
 - W3 T7: `tests/phase-4c-flow.test.ts` takes about 128 s on Windows (real git, 6 tests); the full suite is now about 250 s. The fake runner makes the first N entrants wait for each other (30 s deadline) so the concurrency assertions are deterministic. The conflict test commits to the shared file directly with git inside the worktrees (it skips the write guard on purpose).
+- W4 T8 (retry): the first attempt stopped as `blocked` (the worker would not spend money on the live run); the retry, with the live run stated as authorized by the approved plan, ran it. Measured on 2026-11-18: 3 tasks serial 51.0 s / $0.0109, at `maxParallel` 3 25.5 s / $0.0070, speedup 2.00x; per-task time grew about 20 percent under 3-way concurrency. Decision recorded: keep the default `maxParallel` 2, maximum 4. Caveats: single sample; the parallel run cost less than the serial one (the spike saw 1.8x more), so the cost ratio is noise at this size; "task Model applied" is inferred from the cost level only (the run does not report the model name), the unit tests in `workerRunner.test.ts` are the real proof.
+- W4 T8: the launched-app steps in `docs/notes/phase-4c-manual-check.md` have NOT been run (its Results section says so). The full suite took 467 s on the last run (about 250 s before the live test file and the 128 s real-git flow test were added; machine load also varies).
