@@ -58,7 +58,7 @@ const finding = (severity: Finding['severity']): Finding => ({ reviewer: 'review
 function setup(opts: {
   runner?: (a: WorkerRunArgs) => Promise<WorkerOutcome>
   merge?: (id: string) => Promise<MergeResult>
-  heads?: (branch: string, call: number) => string
+  heads?: (branch: string, call: number, workerRuns: number) => string
   settings?: SettingsStore
   plan?: string
   cfg?: Partial<ProjectSettings>
@@ -102,7 +102,8 @@ function setup(opts: {
     resolveRef: async (_cwd, ref) => {
       const n = (calls.get(ref) ?? 0) + 1
       calls.set(ref, n)
-      return opts.heads ? opts.heads(ref, n) : n === 1 ? 'start' : `end-${ref}`
+      const runs = runner.mock.calls.filter((c) => c[0].branch === ref).length
+      return opts.heads ? opts.heads(ref, n, runs) : n === 1 ? 'start' : `end-${ref}`
     },
     now: (() => {
       let t = 1000
@@ -632,7 +633,7 @@ describe('orchestrator: review loop', () => {
     ].join('\n')
   const CHECK = { name: 'test', command: 'npm', args: ['test'], timeoutMs: 1000 }
   const checksCfg = { checks: [CHECK] } as unknown as Partial<ProjectSettings>
-  const moving = (_r: string, call: number): string => (call === 1 ? 'start' : `h${call}`)
+  const moving = (_r: string, call: number, runs: number): string => (call === 1 ? 'start' : `h${runs}`)
 
   async function run(c: ReturnType<typeof setup>) {
     const r = await c.orch.startRun(input)
@@ -840,7 +841,7 @@ describe('orchestrator: review loop gap coverage', () => {
     ].join('\n')
   const CHECK = { name: 'test', command: 'npm', args: ['test'], timeoutMs: 1000 }
   const checksCfg = { checks: [CHECK] } as unknown as Partial<ProjectSettings>
-  const moving = (_r: string, call: number): string => (call === 1 ? 'start' : `h${call}`)
+  const moving = (_r: string, call: number, runs: number): string => (call === 1 ? 'start' : `h${runs}`)
   const auditor = (severity: Finding['severity']): Finding => ({ ...finding(severity), reviewer: 'security-auditor' })
 
   async function run(c: ReturnType<typeof setup>) {
