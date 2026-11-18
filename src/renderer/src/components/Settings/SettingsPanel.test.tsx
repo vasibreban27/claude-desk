@@ -81,7 +81,10 @@ describe('SettingsPanel', () => {
         protectedPaths: ['a.txt', 'secret/'],
         allowGitRead: true,
         allowPlanWrites: false,
-        checks: []
+        checks: [],
+        maxParallel: 2,
+        maxTurns: 40,
+        taskTimeoutMinutes: 20
       }
     })
     expect(screen.getByLabelText('Model')).toHaveValue('opus')

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises'
 import path from 'node:path'
 import type {
@@ -44,6 +45,7 @@ export interface PipelineServiceDeps {
   getToolkit: () => AppInfo['toolkit']
   readBranch?: (projectPath: string) => Promise<GitStatusResult>
   createManager?: (opts: WorktreeManagerOptions) => WorktreeManager
+  newRunId?: () => string
   log?: (message: string) => void
 }
 
@@ -58,7 +60,8 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
   const log = deps.log ?? (() => undefined)
   const readBranch = deps.readBranch ?? readGitStatus
   const createManager = deps.createManager ?? createWorktreeManager
-  /** projectId -> runId of the run in flight ('' while it is being started). */
+  const newRunId = deps.newRunId ?? randomUUID
+  /** projectId -> runId of the run in flight (set before the orchestrator starts, so it is known from the first event). */
   const activeRuns = new Map<string, string>()
 
   async function listEntries(plansDir: string): Promise<PlanEntry[] | 'unreadable'> {
@@ -194,6 +197,7 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
 
     async start(projectId, planFile) {
       let reserved = false
+      let reservedId = ''
       try {
         if (!PLAN_FILE_PATTERN.test(planFile) || planFile.length > 100) return { ok: false, error: 'invalid-plan' }
         const project = await deps.projects.get(projectId)
@@ -221,14 +225,17 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
 
         // No await between this check and the reservation: two starts cannot both pass.
         if (activeRuns.has(projectId)) return { ok: false, error: 'busy' }
-        activeRuns.set(projectId, '')
+        const runId = newRunId()
+        activeRuns.set(projectId, runId)
+        reservedId = runId
         reserved = true
 
         const started = await deps.orchestrator.startRun({
           projectId,
           projectPath: project.path,
           planPath,
-          baseBranch: git.branch
+          baseBranch: git.branch,
+          runId
         })
         if (!started.ok) {
           const storage = started.error.startsWith('database error') || started.error.startsWith('settings could not')
@@ -250,7 +257,7 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
         log(`pipeline: start failed: ${errText(e)}`)
         return { ok: false, error: 'start-failed', message: errText(e).slice(0, MESSAGE_CAP) }
       } finally {
-        if (reserved && activeRuns.get(projectId) === '') activeRuns.delete(projectId)
+        if (reserved && activeRuns.get(projectId) === reservedId) activeRuns.delete(projectId)
       }
     },
 
@@ -263,7 +270,12 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
         if (latest.value === null) return { ok: true, run: null }
         const tasks = deps.store.listTasks(latest.value.id)
         if (!tasks.ok) return { ok: false, error: 'storage-unavailable' }
-        return { ok: true, run: toView(latest.value, tasks.value, activeRuns.get(projectId) === latest.value.id) }
+        return { ok: true, run: toView(
+            latest.value,
+            tasks.value,
+            // A written final status wins over the map: the flag is already false when the final event fires.
+            activeRuns.get(projectId) === latest.value.id && latest.value.status === 'running'
+          ) }
       } catch (e) {
         log(`pipeline: status failed: ${errText(e)}`)
         return { ok: false, error: 'storage-unavailable' }
@@ -285,7 +297,8 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
       try {
         const owned = await ownedRun(projectId, runId)
         if (owned === null) return { ok: false, error: 'not-found' }
-        if (activeRuns.get(projectId) === runId) return { ok: false, error: 'active' }
+        // A stored `running` row that is not in the map is still not safe to remove.
+        if (activeRuns.get(projectId) === runId || owned.run.status === 'running') return { ok: false, error: 'active' }
         const manager = createManager({ projectPath: owned.project.path, runId })
         const removed = await manager.removeRun()
         if (!removed.ok) {

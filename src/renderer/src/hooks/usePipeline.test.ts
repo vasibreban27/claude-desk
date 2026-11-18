@@ -113,14 +113,70 @@ describe('usePipeline', () => {
 
   it('keeps Cancelling until the next status and shows cancel errors', async () => {
     const pipelineCancel = vi.fn(async () => ({ ok: true }))
-    const { emit } = setup({ pipelineCancel })
+    const pipelineStatus = vi.fn(async () => ({ ok: true, run: run() }))
+    const { emit } = setup({ pipelineCancel, pipelineStatus })
     const { result } = renderHook(() => usePipeline(P1))
     await waitFor(() => expect(result.current.run).not.toBeNull())
     await act(() => result.current.cancel())
     expect(pipelineCancel).toHaveBeenCalledWith({ projectId: P1, runId: 'r1' })
     expect(result.current.cancelling).toBe(true)
+    // Still active after a re-fetch: stays Cancelling.
+    emit({ projectId: P1, runId: 'r1' })
+    await waitFor(() => expect(pipelineStatus).toHaveBeenCalledTimes(2))
+    expect(result.current.cancelling).toBe(true)
+    // No longer active: clears (wait out the throttle window first).
+    pipelineStatus.mockResolvedValue({ ok: true, run: run('cancelled') })
+    await new Promise((r) => setTimeout(r, 200))
     emit({ projectId: P1, runId: 'r1' })
     await waitFor(() => expect(result.current.cancelling).toBe(false))
+  })
+
+  it('clears Cancelling when another run is shown', async () => {
+    const pipelineStatus = vi.fn(async () => ({ ok: true, run: run() }))
+    const { emit } = setup({ pipelineStatus })
+    const { result } = renderHook(() => usePipeline(P1))
+    await waitFor(() => expect(result.current.run).not.toBeNull())
+    await act(() => result.current.cancel())
+    expect(result.current.cancelling).toBe(true)
+    pipelineStatus.mockResolvedValue({ ok: true, run: { ...run(), runId: 'r2' } })
+    emit({ projectId: P1, runId: 'r2' })
+    await waitFor(() => expect(result.current.run?.runId).toBe('r2'))
+    expect(result.current.cancelling).toBe(false)
+  })
+
+  it('keeps the newer state when an older response resolves last', async () => {
+    const resolvers: Array<(v: unknown) => void> = []
+    const pipelineStatus = vi.fn(() => new Promise((r) => resolvers.push(r)))
+    const { emit } = setup({ pipelineStatus })
+    const { result } = renderHook(() => usePipeline(P1))
+    await waitFor(() => expect(resolvers).toHaveLength(1))
+    emit({ projectId: P1, runId: 'r1' })
+    await waitFor(() => expect(resolvers).toHaveLength(2))
+    await act(async () => {
+      resolvers[1]?.({ ok: true, run: { ...run(), runId: 'new' } })
+      resolvers[0]?.({ ok: true, run: { ...run(), runId: 'old' } })
+    })
+    expect(result.current.run?.runId).toBe('new')
+  })
+
+  it('throttles an event burst to a leading and a trailing fetch', async () => {
+    vi.useFakeTimers()
+    try {
+      const { api, emit } = setup()
+      renderHook(() => usePipeline(P1))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(api.pipelineStatus).toHaveBeenCalledTimes(1)
+      for (let i = 0; i < 5; i++) emit({ projectId: P1, runId: 'r1' })
+      expect(api.pipelineStatus).toHaveBeenCalledTimes(2)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400)
+      })
+      expect(api.pipelineStatus).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('shows not-active without crashing', async () => {

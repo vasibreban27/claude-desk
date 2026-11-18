@@ -375,3 +375,217 @@ describe('orchestrator', () => {
     expect(s.reason).toContain('database error')
   })
 })
+
+describe('orchestrator: parallel pool', () => {
+  const settingsWith = (maxParallel: number): SettingsStore => ({
+    get: () => ({ settings: { ...defaultSettings(), maxParallel }, notice: null }),
+    set: () => ({ ok: false, error: 'invalid' })
+  })
+  const wave = (ids: string[], deps = 'none'): string =>
+    ['### Wave 1', '', ...ids.map((id) => task(id, `${id.toLowerCase()}.ts`, deps))].join('\n')
+  const planOf = (...waves: string[]): string => ['# Plan: par', '', '## 7. Tasks', '', ...waves].join('\n')
+  const FOUR = planOf(wave(['T1', 'T2', 'T3', 'T4']))
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    await new Promise((r) => setTimeout(r, 5))
+  }
+
+  /** Runner that holds every task until released by id. */
+  function held() {
+    const gates = new Map<string, (o?: WorkerOutcome) => void>()
+    const active = new Set<string>()
+    let max = 0
+    const runner = (a: WorkerRunArgs): Promise<WorkerOutcome> =>
+      new Promise((resolve) => {
+        active.add(a.task.id)
+        max = Math.max(max, active.size)
+        const release = (o?: WorkerOutcome): void => {
+          active.delete(a.task.id)
+          resolve(o ?? finishedOutcome())
+        }
+        gates.set(a.task.id, release)
+        a.signal?.addEventListener('abort', () => release(finishedOutcome({ status: 'cancelled' })))
+      })
+    return { runner, gates, active, max: () => max }
+  }
+
+  it('never runs more than maxParallel and starts the next as soon as one finishes', async () => {
+    const h = held()
+    const c = setup({ plan: FOUR, runner: h.runner, settings: settingsWith(2) })
+    const r = await c.orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    await settle()
+    expect(c.order).toEqual(['T1', 'T2'])
+    h.gates.get('T2')?.()
+    await settle()
+    expect(c.order).toEqual(['T1', 'T2', 'T3'])
+    h.gates.get('T1')?.()
+    await settle()
+    h.gates.get('T3')?.()
+    h.gates.get('T4')?.()
+    const s = await r.finished
+    expect(s.status).toBe('done')
+    expect(h.max()).toBe(2)
+  })
+
+  it('finishes every task of wave 1 before wave 2 starts', async () => {
+    const h = held()
+    const plan = planOf(wave(['T1', 'T2']), ['### Wave 2', '', task('T3', 'c.ts', 'none')].join('\n'))
+    const c = setup({ plan, runner: h.runner, settings: settingsWith(4) })
+    const r = await c.orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    await settle()
+    expect(c.order).toEqual(['T1', 'T2'])
+    h.gates.get('T1')?.()
+    await settle()
+    expect(c.order).toEqual(['T1', 'T2'])
+    h.gates.get('T2')?.()
+    await settle()
+    expect(c.order).toEqual(['T1', 'T2', 'T3'])
+    h.gates.get('T3')?.()
+    expect((await r.finished).status).toBe('done')
+  })
+
+  it('serializes manager mutations while runners overlap, and merges in completion order', async () => {
+    const h = held()
+    let inside = 0
+    let overlap = false
+    const merges: string[] = []
+    const guard = async <T,>(fn: () => T): Promise<T> => {
+      inside += 1
+      if (inside > 1) overlap = true
+      await new Promise((r) => setTimeout(r, 1))
+      const v = fn()
+      inside -= 1
+      return v
+    }
+    const c = setup({
+      plan: planOf(wave(['T1', 'T2', 'T3'])),
+      runner: h.runner,
+      settings: settingsWith(3),
+      merge: (id) =>
+        guard(() => {
+          merges.push(id)
+          return { ok: true as const, result: 'merged' as const }
+        })
+    })
+    vi.mocked(c.manager.createTaskWorktree).mockImplementation((id) =>
+      guard(() => ({ ok: true as const, branch: `task/${id.toLowerCase()}`, path: `/wt/${id}` }))
+    )
+    const r = await c.orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    await vi.waitFor(() => expect(h.active.size).toBe(3))
+    h.gates.get('T2')?.()
+    await settle()
+    h.gates.get('T1')?.()
+    h.gates.get('T3')?.()
+    const s = await r.finished
+    expect(s.status).toBe('done')
+    expect(overlap).toBe(false)
+    expect(merges[0]).toBe('T2')
+    expect(merges).toHaveLength(3)
+    const rows = c.store.listTasks(r.runId)
+    if (!rows.ok) throw new Error('rows')
+    expect(rows.value.every((t) => t.commitSha !== null)).toBe(true)
+  })
+
+  it('a merge conflict fails only that task; siblings finish and later dependents are blocked', async () => {
+    const plan = planOf(wave(['T1', 'T2', 'T3']), ['### Wave 2', '', task('T4', 'd.ts', 'T2'), task('T5', 'e.ts', 'T1')].join('\n'))
+    const c = setup({
+      plan,
+      settings: settingsWith(3),
+      merge: async (id) =>
+        id === 'T2' ? { ok: true as const, result: 'conflict' as const } : { ok: true as const, result: 'merged' as const }
+    })
+    const r = await c.orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    const s = await r.finished
+    expect(s.status).toBe('failed')
+    const by = Object.fromEntries(s.tasks.map((t) => [t.taskId, t]))
+    expect(by['T2']).toMatchObject({ status: 'failed', reason: 'merge conflict' })
+    expect(by['T1']?.status).toBe('done')
+    expect(by['T3']?.status).toBe('done')
+    expect(by['T4']).toMatchObject({ status: 'blocked' })
+    expect(by['T5']?.status).toBe('done')
+  })
+
+  it('a failing sibling does not stop running tasks', async () => {
+    const h = held()
+    const c = setup({ plan: planOf(wave(['T1', 'T2'])), runner: h.runner, settings: settingsWith(2) })
+    const r = await c.orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    await settle()
+    h.gates.get('T1')?.(finishedOutcome({ status: 'error', error: 'boom' }))
+    await settle()
+    h.gates.get('T2')?.()
+    const s = await r.finished
+    expect(s.status).toBe('failed')
+    expect(s.tasks.map((t) => t.status)).toEqual(['failed', 'done'])
+  })
+
+  it('cancel aborts every running worker and cancels the queued ones', async () => {
+    const h = held()
+    const c = setup({ plan: planOf(wave(['T1', 'T2', 'T3', 'T4', 'T5'])), runner: h.runner, settings: settingsWith(3) })
+    const r = await c.orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    await vi.waitFor(() => expect(h.active.size).toBe(3))
+    expect(c.orch.cancel(r.runId)).toBe(true)
+    const s = await r.finished
+    expect(s.status).toBe('cancelled')
+    expect(s.tasks.map((t) => t.status)).toEqual(['cancelled', 'cancelled', 'cancelled', 'cancelled', 'cancelled'])
+    expect(c.runner).toHaveBeenCalledTimes(3)
+    const rows = c.store.listTasks(r.runId)
+    if (!rows.ok) throw new Error('rows')
+    expect(rows.value.some((t) => t.status === 'running')).toBe(false)
+  })
+
+  it('a database error aborts the pool: nothing new starts and unsettled tasks fail with run failed', async () => {
+    const h = held()
+    const c = setup({ plan: planOf(wave(['T1', 'T2', 'T3'])), runner: h.runner, settings: settingsWith(2) })
+    const real = c.deps.store
+    const store: PipelineStore = {
+      ...real,
+      updateTask: (runId, id, patch) =>
+        id === 'T1' && patch.status === 'done' ? { ok: false, error: 'storage-error' } : real.updateTask(runId, id, patch)
+    }
+    const orch = createOrchestrator({ ...c.deps, store })
+    const r = await orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    await vi.waitFor(() => expect(h.active.size).toBe(2))
+    h.gates.get('T1')?.()
+    const s = await r.finished
+    expect(s.status).toBe('failed')
+    expect(s.reason).toContain('database error')
+    expect(h.active.size).toBe(0)
+    expect(c.order).toEqual(['T1', 'T2'])
+    const rows = real.listTasks(r.runId)
+    if (!rows.ok) throw new Error('rows')
+    for (const t of rows.value.filter((x) => x.taskId !== 'T1')) {
+      expect(t).toMatchObject({ status: 'failed', reason: expect.stringContaining('run failed: database error') })
+    }
+    const run = real.getRun(r.runId)
+    expect(run.ok && run.value.status).toBe('failed')
+  })
+
+  it('uses the pre-generated run id and reads maxParallel once at start', async () => {
+    const h = held()
+    let current = 2
+    const settings: SettingsStore = {
+      get: () => ({ settings: { ...defaultSettings(), maxParallel: current }, notice: null }),
+      set: () => ({ ok: false, error: 'invalid' })
+    }
+    const c = setup({ plan: FOUR, runner: h.runner, settings })
+    const r = await c.orch.startRun({ ...input, runId: 'given-id' })
+    if (!r.ok) throw new Error(r.error)
+    expect(r.runId).toBe('given-id')
+    current = 4
+    await settle()
+    expect(c.order).toEqual(['T1', 'T2'])
+    for (const id of ['T1', 'T2', 'T3', 'T4']) {
+      await vi.waitFor(() => expect(h.gates.has(id)).toBe(true))
+      h.gates.get(id)?.()
+    }
+    expect((await r.finished).status).toBe('done')
+    expect(h.max()).toBe(2)
+  })
+})

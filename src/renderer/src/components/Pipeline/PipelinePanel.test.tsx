@@ -213,4 +213,28 @@ describe('PipelinePanel', () => {
     render(<PipelinePanel {...props({ run: run() })} />)
     expect(screen.getByRole('button', { name: 'Start a.md' })).toBeDisabled()
   })
+
+  it('summarizes task states and total cost, with parallel running tasks', () => {
+    const base = run().tasks[0]!
+    const t = (
+      taskId: string,
+      status: PipelineRunView['tasks'][number]['status'],
+      costUsd: number | null
+    ): PipelineRunView['tasks'][number] => ({
+      ...base,
+      taskId,
+      title: `Title ${taskId}`,
+      status,
+      costUsd
+    })
+    const tasks = [t('T1', 'done', 0.5), t('T2', 'running', 0.25), t('T3', 'running', null), t('T4', 'queued', null)]
+    render(<PipelinePanel {...props({ run: run({ tasks: tasks.map((x) => ({ ...x, wave: 1 })) }) })} />)
+    expect(screen.getByLabelText('Run summary')).toHaveTextContent('2 running, 1 queued, 1 done · ~$0.7500 total')
+    expect(screen.getAllByText('running', { selector: '.pipeline__task .pipeline__status' })).toHaveLength(2)
+  })
+
+  it('does not render Discard while the status is running, even if not active', () => {
+    render(<PipelinePanel {...props({ run: run({ active: false, status: 'running' }) })} />)
+    expect(screen.queryByRole('button', { name: 'Discard' })).not.toBeInTheDocument()
+  })
 })

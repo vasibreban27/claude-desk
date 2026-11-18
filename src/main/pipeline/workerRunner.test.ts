@@ -95,6 +95,20 @@ describe('buildWorkerOptions', () => {
     expect(JSON.stringify(denied)).toContain('deny')
   })
 
+  it('picks the model: task over project, auto means none, unknown ignored', () => {
+    const build = (taskModel: unknown, project: ProjectSettings['model']) =>
+      buildWorkerOptions(
+        { ...baseArgs({ ...defaultSettings(), model: project }), task: { ...task, model: taskModel as 'haiku' } },
+        new AbortController()
+      ).options
+    expect(build('haiku', 'sonnet').model).toBe('haiku')
+    expect(build(undefined, 'sonnet').model).toBe('sonnet')
+    expect(build(undefined, 'auto')).not.toHaveProperty('model')
+    expect(build('opus', 'auto').model).toBe('opus')
+    expect(build('gpt', 'auto')).not.toHaveProperty('model')
+    expect(build('gpt', 'sonnet').model).toBe('sonnet')
+  })
+
   it('puts title, criteria, owns, contract and the report_blocked rule in the prompt', () => {
     const p = buildWorkerPrompt(task)
     for (const s of ['Serial orchestrator', 'it runs', 'it stops', 'src/a.ts', 'src/dir/', 'Contract:', 'report_blocked']) {
@@ -150,6 +164,43 @@ describe('createWorkerRunner', () => {
     const out = await p
     expect(close).toHaveBeenCalled()
     expect(out.status).toBe('limit')
+  })
+
+  it('applies maxTurns and the time cap from settings; deps override', async () => {
+    const settings = { ...defaultSettings(), maxTurns: 12, taskTimeoutMinutes: 3 }
+    const seen: number[] = []
+    const a = fakeQuery([{ type: 'assistant' }], { hang: true })
+    const p = createWorkerRunner({
+      queryFn: (params) => {
+        seen.push(params.options.maxTurns ?? -1)
+        return a.q
+      }
+    })(baseArgs(settings))
+    await vi.advanceTimersByTimeAsync(180000 - 1)
+    expect(a.close).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(2)
+    expect((await p).status).toBe('limit')
+    expect(seen).toEqual([12])
+
+    const b = fakeQuery([{ type: 'assistant' }], { hang: true })
+    const p2 = createWorkerRunner({ queryFn: () => b.q, timeCapMs: 1000, maxTurns: 7 })(baseArgs(settings))
+    await vi.advanceTimersByTimeAsync(1001)
+    expect((await p2).status).toBe('limit')
+    expect(buildWorkerOptions(baseArgs({ ...settings, maxTurns: undefined }), new AbortController()).options.maxTurns).toBe(40)
+  })
+
+  it('runs two runners independently (one cancelled, one finished)', async () => {
+    const ac = new AbortController()
+    const a = fakeQuery([{ type: 'assistant' }], { hang: true })
+    const b = fakeQuery([{ type: 'assistant' }, result()])
+    const pa = createWorkerRunner({ queryFn: () => a.q })(baseArgs(defaultSettings(), ac.signal))
+    const pb = createWorkerRunner({ queryFn: () => b.q })(baseArgs())
+    await vi.advanceTimersByTimeAsync(10)
+    ac.abort()
+    expect((await pa).status).toBe('cancelled')
+    expect((await pb).status).toBe('finished')
+    expect(b.close).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('clears the timer when the session ends', async () => {

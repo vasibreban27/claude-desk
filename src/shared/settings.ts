@@ -46,6 +46,11 @@ const checksSchema = z
     message: 'check names must be unique'
   })
 
+export const MAX_PARALLEL_LIMIT = 4
+export const DEFAULT_MAX_PARALLEL = 2
+export const MAX_TURNS_RANGE = { min: 5, max: 100, default: 40 } as const
+export const TIME_LIMIT_MINUTES_RANGE = { min: 1, max: 120, default: 20 } as const
+
 export const projectSettingsSchema = z.object({
   version: z.literal(1),
   model: z.enum(MODEL_CHOICES),
@@ -53,7 +58,16 @@ export const projectSettingsSchema = z.object({
   allowGitRead: z.boolean(),
   allowPlanWrites: z.boolean(),
   /** Added in Phase 4a without a version bump; absent means no checks. */
-  checks: checksSchema.optional()
+  checks: checksSchema.optional(),
+  /** Added in Phase 4c without a version bump; absent means the default. */
+  maxParallel: z.number().int().min(1).max(MAX_PARALLEL_LIMIT).optional(),
+  maxTurns: z.number().int().min(MAX_TURNS_RANGE.min).max(MAX_TURNS_RANGE.max).optional(),
+  taskTimeoutMinutes: z
+    .number()
+    .int()
+    .min(TIME_LIMIT_MINUTES_RANGE.min)
+    .max(TIME_LIMIT_MINUTES_RANGE.max)
+    .optional()
 })
 export type ProjectSettings = z.infer<typeof projectSettingsSchema>
 export type ModelChoice = ProjectSettings['model']
@@ -65,7 +79,27 @@ export function defaultSettings(): ProjectSettings {
     protectedPaths: [...DEFAULT_PROTECTED_PATHS],
     allowGitRead: false,
     allowPlanWrites: false,
-    checks: []
+    checks: [],
+    maxParallel: DEFAULT_MAX_PARALLEL,
+    maxTurns: MAX_TURNS_RANGE.default,
+    taskTimeoutMinutes: TIME_LIMIT_MINUTES_RANGE.default
+  }
+}
+
+export interface EffectiveLimits {
+  maxParallel: number
+  maxTurns: number
+  timeCapMs: number
+}
+
+/** The single place that applies the limit defaults. */
+export function effectiveLimits(
+  settings: Pick<ProjectSettings, 'maxParallel' | 'maxTurns' | 'taskTimeoutMinutes'>
+): EffectiveLimits {
+  return {
+    maxParallel: settings.maxParallel ?? DEFAULT_MAX_PARALLEL,
+    maxTurns: settings.maxTurns ?? MAX_TURNS_RANGE.default,
+    timeCapMs: (settings.taskTimeoutMinutes ?? TIME_LIMIT_MINUTES_RANGE.default) * 60000
   }
 }
 
@@ -88,7 +122,17 @@ export function parseSettingsOrDefaults(raw: string | undefined): SettingsParseR
   }
   const parsed = projectSettingsSchema.safeParse(json)
   if (!parsed.success) return { settings: defaultSettings(), case: 'invalid-schema' }
-  return { settings: { ...parsed.data, checks: parsed.data.checks ?? [] }, case: 'ok' }
+  const limits = effectiveLimits(parsed.data)
+  return {
+    settings: {
+      ...parsed.data,
+      checks: parsed.data.checks ?? [],
+      maxParallel: limits.maxParallel,
+      maxTurns: limits.maxTurns,
+      taskTimeoutMinutes: limits.timeCapMs / 60000
+    },
+    case: 'ok'
+  }
 }
 
 /**

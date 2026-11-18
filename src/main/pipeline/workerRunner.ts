@@ -1,5 +1,5 @@
 import { query, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk'
-import type { ProjectSettings } from '../../shared/settings'
+import { effectiveLimits, type ProjectSettings } from '../../shared/settings'
 import { guardWorkerToolUse } from './workerGuard'
 import { WORK_ALLOWED_TOOLS, WORK_SERVER_NAME, createWorkerTools, type CheckResult } from './workerTools'
 import { buildWorkerPrompt, buildWorkerSystemPrompt } from './prompts'
@@ -64,7 +64,7 @@ export interface BuiltWorker {
 export function buildWorkerOptions(
   args: WorkerRunArgs,
   abortController: AbortController,
-  maxTurns: number = MAX_TURNS
+  maxTurns: number = effectiveLimits(args.settings).maxTurns
 ): BuiltWorker {
   let blocked: string | null = null
   const tools = createWorkerTools({
@@ -93,7 +93,7 @@ export function buildWorkerOptions(
     allowedTools: [...WORKER_BUILTIN_TOOLS, ...WORK_ALLOWED_TOOLS],
     permissionMode: 'acceptEdits',
     maxTurns,
-    ...(args.settings.model !== 'auto' ? { model: args.settings.model } : {}),
+    ...modelOption(args),
     mcpServers: { [WORK_SERVER_NAME]: tools.createServer() },
     hooks: { PreToolUse: [{ hooks: [guard], onFailure: 'block' }] },
     abortController
@@ -106,15 +106,26 @@ export function buildWorkerOptions(
   }
 }
 
+const MODELS: readonly string[] = ['haiku', 'sonnet', 'opus']
+
+/** The task Model wins over the project model; `auto` (or an unknown value) means the SDK default. */
+function modelOption(args: WorkerRunArgs): { model?: string } {
+  const taskModel: unknown = args.task.model
+  if (typeof taskModel === 'string' && MODELS.includes(taskModel)) return { model: taskModel }
+  const project = args.settings.model
+  return project !== 'auto' ? { model: project } : {}
+}
+
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
 const LIMIT_TEXT = /maximum number of turns/i
 
 export function createWorkerRunner(deps: WorkerRunnerDeps = {}): WorkerRunner {
   const queryFn: QueryFn = deps.queryFn ?? ((p) => query(p))
-  const timeCap = deps.timeCapMs ?? TIME_CAP_MS
-  const maxTurns = deps.maxTurns ?? MAX_TURNS
 
   return async (args) => {
+    const limits = effectiveLimits(args.settings)
+    const timeCap = deps.timeCapMs ?? limits.timeCapMs
+    const maxTurns = deps.maxTurns ?? limits.maxTurns
     const abortController = new AbortController()
     let reason: 'cancelled' | 'limit' | null = null
     let q: QueryLike | null = null

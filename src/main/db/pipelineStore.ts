@@ -87,7 +87,10 @@ export interface PipelineStore {
   setRunStatus(runId: string, status: RunStatus, finishedAt?: number | null): StoreResult<PipelineRunRow>
   getRun(runId: string): StoreResult<PipelineRunRow>
   listTasks(runId: string): StoreResult<PipelineTaskRow[]>
-  /** Running tasks become failed (`interrupted`), their runs failed; returns the task count. */
+  /**
+   * Crash recovery: every `running` run becomes failed; its `running` tasks become failed and its `queued` tasks
+   * cancelled, both with reason `interrupted`. Returns the number of tasks changed.
+   */
   markInterrupted(now?: number): StoreResult<number>
   /** The newest run of a project (null when it has none). */
   latestRunForProject(projectId: string): StoreResult<PipelineRunRow | null>
@@ -294,9 +297,15 @@ export function createPipelineStore(
     `UPDATE pipeline_tasks SET status = 'failed', reason = 'interrupted', finished_at = ?
      WHERE status = 'running'`
   )
+  // Tasks of a run that never started (queued) are cancelled, not left queued under a failed run.
+  const interruptQueued = db.prepare(
+    `UPDATE pipeline_tasks SET status = 'cancelled', reason = 'interrupted', finished_at = ?
+     WHERE status = 'queued' AND run_id IN (SELECT id FROM pipeline_runs WHERE status = 'running')`
+  )
+  // Every run still `running` at startup was interrupted, whether or not a task was running at that moment
+  // (a crash between waves leaves none).
   const interruptRuns = db.prepare(
-    `UPDATE pipeline_runs SET status = 'failed', finished_at = ?
-     WHERE status = 'running' AND id IN (SELECT run_id FROM pipeline_tasks WHERE status = 'running')`
+    `UPDATE pipeline_runs SET status = 'failed', finished_at = ? WHERE status = 'running'`
   )
 
   const createTx = db.transaction((input: NewPipelineRun, at: number) => {
@@ -317,8 +326,11 @@ export function createPipelineStore(
   })
 
   const interruptTx = db.transaction((at: number) => {
-    interruptRuns.run(at) // before the tasks change, while they are still `running`
-    return interruptTasks.run(at).changes
+    // The queued tasks are found through their run, so they change while the run is still `running`.
+    const queued = interruptQueued.run(at).changes
+    const running = interruptTasks.run(at).changes
+    interruptRuns.run(at)
+    return queued + running
   })
 
   function fail<T>(e: unknown): StoreResult<T> {
