@@ -95,6 +95,7 @@ suite('phase 4a live run (CLAUDE_DESK_LIVE=1)', () => {
       // Checks are seeded through SettingsStore, never read from the repo.
       const saved = settings.set('live', {
         ...defaultSettings(),
+        reviewers: [],
         model: 'haiku',
         checks: [{ name: 'verify', executable: 'node', args: ['check.mjs'], timeoutMs: 60_000 }]
       })

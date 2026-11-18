@@ -3,10 +3,20 @@ import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import type { PipelineStore, RunStatus, TaskPatch } from '../db/pipelineStore'
 import type { SettingsStore } from '../db/settingsStore'
+import {
+  AUTO_FIX_ROUNDS_RANGE,
+  DEFAULT_REVIEWERS,
+  FINDINGS_MAX_COUNT,
+  isBlocking,
+  type Finding,
+  type TaskFindingsView
+} from '../../shared/review'
 import { effectiveLimits, type ProjectSettings } from '../../shared/settings'
 import { MAX_PLAN_BYTES, parsePlan, type ParsedPlan, type PlanTask } from './planParser'
 import { createMutex, runPool } from './queue'
-import type { WorkerRunner } from './workerRunner'
+import type { WorkerOutcome, WorkerRunner } from './workerRunner'
+import { runChecksGate, type ChecksGateArgs, type ChecksGateResult } from './checksGate'
+import { createReviewRunner, type ReviewOutcome, type ReviewRunner } from './reviewRunner'
 import {
   GIT_ENV_ADDITIONS,
   GIT_MAX_BUFFER,
@@ -19,7 +29,7 @@ import {
 
 /**
  * Pipeline orchestrator (plain code, no LLM). Wave by wave, at most `maxParallel` tasks at once, each task in
- * its own worktree; every manager mutation goes through one per-run mutex; a task that commits is merged into `run/<id>`. "Done" means committed and merged, not reviewed.
+ * its own worktree; every manager mutation goes through one per-run mutex; a task that commits passes the checks gate and the reviewers (with fix rounds) and is then merged into `run/<id>`.
  * Never throws out of its public methods.
  */
 
@@ -65,6 +75,10 @@ export interface OrchestratorDeps {
   settings: SettingsStore
   runner: WorkerRunner
   pluginPath: string
+  /** The checks gate (default: the app's own `runChecksGate`). */
+  gate?: (args: ChecksGateArgs) => Promise<ChecksGateResult>
+  /** One reviewer session (default: the SDK-backed runner). */
+  reviewRunner?: ReviewRunner
   createManager?: (opts: WorktreeManagerOptions) => WorktreeManager
   resolveRef?: ResolveRef
   readPlan?: (planPath: string) => Promise<string>
@@ -114,6 +128,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const readPlan = deps.readPlan ?? defaultReadPlan
   const newRunId = deps.newRunId ?? randomUUID
   const active = new Map<string, ActiveRun>()
+  const runGate = deps.gate ?? ((args: ChecksGateArgs) => runChecksGate(args))
+  let defaultReviewer: ReviewRunner | null = null
+  const runReview: ReviewRunner = (args) => {
+    const r = deps.reviewRunner ?? (defaultReviewer ??= createReviewRunner())
+    return r(args)
+  }
 
   // Crash recovery: nothing resumes automatically; running rows become failed (interrupted).
   try {
@@ -136,7 +156,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     const status = new Map<string, string>()
     const reasons = new Map<string, string | null>()
     const settle = (taskId: string, st: 'failed' | 'blocked' | 'cancelled' | 'done', reason: string | null, extra: TaskPatch = {}): void => {
-      update(taskId, { status: st, reason, finishedAt: now(), ...extra })
+      update(taskId, { status: st, reason, finishedAt: now(), stage: null, ...extra })
       status.set(taskId, st)
       reasons.set(taskId, reason)
     }
@@ -168,6 +188,39 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const startedAt = now()
       update(task.id, { status: 'running', startedAt })
+      // Totals over the first worker run, fix rounds and reviewers (each runner reports its own call's value).
+      let turnsTotal: number | null = null
+      let costTotal: number | null = null
+      let checksResult: TaskPatch['checksResult'] = null
+      let fixRounds: number | null = null
+      let findingsView: TaskFindingsView | null = null
+      const addCost = (c: number | null): void => {
+        if (c !== null) costTotal = (costTotal ?? 0) + c
+      }
+      const absorb = (o: WorkerOutcome): void => {
+        if (o.turns !== null) turnsTotal = (turnsTotal ?? 0) + o.turns
+        addCost(o.costUsd)
+        checksResult = o.checksResult
+      }
+      const timing = (): TaskPatch => ({
+        durationMs: now() - startedAt,
+        turns: turnsTotal,
+        costUsd: costTotal,
+        checksResult,
+        ...(fixRounds !== null ? { fixRounds } : {}),
+        ...(findingsView !== null ? { findings: findingsView } : {})
+      })
+      /** Settles the task when a worker outcome ends it; false when the worker finished normally. */
+      const settleWorkerStop = (o: WorkerOutcome): boolean => {
+        if (o.status === 'cancelled') settle(task.id, 'cancelled', null, timing())
+        else if (o.status === 'limit') settle(task.id, 'failed', 'limit reached', timing())
+        else if (o.blocked !== null) settle(task.id, 'failed', cap(`blocked: ${o.blocked}`), timing())
+        else if (o.status === 'error') {
+          log(`pipeline: worker error in ${task.id}: ${o.error ?? 'unknown'}`)
+          settle(task.id, 'failed', 'worker error', timing())
+        } else return false
+        return true
+      }
       try {
         const wt = await mutex(() => manager.createTaskWorktree(task.id))
         if (abortReason !== null) return
@@ -177,40 +230,129 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
         update(task.id, { branch: wt.branch, worktreePath: wt.path })
         const startSha = await resolveRef(wt.path, wt.branch)
+        const signal = handle.controller.signal
 
-        const outcome = await deps.runner({
+        let outcome = await deps.runner({
           task,
           worktree: wt.path,
           branch: wt.branch,
           settings,
           pluginPath: deps.pluginPath,
-          signal: handle.controller.signal
+          signal
         })
         if (abortReason !== null) return
-        const timing: TaskPatch = {
-          durationMs: now() - startedAt,
-          turns: outcome.turns,
-          costUsd: outcome.costUsd,
-          checksResult: outcome.checksResult
+        absorb(outcome)
+        if (settleWorkerStop(outcome)) return
+
+        const checks = settings.checks ?? []
+        const reviewers = (settings.reviewers ?? [...DEFAULT_REVIEWERS]).filter(
+          (r) => r !== 'security-auditor' || task.sensitive === true
+        )
+        if (checks.length > 0 || reviewers.length > 0) {
+          const maxRounds = settings.autoFixRounds ?? AUTO_FIX_ROUNDS_RANGE.default
+          let head = await resolveRef(wt.path, wt.branch)
+          if (head === startSha) {
+            settle(task.id, 'failed', 'no commit', timing())
+            return
+          }
+          let rounds = 0
+          fixRounds = 0
+          for (;;) {
+            let fix: { kind: 'checks' | 'review'; text: string } | null = null
+            let failReason = ''
+
+            if (checks.length > 0) {
+              update(task.id, { stage: 'checks' })
+              const gate = await runGate({ worktree: wt.path, checks, signal })
+              if (abortReason !== null) return
+              if (gate.status === 'failed' && signal.aborted) {
+                settle(task.id, 'cancelled', null, timing())
+                return
+              }
+              checksResult = gate.status
+              if (gate.status === 'failed') {
+                fix = { kind: 'checks', text: `Check "${gate.check}":\n${gate.output}` }
+                failReason = 'checks failed'
+              }
+            }
+
+            if (fix === null && reviewers.length > 0) {
+              update(task.id, { stage: 'review' })
+              const all: Finding[] = []
+              for (const reviewer of reviewers) {
+                let rv: ReviewOutcome
+                try {
+                  rv = await runReview({ reviewer, task, worktree: wt.path, startSha, settings, pluginPath: deps.pluginPath, signal })
+                } catch (e) {
+                  if (abortReason !== null) return
+                  log(`pipeline: reviewer ${reviewer} failed in ${task.id}: ${short(e)}`)
+                  settle(task.id, 'failed', 'review: reviewer error', timing())
+                  return
+                }
+                if (abortReason !== null) return
+                addCost(rv.costUsd)
+                if (rv.status === 'cancelled') {
+                  settle(task.id, 'cancelled', null, timing())
+                  return
+                }
+                if (rv.status !== 'finished') {
+                  if (rv.status === 'error') log(`pipeline: reviewer ${reviewer} error in ${task.id}: ${rv.error ?? 'unknown'}`)
+                  const why =
+                    rv.status === 'no-report' ? 'reviewer did not report' : rv.status === 'limit' ? 'reviewer limit reached' : 'reviewer error'
+                  settle(task.id, 'failed', `review: ${why}`, timing())
+                  return
+                }
+                all.push(...rv.findings)
+              }
+              const blocking = all.filter(isBlocking)
+              const rest = all.filter((f) => !isBlocking(f))
+              findingsView = {
+                blocking: blocking.length,
+                minor: rest.length,
+                items: [...blocking, ...rest].slice(0, FINDINGS_MAX_COUNT)
+              }
+              update(task.id, { findings: findingsView })
+              if (blocking.length > 0) {
+                fix = {
+                  kind: 'review',
+                  text: blocking
+                    .map((f) => `[${f.severity}] (${f.reviewer}) ${f.file}${f.line !== null ? `:${f.line}` : ''}: ${f.text}`)
+                    .join('\n')
+                }
+                failReason = 'review: blocking findings'
+              }
+            }
+
+            if (fix === null) break
+            if (rounds >= maxRounds) {
+              settle(task.id, 'failed', failReason, timing())
+              return
+            }
+            rounds += 1
+            fixRounds = rounds
+            update(task.id, { stage: 'fixing', fixRounds: rounds })
+            outcome = await deps.runner({
+              task,
+              worktree: wt.path,
+              branch: wt.branch,
+              settings,
+              pluginPath: deps.pluginPath,
+              signal,
+              fix: { kind: fix.kind, text: fix.text, sessionId: outcome.sessionId ?? null }
+            })
+            if (abortReason !== null) return
+            absorb(outcome)
+            if (settleWorkerStop(outcome)) return
+            const next = await resolveRef(wt.path, wt.branch)
+            if (next === head) {
+              settle(task.id, 'failed', 'no commit after fix', timing())
+              return
+            }
+            head = next
+          }
+          update(task.id, { stage: null })
         }
 
-        if (outcome.status === 'cancelled') {
-          settle(task.id, 'cancelled', null, timing)
-          return
-        }
-        if (outcome.status === 'limit') {
-          settle(task.id, 'failed', 'limit reached', timing)
-          return
-        }
-        if (outcome.blocked !== null) {
-          settle(task.id, 'failed', cap(`blocked: ${outcome.blocked}`), timing)
-          return
-        }
-        if (outcome.status === 'error') {
-          log(`pipeline: worker error in ${task.id}: ${outcome.error ?? 'unknown'}`)
-          settle(task.id, 'failed', 'worker error', timing)
-          return
-        }
         // Resolving the end commit and merging share the mutex: merges never overlap.
         const done = await mutex(async () => {
           const endSha = await resolveRef(wt.path, wt.branch)
@@ -220,19 +362,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (abortReason !== null) return
         const { endSha, merged } = done
         if (merged === null) {
-          settle(task.id, 'failed', 'no commit', timing)
+          settle(task.id, 'failed', 'no commit', timing())
         } else if (!merged.ok) {
-          settle(task.id, 'failed', cap(`merge failed: ${merged.error}`), { ...timing, commitSha: endSha })
+          settle(task.id, 'failed', cap(`merge failed: ${merged.error}`), { ...timing(), commitSha: endSha })
         } else if (merged.result === 'conflict') {
-          settle(task.id, 'failed', 'merge conflict', { ...timing, commitSha: endSha })
+          settle(task.id, 'failed', 'merge conflict', { ...timing(), commitSha: endSha })
         } else {
-          settle(task.id, 'done', null, { ...timing, commitSha: endSha })
+          settle(task.id, 'done', null, { ...timing(), commitSha: endSha })
         }
       } catch (e) {
         if (e instanceof RunAbort) throw e
         if (abortReason !== null) return
         log(`pipeline: task ${task.id} failed: ${short(e)}`)
-        settle(task.id, 'failed', 'worker error', { durationMs: now() - startedAt })
+        settle(task.id, 'failed', 'worker error', timing())
       }
     }
 

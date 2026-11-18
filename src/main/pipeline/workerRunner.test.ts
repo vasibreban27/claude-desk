@@ -219,6 +219,70 @@ describe('createWorkerRunner', () => {
     expect(close).toHaveBeenCalled()
   })
 
+  it('returns the session id from the result message', async () => {
+    const { q } = fakeQuery([{ type: 'assistant' }, result({ session_id: 'sess-1' })])
+    expect(await createWorkerRunner({ queryFn: () => q })(baseArgs())).toMatchObject({ status: 'finished', sessionId: 'sess-1' })
+    const b = fakeQuery([result()])
+    expect(await createWorkerRunner({ queryFn: () => b.q })(baseArgs())).not.toHaveProperty('sessionId')
+  })
+
+  it('resumes the previous session with identical options and the fix prompt', async () => {
+    const seen: { prompt: string; resume?: string; tools?: unknown }[] = []
+    const run = createWorkerRunner({
+      queryFn: (p) => {
+        seen.push({ prompt: p.prompt, resume: p.options.resume, tools: p.options.tools })
+        return fakeQuery([result({ session_id: 'sess-1' })]).q
+      }
+    })
+    const out = await run({ ...baseArgs(), fix: { kind: 'checks', text: 'lint: bad thing', sessionId: 'sess-1' } })
+    expect(out).toMatchObject({ status: 'finished', sessionId: 'sess-1' })
+    expect(seen).toHaveLength(1)
+    expect(seen[0]!.resume).toBe('sess-1')
+    expect(seen[0]!.tools).toEqual([...WORKER_BUILTIN_TOOLS])
+    expect(seen[0]!.prompt).toContain('lint: bad thing')
+    expect(seen[0]!.prompt).toContain('git_commit')
+    expect(seen[0]!.prompt).toContain('DATA')
+  })
+
+  it('starts a fresh session with the task and findings when there is no session id', async () => {
+    const seen: { prompt: string; resume?: string }[] = []
+    const run = createWorkerRunner({
+      queryFn: (p) => {
+        seen.push({ prompt: p.prompt, resume: p.options.resume })
+        return fakeQuery([result()]).q
+      }
+    })
+    await run({ ...baseArgs(), fix: { kind: 'review', text: 'blocker in a.ts', sessionId: null } })
+    expect(seen[0]!.resume).toBeUndefined()
+    expect(seen[0]!.prompt).toContain(buildWorkerPrompt(task))
+    expect(seen[0]!.prompt).toContain('blocker in a.ts')
+  })
+
+  it('falls back to a fresh session when the resume errors, and adds the costs', async () => {
+    const seen: (string | undefined)[] = []
+    const run = createWorkerRunner({
+      queryFn: (p) => {
+        seen.push(p.options.resume)
+        return p.options.resume !== undefined
+          ? fakeQuery([result({ is_error: true, subtype: 'error_during_execution', errors: ['no such session'], total_cost_usd: 0.01 })]).q
+          : fakeQuery([result({ session_id: 'new', total_cost_usd: 0.02 })]).q
+      }
+    })
+    const out = await run({ ...baseArgs(), fix: { text: 'x', sessionId: 'old' } })
+    expect(seen).toEqual(['old', undefined])
+    expect(out).toMatchObject({ status: 'finished', sessionId: 'new' })
+    expect(out.costUsd).toBeCloseTo(0.03)
+  })
+
+  it('does not fall back after a limit or a cancel', async () => {
+    const queryFn = vi.fn(() =>
+      fakeQuery([result({ subtype: 'error_max_turns', is_error: true, errors: ['Reached maximum number of turns (40)'] })]).q
+    )
+    const out = await createWorkerRunner({ queryFn })({ ...baseArgs(), fix: { text: 'x', sessionId: 'old' } })
+    expect(out.status).toBe('limit')
+    expect(queryFn).toHaveBeenCalledTimes(1)
+  })
+
   it('does not start when already aborted', async () => {
     const ac = new AbortController()
     ac.abort()

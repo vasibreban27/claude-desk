@@ -84,6 +84,11 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (run_id, task_id)
   );
   CREATE INDEX idx_pipeline_tasks_status ON pipeline_tasks (status);
+  `,
+  `
+  ALTER TABLE pipeline_tasks ADD COLUMN stage TEXT CHECK (stage IN ('checks', 'review', 'fixing'));
+  ALTER TABLE pipeline_tasks ADD COLUMN fix_rounds INTEGER CHECK (fix_rounds >= 0);
+  ALTER TABLE pipeline_tasks ADD COLUMN findings_json TEXT;
   `
 ]
 

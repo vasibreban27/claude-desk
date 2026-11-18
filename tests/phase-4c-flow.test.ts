@@ -214,7 +214,7 @@ describe('phase 4c parallel pipeline from the IPC handlers (real git, in-memory 
       update: () => Promise.resolve(undefined)
     }
     const settings: SettingsStore = {
-      get: () => ({ settings: { ...defaultSettings(), maxParallel }, notice: null }),
+      get: () => ({ settings: { ...defaultSettings(), reviewers: [], maxParallel }, notice: null }),
       set: () => ({ ok: false, error: 'invalid' })
     }
     unregister = registerIpc(projects, undefined, settings, store)

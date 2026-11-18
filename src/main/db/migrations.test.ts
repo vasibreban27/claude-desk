@@ -34,7 +34,7 @@ describe('migration 3: pipeline tables', () => {
     ).run()
     db.prepare(`INSERT INTO project_settings VALUES ('p', '{}', 1)`).run()
 
-    expect(migrate(db)).toBe(MIGRATIONS.length - 2)
+    expect(migrate(db, MIGRATIONS.slice(0, 3))).toBe(1)
     expect(db.pragma('user_version', { simple: true })).toBe(3)
     const names = (table: string): string[] =>
       (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name)
@@ -50,7 +50,37 @@ describe('migration 3: pipeline tables', () => {
     expect((db.prepare('SELECT COUNT(*) AS c FROM runs').get() as { c: number }).c).toBe(1)
     expect((db.prepare('SELECT COUNT(*) AS c FROM project_settings').get() as { c: number }).c).toBe(1)
 
-    expect(migrate(db)).toBe(0)
+    expect(migrate(db, MIGRATIONS.slice(0, 3))).toBe(0)
     expect(db.pragma('user_version', { simple: true })).toBe(3)
+  })
+})
+
+describe('migration 4: task review columns', () => {
+  it('adds nullable stage, fix_rounds and findings_json and keeps existing rows', () => {
+    const db = new Database(':memory:')
+    migrate(db, MIGRATIONS.slice(0, 3))
+    db.prepare(
+      `INSERT INTO pipeline_runs VALUES ('r1', 'p', 'x.md', 'abc', 'main', 'dead', 'run/r1', '/w', 'running', 1, NULL)`
+    ).run()
+    db.prepare(
+      `INSERT INTO pipeline_tasks (run_id, task_id, title, worker, wave, status)
+       VALUES ('r1', 'T1', 'one', 'w', 1, 'running')`
+    ).run()
+
+    expect(migrate(db)).toBe(MIGRATIONS.length - 3)
+    expect(db.pragma('user_version', { simple: true })).toBe(4)
+    const cols = db.prepare('PRAGMA table_info(pipeline_tasks)').all() as {
+      name: string
+      notnull: number
+    }[]
+    for (const n of ['stage', 'fix_rounds', 'findings_json']) {
+      expect(cols.find((c) => c.name === n)).toMatchObject({ notnull: 0 })
+    }
+    expect(
+      db.prepare('SELECT title, status, stage, fix_rounds, findings_json FROM pipeline_tasks').get()
+    ).toEqual({ title: 'one', status: 'running', stage: null, fix_rounds: null, findings_json: null })
+
+    expect(migrate(db)).toBe(0)
+    expect(db.pragma('user_version', { simple: true })).toBe(4)
   })
 })

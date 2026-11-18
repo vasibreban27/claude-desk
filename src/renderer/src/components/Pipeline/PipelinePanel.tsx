@@ -52,12 +52,42 @@ function PlanItem({ plan, disabled, onStart }: { plan: PlanEntry; disabled: bool
   )
 }
 
+export function stageLabel(task: Pick<PipelineTaskView, 'stage' | 'fixRounds'>): string | null {
+  if (task.stage === null) return null
+  if (task.stage === 'fixing') return `fixing, round ${task.fixRounds ?? 1}`
+  return task.fixRounds ? `${task.stage}, round ${task.fixRounds}` : task.stage
+}
+
+function Findings({ findings }: { findings: NonNullable<PipelineTaskView['findings']> }) {
+  return (
+    <div className="pipeline__findings">
+      <p>
+        {findings.blocking} blocking, {findings.minor} minor
+      </p>
+      {findings.items.length > 0 && (
+        <ul>
+          {findings.items.slice(0, 20).map((f, i) => (
+            <li key={i}>
+              {f.severity} · {f.reviewer} · {f.line === null ? f.file : `${f.file}:${f.line}`}: {f.text}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function TaskRow({ task }: { task: PipelineTaskView }) {
+  const stage = stageLabel(task)
   return (
     <li className="pipeline__task">
       <div className="pipeline__task-head">
         <strong>{task.taskId}</strong> {task.title}
         <span className={`pipeline__status pipeline__status--${task.status}`}>{task.status}</span>
+        {stage && <span className="pipeline__badge">{stage}</span>}
+        {!stage && task.fixRounds !== null && task.fixRounds > 0 && (
+          <span className="pipeline__badge">fix rounds: {task.fixRounds}</span>
+        )}
         {task.status === 'done' && <span className="pipeline__badge">Committed, not reviewed</span>}
       </div>
       <div className="pipeline__muted">
@@ -67,6 +97,7 @@ function TaskRow({ task }: { task: PipelineTaskView }) {
         {task.costUsd !== null && <span>~${task.costUsd.toFixed(4)}</span>}
       </div>
       {task.reason && <p className="pipeline__reason">{task.reason}</p>}
+      {task.findings && <Findings findings={task.findings} />}
     </li>
   )
 }

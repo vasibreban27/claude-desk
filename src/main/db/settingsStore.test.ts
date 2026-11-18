@@ -96,6 +96,90 @@ describe('SettingsStore', () => {
     })
   })
 
+  it('keeps stored autoFixRounds, reviewers and the three limits when a caller omits them', () => {
+    const store = createSettingsStore(db)
+    store.set(P, {
+      ...custom(),
+      autoFixRounds: 4,
+      reviewers: ['reviewer', 'security-auditor'],
+      maxParallel: 3,
+      maxTurns: 60,
+      taskTimeoutMinutes: 30
+    })
+    const { autoFixRounds, reviewers, maxParallel, maxTurns, taskTimeoutMinutes, ...legacy } = custom()
+    void [autoFixRounds, reviewers, maxParallel, maxTurns, taskTimeoutMinutes]
+    const r = store.set(P, legacy)
+    expect(r.ok).toBe(true)
+    expect(store.get(P).settings).toMatchObject({
+      autoFixRounds: 4,
+      reviewers: ['reviewer', 'security-auditor'],
+      maxParallel: 3,
+      maxTurns: 60,
+      taskTimeoutMinutes: 30
+    })
+    store.set(P, { ...legacy, autoFixRounds: 0, reviewers: [] })
+    expect(store.get(P).settings).toMatchObject({ autoFixRounds: 0, reviewers: [], maxParallel: 3 })
+  })
+
+  it('omitting only some optional fields keeps those stored and applies the ones given', () => {
+    const store = createSettingsStore(db)
+    store.set(P, { ...custom(), autoFixRounds: 5, reviewers: ['security-auditor'], maxTurns: 70, maxParallel: 2 })
+    const { maxTurns, reviewers, ...partial } = custom()
+    void [maxTurns, reviewers]
+    expect(store.set(P, { ...partial, autoFixRounds: 1, maxParallel: 4 }).ok).toBe(true)
+    expect(store.get(P).settings).toMatchObject({
+      autoFixRounds: 1,
+      maxParallel: 4,
+      maxTurns: 70,
+      reviewers: ['security-auditor']
+    })
+  })
+
+  it('omitting optional fields with no stored row stores empty checks and the defaults apply on read', () => {
+    const store = createSettingsStore(db)
+    const { autoFixRounds, reviewers, maxParallel, ...legacy } = custom()
+    void [autoFixRounds, reviewers, maxParallel]
+    expect(store.set(P, legacy).ok).toBe(true)
+    const raw = JSON.parse(rawRow() ?? '{}') as Record<string, unknown>
+    expect(raw['checks']).toEqual([])
+    expect(raw).not.toHaveProperty('reviewers')
+    expect(store.get(P)).toMatchObject({
+      notice: null,
+      settings: {
+        autoFixRounds: defaultSettings().autoFixRounds,
+        reviewers: defaultSettings().reviewers,
+        maxParallel: defaultSettings().maxParallel
+      }
+    })
+  })
+
+  it('omitting fields when the stored row is corrupt falls back to empty checks and does not throw', () => {
+    db.prepare('INSERT INTO project_settings VALUES (?, ?, 0)').run(P, '{not json')
+    const { autoFixRounds, reviewers, ...legacy } = custom()
+    void [autoFixRounds, reviewers]
+    const r = createSettingsStore(db).set(P, legacy)
+    expect(r.ok).toBe(true)
+    expect(createSettingsStore(db).get(P)).toMatchObject({
+      notice: null,
+      settings: { model: 'opus', checks: [], reviewers: defaultSettings().reviewers }
+    })
+  })
+
+  it.each([
+    ['autoFixRounds above range', { autoFixRounds: 6 }],
+    ['autoFixRounds negative', { autoFixRounds: -1 }],
+    ['autoFixRounds fractional', { autoFixRounds: 1.5 }],
+    ['unknown reviewer', { reviewers: ['reviewer', 'hacker'] }],
+    ['duplicate reviewers', { reviewers: ['reviewer', 'reviewer'] }],
+    ['three reviewers', { reviewers: ['reviewer', 'security-auditor', 'reviewer'] }]
+  ])('rejects %s and keeps the stored row', (_n, over) => {
+    const store = createSettingsStore(db)
+    store.set(P, custom())
+    const before = rawRow()
+    expect(store.set(P, { ...custom(), ...over })).toEqual({ ok: false, error: 'invalid' })
+    expect(rawRow()).toBe(before)
+  })
+
   it('without a database: defaults and storage-unavailable', () => {
     const store = createSettingsStore(null)
     expect(store.get(P)).toEqual({ settings: defaultSettings(), notice: 'storage-unavailable' })

@@ -2,7 +2,7 @@ import { query, type HookCallback, type Options } from '@anthropic-ai/claude-age
 import { effectiveLimits, type ProjectSettings } from '../../shared/settings'
 import { guardWorkerToolUse } from './workerGuard'
 import { WORK_ALLOWED_TOOLS, WORK_SERVER_NAME, createWorkerTools, type CheckResult } from './workerTools'
-import { buildWorkerPrompt, buildWorkerSystemPrompt } from './prompts'
+import { buildFixPrompt, buildWorkerPrompt, buildWorkerSystemPrompt, type FixInput } from './prompts'
 import type { PlanTask } from './planParser'
 
 /**
@@ -25,6 +25,8 @@ export interface WorkerOutcome {
   turns: number | null
   costUsd: number | null
   checksResult: CheckResult
+  /** The SDK session id, for resuming in the next fix round. */
+  sessionId?: string
   /** Short text for `error`. */
   error?: string
 }
@@ -37,6 +39,8 @@ export interface WorkerRunArgs {
   settings: ProjectSettings
   pluginPath: string
   signal?: AbortSignal
+  /** A fix round: the failing output or findings, and the session to resume (null/absent: fresh session). */
+  fix?: FixInput & { sessionId?: string | null }
 }
 
 export type WorkerRunner = (args: WorkerRunArgs) => Promise<WorkerOutcome>
@@ -64,7 +68,8 @@ export interface BuiltWorker {
 export function buildWorkerOptions(
   args: WorkerRunArgs,
   abortController: AbortController,
-  maxTurns: number = effectiveLimits(args.settings).maxTurns
+  maxTurns: number = effectiveLimits(args.settings).maxTurns,
+  resumeId: string | null = null
 ): BuiltWorker {
   let blocked: string | null = null
   const tools = createWorkerTools({
@@ -96,11 +101,19 @@ export function buildWorkerOptions(
     ...modelOption(args),
     mcpServers: { [WORK_SERVER_NAME]: tools.createServer() },
     hooks: { PreToolUse: [{ hooks: [guard], onFailure: 'block' }] },
-    abortController
+    abortController,
+    ...(resumeId !== null ? { resume: resumeId } : {})
   }
+  // Resume keeps the conversation, so the fix text alone is enough; a fresh session also needs the task.
+  const prompt =
+    args.fix === undefined
+      ? buildWorkerPrompt(args.task)
+      : resumeId !== null
+        ? buildFixPrompt(args.fix)
+        : `${buildWorkerPrompt(args.task)}\n\n${buildFixPrompt(args.fix)}`
   return {
     options,
-    prompt: buildWorkerPrompt(args.task),
+    prompt,
     getBlocked: () => blocked,
     getCheckResult: tools.getCheckResult
   }
@@ -122,7 +135,8 @@ const LIMIT_TEXT = /maximum number of turns/i
 export function createWorkerRunner(deps: WorkerRunnerDeps = {}): WorkerRunner {
   const queryFn: QueryFn = deps.queryFn ?? ((p) => query(p))
 
-  return async (args) => {
+  /** One session; `resumeId` resumes a previous worker session. */
+  const runOnce = async (args: WorkerRunArgs, resumeId: string | null): Promise<WorkerOutcome> => {
     const limits = effectiveLimits(args.settings)
     const timeCap = deps.timeCapMs ?? limits.timeCapMs
     const maxTurns = deps.maxTurns ?? limits.maxTurns
@@ -131,6 +145,11 @@ export function createWorkerRunner(deps: WorkerRunnerDeps = {}): WorkerRunner {
     let q: QueryLike | null = null
     let timer: NodeJS.Timeout | null = null
     let onAbort: (() => void) | null = null
+    let sessionId: string | null = null
+    const done = (...a: Parameters<typeof outcome>): WorkerOutcome => ({
+      ...outcome(...a),
+      ...(sessionId !== null ? { sessionId } : {})
+    })
 
     const stop = (why: 'cancelled' | 'limit'): void => {
       if (reason === null) reason = why
@@ -144,9 +163,9 @@ export function createWorkerRunner(deps: WorkerRunnerDeps = {}): WorkerRunner {
 
     let built: BuiltWorker
     try {
-      built = buildWorkerOptions(args, abortController, maxTurns)
+      built = buildWorkerOptions(args, abortController, maxTurns, resumeId)
     } catch (e) {
-      return outcome('error', null, null, null, 'none', `could not build the worker: ${errText(e)}`)
+      return done('error', null, null, null, 'none', `could not build the worker: ${errText(e)}`)
     }
 
     let turns: number | null = null
@@ -157,7 +176,7 @@ export function createWorkerRunner(deps: WorkerRunnerDeps = {}): WorkerRunner {
     let thrown: unknown = null
 
     try {
-      if (args.signal?.aborted) return outcome('cancelled', null, null, null, 'none')
+      if (args.signal?.aborted) return done('cancelled', null, null, null, 'none')
       q = queryFn({ prompt: built.prompt, options: built.options })
       onAbort = () => stop('cancelled')
       args.signal?.addEventListener('abort', onAbort, { once: true })
@@ -166,6 +185,9 @@ export function createWorkerRunner(deps: WorkerRunnerDeps = {}): WorkerRunner {
         for await (const message of q) {
           if (!isRecord(message)) continue
           if (message['type'] === 'assistant') assistantTurns += 1
+          if (typeof message['session_id'] === 'string' && message['session_id'].length > 0) {
+            sessionId = message['session_id']
+          }
           if (message['type'] === 'result') {
             if (typeof message['num_turns'] === 'number') turns = message['num_turns']
             if (typeof message['total_cost_usd'] === 'number') costUsd = message['total_cost_usd']
@@ -191,15 +213,26 @@ export function createWorkerRunner(deps: WorkerRunnerDeps = {}): WorkerRunner {
     const blocked = built.getBlocked()
     const checks = built.getCheckResult()
     const stopped = reason as 'cancelled' | 'limit' | null
-    if (stopped === 'cancelled') return outcome('cancelled', blocked, t, costUsd, checks)
-    if (stopped === 'limit') return outcome('limit', blocked, t, costUsd, checks)
+    if (stopped === 'cancelled') return done('cancelled', blocked, t, costUsd, checks)
+    if (stopped === 'limit') return done('limit', blocked, t, costUsd, checks)
     if (hitTurnLimit || (thrown !== null && LIMIT_TEXT.test(errText(thrown)))) {
-      return outcome('limit', blocked, t, costUsd, checks)
+      return done('limit', blocked, t, costUsd, checks)
     }
-    if (resultError !== null) return outcome('error', blocked, t, costUsd, checks, resultError)
-    if (thrown !== null) return outcome('error', blocked, t, costUsd, checks, errText(thrown))
-    if (turns === null) return outcome('error', blocked, t, costUsd, checks, 'session ended without a result')
-    return outcome('finished', blocked, t, costUsd, checks)
+    if (resultError !== null) return done('error', blocked, t, costUsd, checks, resultError)
+    if (thrown !== null) return done('error', blocked, t, costUsd, checks, errText(thrown))
+    if (turns === null) return done('error', blocked, t, costUsd, checks, 'session ended without a result')
+    return done('finished', blocked, t, costUsd, checks)
+  }
+
+  return async (args) => {
+    const resumeId = args.fix?.sessionId ?? null
+    if (resumeId === null) return runOnce(args, null)
+    const resumed = await runOnce(args, resumeId)
+    // The resume itself failed (not a limit, a cancel or a worker that ran): start a fresh session with the findings.
+    if (resumed.status !== 'error' || args.signal?.aborted === true) return resumed
+    const fresh = await runOnce(args, null)
+    const cost = resumed.costUsd === null && fresh.costUsd === null ? null : (resumed.costUsd ?? 0) + (fresh.costUsd ?? 0)
+    return { ...fresh, costUsd: cost, turns: (resumed.turns ?? 0) + (fresh.turns ?? 0) }
   }
 }
 

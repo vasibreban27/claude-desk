@@ -24,6 +24,9 @@ export interface SettingsStore {
   set(projectId: string, settings: unknown): SettingsSetResult
 }
 
+/** Optional fields a caller may omit; the stored value is kept (closes the 4c review follow-up). */
+const OPTIONAL_KEYS = ['checks', 'maxParallel', 'maxTurns', 'taskTimeoutMinutes', 'autoFixRounds', 'reviewers'] as const
+
 /** `db` is null when opening the database failed. */
 export function createSettingsStore(
   db: Database.Database | null,
@@ -65,14 +68,23 @@ export function createSettingsStore(
       if (!parsed.success) return { ok: false, error: 'invalid' }
       let next: ProjectSettings = parsed.data
       try {
-        if (next.checks === undefined) {
-          // Callers that do not know the field (the 4a Settings tab) must not wipe stored checks.
+        if (OPTIONAL_KEYS.some((k) => next[k] === undefined)) {
+          // Callers that do not know a field (older Settings tabs) must not wipe what is stored.
           const row = selectStmt.get(projectId) as { settings: unknown } | undefined
           const stored =
             row !== undefined && typeof row.settings === 'string'
               ? parseSettingsOrDefaults(row.settings)
               : null
-          next = { ...next, checks: stored !== null && stored.case === 'ok' ? stored.settings.checks : [] }
+          const old = stored !== null && stored.case === 'ok' ? stored.settings : null
+          const merged: Record<string, unknown> = { ...next }
+          for (const k of OPTIONAL_KEYS) {
+            if (next[k] === undefined) {
+              if (old !== null && old[k] !== undefined) merged[k] = old[k]
+              else if (k === 'checks') merged[k] = []
+              else delete merged[k]
+            }
+          }
+          next = merged as ProjectSettings
         }
         write(projectId, JSON.stringify(next), Math.round(now()))
       } catch {

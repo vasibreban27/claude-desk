@@ -4,6 +4,9 @@ import {
   ACTIVITY_BUFFER_MAX,
   CHAT_TEXT_MAX,
   IPC,
+  REVIEWER_NAMES,
+  isBlocking,
+  type PipelineTaskView,
   activityHistoryRequestSchema,
   chatHistoryRequestSchema,
   chatSendRequestSchema,
@@ -14,7 +17,40 @@ import {
   usageSummaryRequestSchema
 } from './ipc'
 
-const uuid = '2f1b6c3e-8d5a-4c1e-9b7a-3e6f1d2c4a5b'
+describe('phase 5a contract', () => {
+  it('exports review constants and the grown view shape through ipc', () => {
+    const view: PipelineTaskView = {
+      taskId: 'T1',
+      title: 't',
+      worker: 'node-developer',
+      wave: 1,
+      dependsOn: [],
+      status: 'running',
+      reason: null,
+      commit: null,
+      checks: null,
+      turns: null,
+      costUsd: null,
+      durationMs: null,
+      stage: 'review',
+      fixRounds: 1,
+      findings: { blocking: 1, minor: 0, items: [] }
+    }
+    expect(view.stage).toBe('review')
+    expect(isBlocking({ severity: 'blocker' })).toBe(true)
+    expect(REVIEWER_NAMES).toEqual(['reviewer', 'security-auditor'])
+  })
+
+  it('rejects a settings:set payload with autoFixRounds 1000', () => {
+    const r = settingsSetRequestSchema.safeParse({
+      projectId: uuid,
+      settings: { ...defaultSettings(), autoFixRounds: 1000 }
+    })
+    expect(r.success).toBe(false)
+  })
+})
+
+const uuid ='2f1b6c3e-8d5a-4c1e-9b7a-3e6f1d2c4a5b'
 
 describe('IPC channels', () => {
   it('names every channel from the contract', () => {

@@ -173,7 +173,10 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
       checks: t.checksResult,
       turns: t.turns,
       costUsd: t.costUsd,
-      durationMs: t.durationMs
+      durationMs: t.durationMs,
+      stage: t.stage,
+      fixRounds: t.fixRounds,
+      findings: t.findings
     }))
   })
 

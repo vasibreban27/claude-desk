@@ -76,15 +76,10 @@ describe('SettingsPanel', () => {
     expect(api.settingsSet).toHaveBeenCalledWith({
       projectId: P1,
       settings: {
-        version: 1,
+        ...defaultSettings(),
         model: 'opus',
         protectedPaths: ['a.txt', 'secret/'],
-        allowGitRead: true,
-        allowPlanWrites: false,
-        checks: [],
-        maxParallel: 2,
-        maxTurns: 40,
-        taskTimeoutMinutes: 20
+        allowGitRead: true
       }
     })
     expect(screen.getByLabelText('Model')).toHaveValue('opus')

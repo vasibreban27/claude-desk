@@ -103,6 +103,54 @@ describe('pipelineStore', () => {
     expect(store.markInterrupted()).toEqual({ ok: false, error: 'storage-error' })
   })
 
+  it('round-trips stage, fixRounds and findings and rejects invalid values', () => {
+    store.createRun(newRun('r1'))
+    const findings = {
+      blocking: 1,
+      minor: 1,
+      items: [
+        { reviewer: 'reviewer' as const, severity: 'blocker' as const, file: 'a.ts', line: 3, text: 'bad' },
+        { reviewer: 'security-auditor' as const, severity: 'nit' as const, file: 'b.ts', line: null, text: 'meh' }
+      ]
+    }
+    expect(store.updateTask('r1', 'T1', { stage: 'fixing', fixRounds: 1, findings })).toMatchObject({
+      ok: true,
+      value: { stage: 'fixing', fixRounds: 1, findings }
+    })
+    const list = store.listTasks('r1')
+    expect(list.ok && list.value[0]).toMatchObject({ stage: 'fixing', fixRounds: 1, findings })
+    expect(list.ok && list.value[1]).toMatchObject({ stage: null, fixRounds: null, findings: null })
+
+    expect(store.updateTask('r1', 'T1', { stage: 'bogus' as never })).toEqual({ ok: false, error: 'invalid' })
+    expect(store.updateTask('r1', 'T1', { fixRounds: -1 })).toEqual({ ok: false, error: 'invalid' })
+    expect(store.updateTask('r1', 'T1', { fixRounds: 1.5 })).toEqual({ ok: false, error: 'invalid' })
+    expect(
+      store.updateTask('r1', 'T1', { findings: { blocking: 0, minor: 0, items: [{ severity: 'x' }] } as never })
+    ).toEqual({ ok: false, error: 'invalid' })
+    expect(store.updateTask('r1', 'T1', { stage: null, findings: null })).toMatchObject({
+      ok: true,
+      value: { stage: null, fixRounds: 1, findings: null }
+    })
+  })
+
+  it('reads a row with unreadable findings_json as findings null', () => {
+    store.createRun(newRun('r1'))
+    const set = db.prepare("UPDATE pipeline_tasks SET findings_json = ? WHERE task_id = 'T1'")
+    for (const bad of ['{not json', '{"blocking":1}', '{"blocking":0,"minor":0,"items":[{"severity":"huge"}]}']) {
+      set.run(bad)
+      const list = store.listTasks('r1')
+      expect(list.ok && list.value[0]?.findings).toBeNull()
+    }
+  })
+
+  it('markInterrupted clears the stage of a running task', () => {
+    store.createRun(newRun('r1'))
+    store.updateTask('r1', 'T1', { status: 'running', stage: 'review', fixRounds: 1 })
+    store.markInterrupted(2000)
+    const t = store.listTasks('r1')
+    expect(t.ok && t.value[0]).toMatchObject({ status: 'failed', stage: null, fixRounds: 1 })
+  })
+
   it('markInterrupted fails a run with a running task, fails that task and cancels its queued tasks', () => {
     store.createRun(newRun('r1'))
     store.createRun(newRun('r2'))

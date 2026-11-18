@@ -205,7 +205,7 @@ describe('phase 4b-1 pipeline from the IPC handlers (real git, in-memory db, fak
       update: () => Promise.resolve(undefined)
     }
     const settings: SettingsStore = {
-      get: () => ({ settings: defaultSettings(), notice: null }),
+      get: () => ({ settings: { ...defaultSettings(), reviewers: [] }, notice: null }),
       set: () => ({ ok: false, error: 'invalid' })
     }
     unregister = registerIpc(projects, undefined, settings, store)
