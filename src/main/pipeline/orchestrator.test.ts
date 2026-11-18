@@ -813,3 +813,313 @@ describe('orchestrator: review loop', () => {
     expect(rows.value[0]?.stage).toBeNull()
   })
 })
+
+describe('orchestrator: review loop gap coverage', () => {
+  const ONE = ['# Plan: one', '', '## 7. Tasks', '', '### Wave 1', '', task('T1', 'a.ts', 'none')].join('\n')
+  const flowPlan = (sensitive: string): string =>
+    [
+      'Format: flow-plan/1',
+      '',
+      '# Plan: flow',
+      '',
+      '## Wave 1: only',
+      '',
+      '### T1: title T1',
+      '- Status: [ ] todo',
+      '- Worker: node-developer',
+      '- Size: S',
+      `- Sensitive: ${sensitive}`,
+      '- Contract: none',
+      '- Owns: `a.ts`',
+      '- Read first: `a.ts`',
+      '- Depends on: none',
+      '- Done when: `npm test`',
+      '- Acceptance criteria:',
+      '  - T1 works',
+      ''
+    ].join('\n')
+  const CHECK = { name: 'test', command: 'npm', args: ['test'], timeoutMs: 1000 }
+  const checksCfg = { checks: [CHECK] } as unknown as Partial<ProjectSettings>
+  const moving = (_r: string, call: number): string => (call === 1 ? 'start' : `h${call}`)
+  const auditor = (severity: Finding['severity']): Finding => ({ ...finding(severity), reviewer: 'security-auditor' })
+
+  async function run(c: ReturnType<typeof setup>) {
+    const r = await c.orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    const summary = await r.finished
+    const rows = c.store.listTasks(r.runId)
+    if (!rows.ok) throw new Error('no tasks')
+    return { summary, rows: rows.value, t1: rows.value[0] }
+  }
+
+  it('checks failing in every round exhaust autoFixRounds: checks failed, N fix rounds, cost summed, no review, no merge', async () => {
+    const seen: WorkerRunArgs[] = []
+    const c = setup({
+      plan: ONE,
+      cfg: { ...checksCfg, autoFixRounds: 2 },
+      heads: moving,
+      runner: async (a) => {
+        seen.push(a)
+        return finishedOutcome({ sessionId: `s${seen.length}` })
+      },
+      gate: () => ({ status: 'failed', check: 'test', output: 'boom' })
+    })
+    const { summary, t1 } = await run(c)
+    expect(summary.tasks[0]).toMatchObject({ status: 'failed', reason: 'checks failed' })
+    expect(c.gate).toHaveBeenCalledTimes(3)
+    expect(seen).toHaveLength(3)
+    expect(seen[2]?.fix).toMatchObject({ kind: 'checks', sessionId: 's2' })
+    expect(t1).toMatchObject({ fixRounds: 2, stage: null, turns: 9 })
+    expect(t1?.costUsd).toBeCloseTo(0.03)
+    expect(c.reviewRunner).not.toHaveBeenCalled()
+    expect(c.manager.mergeTask).not.toHaveBeenCalled()
+  })
+
+  it('a gate that fails because the signal aborted cancels the task and never reviews or merges', async () => {
+    let orch: ReturnType<typeof setup>['orch'] | null = null
+    let runId = ''
+    const c = setup({
+      plan: ONE,
+      cfg: { ...checksCfg },
+      heads: moving,
+      gate: () => {
+        orch?.cancel(runId)
+        return { status: 'failed', check: 'test', output: 'cancelled' }
+      }
+    })
+    orch = c.orch
+    const r = await c.orch.startRun({ ...input, runId: 'rid-gate' })
+    if (!r.ok) throw new Error(r.error)
+    runId = r.runId
+    const summary = await r.finished
+    expect(summary.status).toBe('cancelled')
+    expect(summary.tasks[0]).toMatchObject({ status: 'cancelled', reason: null })
+    expect(c.runner).toHaveBeenCalledTimes(1)
+    expect(c.reviewRunner).not.toHaveBeenCalled()
+    expect(c.manager.mergeTask).not.toHaveBeenCalled()
+    const rows = c.store.listTasks(r.runId)
+    if (!rows.ok) throw new Error('rows')
+    expect(rows.value[0]).toMatchObject({ status: 'cancelled', stage: null })
+  })
+
+  it('a task with no new commit and checks configured fails with no commit before the gate runs', async () => {
+    const c = setup({ plan: ONE, cfg: { ...checksCfg }, heads: () => 'same' })
+    const { summary } = await run(c)
+    expect(summary.tasks[0]).toMatchObject({ status: 'failed', reason: 'no commit' })
+    expect(c.gate).not.toHaveBeenCalled()
+    expect(c.reviewRunner).not.toHaveBeenCalled()
+  })
+
+  it('a reviewer that throws fails the task with review: reviewer error and keeps earlier cost', async () => {
+    const c = setup({
+      plan: ONE,
+      heads: moving,
+      review: () => {
+        throw new Error('sdk down')
+      }
+    })
+    const { summary, t1 } = await run(c)
+    expect(summary.tasks[0]).toMatchObject({ status: 'failed', reason: 'review: reviewer error' })
+    expect(t1).toMatchObject({ stage: null })
+    expect(t1?.costUsd).toBeCloseTo(0.01)
+    expect(c.manager.mergeTask).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['limit', finishedOutcome({ status: 'limit' }), 'failed', 'limit reached'],
+    ['error', finishedOutcome({ status: 'error', error: 'boom' }), 'failed', 'worker error'],
+    ['cancelled', finishedOutcome({ status: 'cancelled' }), 'cancelled', null]
+  ] as const)('a fix round whose worker ends with %s settles the task and is not merged', async (_n, outcome, st, reason) => {
+    let n = 0
+    const c = setup({
+      plan: ONE,
+      cfg: { autoFixRounds: 2 },
+      heads: moving,
+      runner: async () => (++n === 2 ? outcome : finishedOutcome()),
+      review: () => clean({ findings: [finding('blocker')] })
+    })
+    const { summary, t1 } = await run(c)
+    expect(summary.tasks[0]).toMatchObject({ status: st, reason })
+    expect(t1).toMatchObject({ stage: null, fixRounds: 1 })
+    expect(c.reviewRunner).toHaveBeenCalledTimes(1)
+    expect(c.manager.mergeTask).not.toHaveBeenCalled()
+  })
+
+  it('a runner that throws in a fix round fails the task with worker error', async () => {
+    let n = 0
+    const c = setup({
+      plan: ONE,
+      cfg: { autoFixRounds: 2 },
+      heads: moving,
+      runner: async () => (++n === 2 ? Promise.reject(new Error('crash')) : finishedOutcome()),
+      review: () => clean({ findings: [finding('blocker')] })
+    })
+    const { summary, t1 } = await run(c)
+    expect(summary.tasks[0]).toMatchObject({ status: 'failed', reason: 'worker error' })
+    expect(t1?.stage).toBeNull()
+  })
+
+  it('two reviewers, one blocking finding: both run, blocking counted once, blocking listed first', async () => {
+    const c = setup({
+      plan: flowPlan('yes'),
+      cfg: { autoFixRounds: 0, reviewers: ['reviewer', 'security-auditor'] },
+      heads: moving,
+      review: (a) => clean({ findings: a.reviewer === 'reviewer' ? [finding('minor')] : [auditor('blocker')] })
+    })
+    const { summary, t1 } = await run(c)
+    expect(summary.tasks[0]).toMatchObject({ status: 'failed', reason: 'review: blocking findings' })
+    expect(c.reviewRunner).toHaveBeenCalledTimes(2)
+    expect(t1?.findings).toMatchObject({ blocking: 1, minor: 1 })
+    expect(t1?.findings?.items.map((f) => f.severity)).toEqual(['blocker', 'minor'])
+    expect(t1?.costUsd).toBeCloseTo(0.01 + 0.02 + 0.02)
+  })
+
+  it('a blocking finding is fixed with its text, then both reviewers run again', async () => {
+    const seen: WorkerRunArgs[] = []
+    const c = setup({
+      plan: flowPlan('yes'),
+      cfg: { autoFixRounds: 1, reviewers: ['reviewer', 'security-auditor'] },
+      heads: moving,
+      runner: async (a) => {
+        seen.push(a)
+        return finishedOutcome()
+      },
+      review: (a, k) => clean({ findings: k === 1 && a.reviewer === 'reviewer' ? [finding('major')] : [] })
+    })
+    const { summary, t1 } = await run(c)
+    expect(summary.status).toBe('done')
+    expect(seen[1]?.fix?.text).toContain('[major] (reviewer) a.ts:1: bad')
+    expect(c.reviewRunner.mock.calls.map((x) => x[0].reviewer)).toEqual(['reviewer', 'security-auditor', 'reviewer', 'security-auditor'])
+    expect(t1).toMatchObject({ fixRounds: 1, status: 'done' })
+    expect(t1?.findings).toMatchObject({ blocking: 0, minor: 0, items: [] })
+  })
+
+  it('minor and nit findings only: merges as done and stores the findings', async () => {
+    const c = setup({
+      plan: ONE,
+      cfg: { autoFixRounds: 0 },
+      heads: moving,
+      review: () => clean({ findings: [finding('nit'), finding('minor')] })
+    })
+    const { summary, t1 } = await run(c)
+    expect(summary.status).toBe('done')
+    expect(c.manager.mergeTask).toHaveBeenCalledTimes(1)
+    expect(t1).toMatchObject({ status: 'done', fixRounds: 0, stage: null })
+    expect(t1?.findings).toMatchObject({ blocking: 0, minor: 2 })
+    expect(t1?.findings?.items).toHaveLength(2)
+  })
+
+  it('caps stored findings at 20 items while counting all of them, blocking first', async () => {
+    const c = setup({
+      plan: flowPlan('yes'),
+      cfg: { autoFixRounds: 0, reviewers: ['reviewer', 'security-auditor'] },
+      heads: moving,
+      review: (a) =>
+        clean({
+          findings:
+            a.reviewer === 'reviewer'
+              ? Array.from({ length: 15 }, () => finding('minor'))
+              : [...Array.from({ length: 14 }, () => auditor('nit')), auditor('blocker')]
+        })
+    })
+    const { t1 } = await run(c)
+    expect(t1?.findings).toMatchObject({ blocking: 1, minor: 29 })
+    expect(t1?.findings?.items).toHaveLength(20)
+    expect(t1?.findings?.items[0]?.severity).toBe('blocker')
+  })
+
+  it('security-auditor enabled on a non-Sensitive task runs no review and merges like 4c', async () => {
+    const c = setup({ plan: flowPlan('no'), cfg: { reviewers: ['security-auditor'] }, heads: moving })
+    const { summary, t1 } = await run(c)
+    expect(summary.status).toBe('done')
+    expect(c.reviewRunner).not.toHaveBeenCalled()
+    expect(t1).toMatchObject({ status: 'done', fixRounds: null, findings: null })
+  })
+
+  it('a failing check, then a blocking review, takes two fix rounds of different kinds and sums every cost', async () => {
+    const seen: WorkerRunArgs[] = []
+    const c = setup({
+      plan: ONE,
+      cfg: { ...checksCfg, autoFixRounds: 2 },
+      heads: moving,
+      runner: async (a) => {
+        seen.push(a)
+        return finishedOutcome()
+      },
+      gate: (k) => (k === 1 ? { status: 'failed', check: 'test', output: 'red' } : { status: 'passed' }),
+      review: (_a, k) => clean({ findings: k === 1 ? [finding('blocker')] : [] })
+    })
+    const { summary, t1 } = await run(c)
+    expect(summary.status).toBe('done')
+    expect(seen.map((a) => a.fix?.kind ?? null)).toEqual([null, 'checks', 'review'])
+    expect(c.gate).toHaveBeenCalledTimes(3)
+    expect(c.reviewRunner).toHaveBeenCalledTimes(2)
+    expect(t1).toMatchObject({ fixRounds: 2, turns: 9, status: 'done', stage: null })
+    expect(t1?.costUsd).toBeCloseTo(3 * 0.01 + 2 * 0.02)
+  })
+
+  it('a blocking review after the last allowed round fails with the blocking reason', async () => {
+    const c = setup({
+      plan: ONE,
+      cfg: { autoFixRounds: 1 },
+      heads: moving,
+      review: () => clean({ findings: [finding('blocker')] })
+    })
+    const { summary, t1 } = await run(c)
+    expect(summary.tasks[0]).toMatchObject({ status: 'failed', reason: 'review: blocking findings' })
+    expect(t1).toMatchObject({ fixRounds: 1 })
+    expect(t1?.findings).toMatchObject({ blocking: 1 })
+    expect(c.reviewRunner).toHaveBeenCalledTimes(2)
+  })
+
+  it('a database error on the fixing stage write fails the run and leaves no task running', async () => {
+    const c = setup({ plan: ONE, cfg: { autoFixRounds: 2 }, heads: moving, review: () => clean({ findings: [finding('blocker')] }) })
+    const real = c.deps.store
+    const store: PipelineStore = {
+      ...real,
+      updateTask: (rid, tid, patch) => (patch.stage === 'fixing' ? { ok: false, error: 'storage-error' } : real.updateTask(rid, tid, patch))
+    }
+    const orch = createOrchestrator({ ...c.deps, store })
+    const r = await orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    const summary = await r.finished
+    expect(summary.status).toBe('failed')
+    expect(summary.reason).toContain('database error')
+    expect(c.runner).toHaveBeenCalledTimes(1)
+    const rows = real.listTasks(r.runId)
+    if (!rows.ok) throw new Error('rows')
+    expect(rows.value.every((t) => t.status !== 'running' && t.status !== 'queued')).toBe(true)
+    expect(rows.value[0]?.stage).toBeNull()
+  })
+
+  it('two parallel tasks: one fails review, the other merges, and parallelism stays within maxParallel', async () => {
+    const plan = ['# Plan: par', '', '## 7. Tasks', '', '### Wave 1', '', task('T1', 'a.ts', 'none'), task('T2', 'b.ts', 'none')].join('\n')
+    let live = 0
+    let max = 0
+    const c = setup({
+      plan,
+      cfg: { autoFixRounds: 0, maxParallel: 2 },
+      heads: moving,
+      runner: async () => {
+        live += 1
+        max = Math.max(max, live)
+        await Promise.resolve()
+        live -= 1
+        return finishedOutcome()
+      },
+      review: (a) => clean({ findings: a.task.id === 'T1' ? [finding('blocker')] : [] })
+    })
+    const { summary, rows } = await run(c)
+    expect(max).toBeLessThanOrEqual(2)
+    expect(summary.status).toBe('failed')
+    expect(summary.tasks.map((t) => [t.taskId, t.status])).toEqual([
+      ['T1', 'failed'],
+      ['T2', 'done']
+    ])
+    expect(c.manager.mergeTask).toHaveBeenCalledTimes(1)
+    expect(c.manager.mergeTask).toHaveBeenCalledWith('T2')
+    expect(rows[0]).toMatchObject({ status: 'failed', stage: null })
+    expect(rows[0]?.findings).toMatchObject({ blocking: 1 })
+    expect(rows[1]).toMatchObject({ status: 'done', findings: { blocking: 0, minor: 0 } })
+  })
+})

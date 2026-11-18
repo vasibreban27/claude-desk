@@ -258,6 +258,29 @@ describe('pipeline service', () => {
       expect(r.run.tasks[1]).toMatchObject({ stage: null, fixRounds: null, findings: null })
     })
 
+    it.each(['checks', 'review', 'fixing'] as const)('maps stage %s and minor-only findings', async (stage) => {
+      seedRun('r4')
+      const findings = {
+        blocking: 0,
+        minor: 1,
+        items: [{ reviewer: 'security-auditor' as const, severity: 'nit' as const, file: 'b.ts', line: null, text: 'meh' }]
+      }
+      store.updateTask('r4', 'T1', { stage, fixRounds: 0, findings })
+      const r = await service.status(PID)
+      if (!r.ok || r.run === null) throw new Error('expected a run')
+      expect(r.run.tasks[0]).toMatchObject({ stage, fixRounds: 0, findings })
+    })
+
+    it('a settled task view has its stage cleared while fix rounds and findings stay', async () => {
+      seedRun('r5')
+      const findings = { blocking: 1, minor: 0, items: [] }
+      store.updateTask('r5', 'T1', { stage: 'fixing', fixRounds: 2, findings })
+      store.updateTask('r5', 'T1', { status: 'failed', reason: 'review: blocking findings', stage: null })
+      const r = await service.status(PID)
+      if (!r.ok || r.run === null) throw new Error('expected a run')
+      expect(r.run.tasks[0]).toMatchObject({ status: 'failed', stage: null, fixRounds: 2, findings })
+    })
+
     it('returns the latest run as a view in wave order', async () => {
       seedRun('r1')
       seedRun('r2')
