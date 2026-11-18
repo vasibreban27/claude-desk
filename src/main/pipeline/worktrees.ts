@@ -371,11 +371,14 @@ export function createWorktreeManager(opts: WorktreeManagerOptions): WorktreeMan
       const n = taskNames(taskId)
       if ('error' in n) return { ok: false, error: n.error }
       const proj = project as string
+      // A Node project shares its installed node_modules with each task (linked, never copied). A project without
+      // one (new, Python, Java, ...) gets none: its worker installs what it needs with run_command.
       const nodeModules = path.join(proj, 'node_modules')
+      let linkNodeModules = false
       try {
-        if (!fs.statSync(nodeModules).isDirectory()) throw new Error('not a directory')
+        linkNodeModules = fs.statSync(nodeModules).isDirectory()
       } catch {
-        return { ok: false, error: 'the project has no node_modules folder: install dependencies in the project first' }
+        linkNodeModules = false
       }
       try {
         if (pathExists(n.path)) return { ok: false, error: `worktree path already exists: ${n.name}` }
@@ -386,6 +389,7 @@ export function createWorktreeManager(opts: WorktreeManagerOptions): WorktreeMan
         return fail(e)
       }
       const real = fs.realpathSync.native(n.path)
+      if (!linkNodeModules) return { ok: true, branch: n.branch, path: real }
       try {
         fs.symlinkSync(nodeModules, path.join(real, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
       } catch (e) {

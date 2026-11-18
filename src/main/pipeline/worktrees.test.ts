@@ -204,15 +204,15 @@ describe('createTaskWorktree', () => {
     expect(fs.readdirSync(wtRoot())).toEqual([`${R8}-integration`])
   })
 
-  it('returns an error and creates nothing when the primary has no node_modules', async () => {
+  it('creates the worktree without a node_modules link when the primary has none (new or non-Node project)', async () => {
     const m = mgr()
     await m.startRun('main')
     fs.rmSync(path.join(repo, 'node_modules'), { recursive: true })
     const r = await m.createTaskWorktree('t1')
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.error).toMatch(/no node_modules/)
-    expect(fs.existsSync(path.join(wtRoot(), `${R8}-t1`))).toBe(false)
-    expect(g(repo, 'branch', '--list', 'task/*').trim()).toBe('')
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(fs.existsSync(path.join(r.path, 'node_modules'))).toBe(false)
+    expect(g(repo, 'branch', '--list', 'task/*').trim()).not.toBe('')
+    if (r.ok) expect(await m.removeTask('t1')).toEqual({ ok: true })
   })
 
   it('links node_modules to the primary checkout', async () => {
