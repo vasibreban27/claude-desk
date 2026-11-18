@@ -11,6 +11,8 @@ export const START_ERROR_MESSAGES: Record<PipelineStartError, string> = {
   'start-failed': 'The run could not be started.'
 }
 
+const EVENT_THROTTLE_MS = 150
+
 export interface UsePipeline {
   /** Project the returned state belongs to (lags `projectId` for one render after a switch). */
   projectId: string | null
@@ -51,7 +53,8 @@ interface State {
   runError: string | null
   starting: boolean
   startError: string | null
-  cancelling: boolean
+  /** Run id a cancel was requested for; cleared when that run is no longer active. */
+  cancellingRunId: string | null
   cancelError: string | null
   discarding: boolean
   discardError: string | null
@@ -69,7 +72,7 @@ const empty = (projectId: string | null): State => ({
   runError: null,
   starting: false,
   startError: null,
-  cancelling: false,
+  cancellingRunId: null,
   cancelError: null,
   discarding: false,
   discardError: null,
@@ -87,35 +90,39 @@ export function usePipeline(projectId: string | null): UsePipeline {
   const startingRef = useRef(false)
   const discardingRef = useRef(false)
 
+  const statusSeq = useRef(0)
   const fetchStatus = useCallback(async (pid: string): Promise<void> => {
     const api = window.api
     if (!api) return
+    const seq = ++statusSeq.current
     try {
       const res = await api.pipelineStatus({ projectId: pid })
-      if (current.current !== pid) return
+      // Drop stale responses: only the latest request may update the state.
+      if (current.current !== pid || seq !== statusSeq.current) return
       setState((s) => {
         if (s.projectId !== pid) return s
         if (!res.ok) {
           return {
             ...s,
             runLoading: false,
-            cancelling: false,
             runError:
               res.error === 'not-found' ? 'The project was not found.' : 'Run storage is unavailable.'
           }
         }
         const otherRun = res.run !== null && res.run.runId !== s.discardErrorRunId
+        const stillCancelling =
+          s.cancellingRunId !== null && res.run !== null && res.run.active && res.run.runId === s.cancellingRunId
         return {
           ...s,
           run: res.run,
           runLoading: false,
           runError: null,
-          cancelling: false,
+          cancellingRunId: stillCancelling ? s.cancellingRunId : null,
           ...(otherRun ? { discardError: null, discardErrorRunId: null } : {})
         }
       })
     } catch {
-      if (current.current !== pid) return
+      if (current.current !== pid || seq !== statusSeq.current) return
       setState((s) =>
         s.projectId === pid ? { ...s, runLoading: false, runError: 'Could not load the run status.' } : s
       )
@@ -151,16 +158,36 @@ export function usePipeline(projectId: string | null): UsePipeline {
   useEffect(() => {
     const api = window.api
     if (!api || projectId === null) return
+    // Leading + trailing throttle: a burst yields one immediate fetch and one final fetch.
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let pending = false
+    const tick = (): void => {
+      timer = null
+      if (!pending) return
+      pending = false
+      void fetchStatus(projectId)
+      timer = setTimeout(tick, EVENT_THROTTLE_MS)
+    }
     const unsubscribe = api.onPipelineEvent((event) => {
       if (event.projectId !== projectId) return
-      void fetchStatus(projectId)
+      if (timer === null) {
+        void fetchStatus(projectId)
+        timer = setTimeout(tick, EVENT_THROTTLE_MS)
+      } else {
+        pending = true
+      }
     })
     // Initial loads start from a microtask so no state is set synchronously in the effect body.
     queueMicrotask(() => {
       void fetchStatus(projectId)
       void fetchPlans(projectId)
     })
-    return unsubscribe
+    return () => {
+      unsubscribe()
+      if (timer !== null) clearTimeout(timer)
+      timer = null
+      pending = false
+    }
   }, [projectId, fetchStatus, fetchPlans])
 
   const start = useCallback(
@@ -190,7 +217,7 @@ export function usePipeline(projectId: string | null): UsePipeline {
     const pid = current.current
     const runId = state.run?.runId
     if (!api || pid === null || !runId) return
-    setState((s) => (s.projectId === pid ? { ...s, cancelling: true, cancelError: null } : s))
+    setState((s) => (s.projectId === pid ? { ...s, cancellingRunId: runId, cancelError: null } : s))
     let cancelError: string | null = null
     try {
       const res = await api.pipelineCancel({ projectId: pid, runId })
@@ -202,7 +229,7 @@ export function usePipeline(projectId: string | null): UsePipeline {
     }
     if (current.current !== pid) return
     if (cancelError !== null) {
-      setState((s) => (s.projectId === pid ? { ...s, cancelling: false, cancelError } : s))
+      setState((s) => (s.projectId === pid ? { ...s, cancellingRunId: null, cancelError } : s))
       await fetchStatus(pid)
     }
     // On success `cancelling` stays set until the next status arrives (fetchStatus clears it).
@@ -240,7 +267,7 @@ export function usePipeline(projectId: string | null): UsePipeline {
     void fetchPlans(pid)
   }, [fetchPlans])
 
-  const { discardErrorRunId: _unused, ...exposed } = state
+  const { discardErrorRunId: _unused, cancellingRunId, ...exposed } = state
   void _unused
-  return { ...exposed, start, cancel, discard, reloadPlans }
+  return { ...exposed, cancelling: cancellingRunId !== null, start, cancel, discard, reloadPlans }
 }

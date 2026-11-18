@@ -126,6 +126,18 @@ function DiscardConfirm({
   )
 }
 
+const SUMMARY_ORDER: PipelineTaskView['status'][] = ['running', 'queued', 'done', 'failed', 'blocked', 'cancelled']
+
+export function summarize(tasks: PipelineTaskView[]): { counts: string; cost: string | null } {
+  const counts = SUMMARY_ORDER.map((st) => [st, tasks.filter((t) => t.status === st).length] as const)
+    .filter(([, n]) => n > 0)
+    .map(([st, n]) => `${n} ${st}`)
+    .join(', ')
+  const costs = tasks.flatMap((t) => (t.costUsd === null ? [] : [t.costUsd]))
+  const cost = costs.length > 0 ? `~$${costs.reduce((a, b) => a + b, 0).toFixed(4)} total` : null
+  return { counts, cost }
+}
+
 function RunView({
   run,
   cancelling,
@@ -144,6 +156,8 @@ function RunView({
   onDiscard: () => Promise<void>
 }) {
   const [confirming, setConfirming] = useState(false)
+  const summary = summarize(run.tasks)
+  const canDiscard = !run.active && run.status !== 'running'
   const waves = [...new Set(run.tasks.map((t) => t.wave))].sort((a, b) => a - b)
   return (
     <section aria-label="Latest run" className="pipeline__run">
@@ -159,13 +173,13 @@ function RunView({
             {cancelling ? 'Cancelling...' : 'Cancel run'}
           </button>
         )}
-        {!run.active && !confirming && (
+        {canDiscard && !confirming && (
           <button type="button" className="pipeline__btn" onClick={() => setConfirming(true)}>
             Discard
           </button>
         )}
       </div>
-      {!run.active && confirming && (
+      {canDiscard && confirming && (
         <DiscardConfirm
           run={run}
           discarding={discarding}
@@ -178,6 +192,11 @@ function RunView({
       {discardError && (
         <p role="alert" className="pipeline__error">
           {discardError}
+        </p>
+      )}
+      {(summary.counts || summary.cost) && (
+        <p className="pipeline__summary" aria-label="Run summary">
+          {[summary.counts, summary.cost].filter(Boolean).join(' · ')}
         </p>
       )}
       <p role="status" className="pipeline__muted">

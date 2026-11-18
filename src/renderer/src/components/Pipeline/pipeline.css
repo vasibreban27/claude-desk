@@ -98,3 +98,8 @@
   background: var(--color-danger-bg);
   color: var(--color-danger-text);
 }
+
+.pipeline__summary {
+  margin: 0;
+  font-weight: 600;
+}
