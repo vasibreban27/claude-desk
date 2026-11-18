@@ -10,6 +10,9 @@ export * from './toolkit'
 
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
 
+/** Fixed id of the project-less workspace assistant chat. */
+export const ASSISTANT_PROJECT_ID = '00000000-0000-4000-8000-00000000a551'
+
 export const CHAT_TEXT_MAX = 20000
 /** Max events kept (and returned) per project for the latest run. */
 export const ACTIVITY_BUFFER_MAX = 500
@@ -302,6 +305,7 @@ export type ChatEvent =
   | { projectId: string; turnId: string; type: 'text-delta'; text: string }
   | { projectId: string; turnId: string; type: 'done' }
   | { projectId: string; turnId: string; type: 'error'; message: string }
+  | { projectId: string; turnId: string; type: 'proposal'; name: string; brief: string }
 
 /** A change signal; the renderer re-fetches pipeline:status. */
 export interface PipelineEvent {

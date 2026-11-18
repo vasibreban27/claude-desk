@@ -17,6 +17,7 @@ function props(over: Partial<UseProjects> = {}): UseProjects {
     adding: false,
     add: vi.fn().mockResolvedValue(undefined),
     select: vi.fn().mockResolvedValue(undefined),
+    adopt: vi.fn(),
     ...over
   }
 }

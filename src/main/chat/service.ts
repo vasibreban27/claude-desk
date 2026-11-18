@@ -16,6 +16,7 @@ import {
 } from '../../shared/settings'
 import type { ActivityDraft, AgentUsage, RunUsage } from './activity'
 import type { ChatRunner } from './runner'
+import { ASSISTANT_PROJECT_ID } from '../../shared/ipc'
 
 interface RunState {
   projectId: string
@@ -99,7 +100,8 @@ export class ChatService {
         cwd: projectPath,
         pluginPath: cfg.config.toolkitPath,
         resume: this.resumeId(projectId, settings),
-        settings
+        settings,
+        ...(projectId === ASSISTANT_PROJECT_ID ? { assistant: true } : {})
       })
       for await (const item of stream) {
         if (item.kind === 'session') {
@@ -107,6 +109,8 @@ export class ChatService {
           this.sessionSettings.set(projectId, settings)
         } else if (item.kind === 'activity') {
           this.recordActivity(run, item.draft)
+        } else if (item.kind === 'proposal') {
+          this.deps.emit({ projectId, turnId, type: 'proposal', name: item.name, brief: item.brief })
         } else if (item.kind === 'usage') {
           run.usage = item
         } else {
@@ -203,7 +207,7 @@ export class ChatService {
       costUsd: run.usage?.usage.costUsd ?? null,
       durationMs: run.usage?.usage.durationMs ?? null
     })
-    if (run.usage && this.deps.runStore) {
+    if (run.usage && this.deps.runStore && run.projectId !== ASSISTANT_PROJECT_ID) {
       try {
         this.deps.runStore.recordRun({
           runId: run.runId,
