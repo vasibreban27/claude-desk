@@ -1,7 +1,10 @@
 import { z } from 'zod'
 import { projectSettingsSchema, type ProjectSettings } from './settings'
 
+import type { PipelineStage, TaskFindingsView } from './review'
+
 export * from './settings'
+export * from './review'
 
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
 
@@ -162,6 +165,9 @@ export interface PipelineTaskView {
   turns: number | null
   costUsd: number | null
   durationMs: number | null
+  stage: PipelineStage | null
+  fixRounds: number | null
+  findings: TaskFindingsView | null
 }
 
 export interface PipelineRunView {

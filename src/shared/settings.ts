@@ -1,4 +1,10 @@
 import { z } from 'zod'
+import {
+  AUTO_FIX_ROUNDS_RANGE,
+  DEFAULT_REVIEWERS,
+  REVIEWERS_MAX_COUNT,
+  REVIEWER_NAMES
+} from './review'
 
 /** Per-project settings: one versioned JSON object, validated at every boundary. */
 
@@ -67,6 +73,20 @@ export const projectSettingsSchema = z.object({
     .int()
     .min(TIME_LIMIT_MINUTES_RANGE.min)
     .max(TIME_LIMIT_MINUTES_RANGE.max)
+    .optional(),
+  /** Added in Phase 5a without a version bump; absent means the default. Bounded: limits SDK spend. */
+  autoFixRounds: z
+    .number()
+    .int()
+    .min(AUTO_FIX_ROUNDS_RANGE.min)
+    .max(AUTO_FIX_ROUNDS_RANGE.max)
+    .optional(),
+  reviewers: z
+    .array(z.enum(REVIEWER_NAMES))
+    .max(REVIEWERS_MAX_COUNT)
+    .refine((list) => new Set(list).size === list.length, {
+      message: 'reviewers must be unique'
+    })
     .optional()
 })
 export type ProjectSettings = z.infer<typeof projectSettingsSchema>
@@ -82,7 +102,9 @@ export function defaultSettings(): ProjectSettings {
     checks: [],
     maxParallel: DEFAULT_MAX_PARALLEL,
     maxTurns: MAX_TURNS_RANGE.default,
-    taskTimeoutMinutes: TIME_LIMIT_MINUTES_RANGE.default
+    taskTimeoutMinutes: TIME_LIMIT_MINUTES_RANGE.default,
+    autoFixRounds: AUTO_FIX_ROUNDS_RANGE.default,
+    reviewers: [...DEFAULT_REVIEWERS]
   }
 }
 
@@ -129,7 +151,9 @@ export function parseSettingsOrDefaults(raw: string | undefined): SettingsParseR
       checks: parsed.data.checks ?? [],
       maxParallel: limits.maxParallel,
       maxTurns: limits.maxTurns,
-      taskTimeoutMinutes: limits.timeCapMs / 60000
+      taskTimeoutMinutes: limits.timeCapMs / 60000,
+      autoFixRounds: parsed.data.autoFixRounds ?? AUTO_FIX_ROUNDS_RANGE.default,
+      reviewers: parsed.data.reviewers ?? [...DEFAULT_REVIEWERS]
     },
     case: 'ok'
   }

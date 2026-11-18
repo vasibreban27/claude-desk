@@ -146,6 +146,44 @@ describe('parseSettingsOrDefaults', () => {
   })
 })
 
+describe('review settings', () => {
+  const base = defaultSettings()
+  const parse = (patch: Record<string, unknown>) =>
+    projectSettingsSchema.safeParse({ ...base, ...patch }).success
+
+  it.each([0, 1, 5])('accepts autoFixRounds %s', (n) => {
+    expect(parse({ autoFixRounds: n })).toBe(true)
+  })
+  it.each([-1, 6, 1.5, '2', NaN, 1000])('rejects autoFixRounds %s', (n) => {
+    expect(parse({ autoFixRounds: n })).toBe(false)
+  })
+  it.each([[[]], [['reviewer']], [['security-auditor']], [['reviewer', 'security-auditor']]])(
+    'accepts reviewers %j',
+    (list) => {
+      expect(parse({ reviewers: list })).toBe(true)
+    }
+  )
+  it.each([
+    [['other']],
+    [['reviewer', 'reviewer']],
+    [['reviewer', 'security-auditor', 'reviewer']]
+  ])('rejects reviewers %j', (list) => {
+    expect(parse({ reviewers: list })).toBe(false)
+  })
+
+  it('applies defaults when the fields are absent', () => {
+    const legacy: Record<string, unknown> = { ...base }
+    delete legacy.autoFixRounds
+    delete legacy.reviewers
+    const result = parseSettingsOrDefaults(JSON.stringify(legacy))
+    expect(result.case).toBe('ok')
+    expect(result.settings.autoFixRounds).toBe(2)
+    expect(result.settings.reviewers).toEqual(['reviewer'])
+    expect(defaultSettings().autoFixRounds).toBe(2)
+    expect(defaultSettings().reviewers).toEqual(['reviewer'])
+  })
+})
+
 describe('needsSessionReset', () => {
   const base = defaultSettings()
 
