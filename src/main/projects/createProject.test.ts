@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -39,11 +39,20 @@ describe('createProject', () => {
   it('creates a git repo and registers it', async () => {
     const git = vi.fn(async () => undefined)
     const s = store()
-    const r = await createProject(root, 'demo-app', { store: s, git })
+    const r = await createProject(root, 'demo-app', { store: s, git, readBranch: async () => 'main' })
     expect(r.ok).toBe(true)
     expect(existsSync(path.join(root, 'demo-app'))).toBe(true)
     expect(git).toHaveBeenCalledTimes(2)
-    expect(s.add).toHaveBeenCalledOnce()
+    expect(git.mock.calls[0]).toEqual([expect.any(String), ['init', '-q', '-b', 'main']])
+    expect(s.add).toHaveBeenCalledWith(expect.objectContaining({ branch: 'main' }))
+  })
+
+  it('commits CLAUDE.md when asked', async () => {
+    const git = vi.fn(async () => undefined)
+    const r = await createProject(root, 'demo-app', { store: store(), git, readBranch: async () => 'main' }, { claudeMd: true })
+    expect(r.ok).toBe(true)
+    expect(readFileSync(path.join(root, 'demo-app', 'CLAUDE.md'), 'utf8')).toContain('demo-app')
+    expect(git).toHaveBeenCalledWith(expect.any(String), ['add', '--', 'CLAUDE.md'])
   })
 
   it('rejects invalid names, missing root and existing folders', async () => {

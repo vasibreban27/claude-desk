@@ -21,6 +21,16 @@ export const defaultGitRun: GitRun = (cwd, args) =>
     )
   })
 
+const defaultReadBranch = (cwd: string): Promise<string | null> =>
+  new Promise((resolve) => {
+    execFile(
+      'git',
+      [...GIT_HARDEN, 'symbolic-ref', '--short', '-q', 'HEAD'],
+      { cwd, timeout: 10_000, windowsHide: true, encoding: 'utf8' },
+      (err, out) => resolve(err ? null : out.trim() || null)
+    )
+  })
+
 export function validProjectName(name: string): boolean {
   return PROJECT_NAME_RE.test(name) && !RESERVED.has(name) && !name.endsWith('-')
 }
@@ -28,6 +38,8 @@ export function validProjectName(name: string): boolean {
 export interface CreateProjectDeps {
   store: ProjectStore
   git?: GitRun
+  /** Current branch of the new repo (default: `git symbolic-ref`); null when it cannot be read. */
+  readBranch?: (cwd: string) => Promise<string | null>
 }
 
 /**
@@ -59,13 +71,23 @@ export async function createProject(
     const real = await realpath(target)
     if (path.dirname(real) !== realRoot) throw Object.assign(new Error('escape'), { escape: true })
     try {
-      await git(real, ['init', '-q'])
-      await git(real, ['-c', 'user.name=claude-desk', '-c', 'user.email=claude-desk@localhost', 'commit', '-q', '--allow-empty', '-m', 'chore: initial commit'])
-      if (options.claudeMd) await writeFile(path.join(real, 'CLAUDE.md'), `# ${name}\n`, { flag: 'wx' })
+      const id = ['-c', 'user.name=claude-desk', '-c', 'user.email=claude-desk@localhost', '-c', 'commit.gpgsign=false']
+      await git(real, ['init', '-q', '-b', 'main'])
+      await git(real, [...id, 'commit', '-q', '--allow-empty', '-m', 'chore: initial commit'])
+      const files: string[] = []
+      if (options.claudeMd) {
+        await writeFile(path.join(real, 'CLAUDE.md'), `# ${name}\n`, { flag: 'wx' })
+        files.push('CLAUDE.md')
+      }
+      if (files.length > 0) {
+        await git(real, ['add', '--', ...files])
+        await git(real, [...id, 'commit', '-q', '-m', 'docs: add CLAUDE.md'])
+      }
     } catch {
       throw Object.assign(new Error('git'), { git: true })
     }
-    const added = await deps.store.add({ path: real, branch: null, dirty: false })
+    const branch = await (deps.readBranch ?? defaultReadBranch)(real).catch(() => null)
+    const added = await deps.store.add({ path: real, branch, dirty: false })
     if (!added.ok) throw new Error('register')
     return { ok: true, project: added.project }
   } catch (e) {

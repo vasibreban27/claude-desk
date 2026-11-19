@@ -21,8 +21,8 @@ describe('ProposalCard', () => {
     await screen.findByText('Folder: /r/demo-app')
     expect(api.createProject).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }))
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(project, 'add a README'))
-    expect(api.createProject).toHaveBeenCalledWith({ name: 'demo-app' })
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(project))
+    expect(api.createProject).toHaveBeenCalledWith({ name: 'demo-app', enableCommands: true })
   })
 
   it('needs a projects folder and shows creation errors', async () => {

@@ -35,7 +35,7 @@ Scaffold and bundler: electron-vite.
 ## Commands
 Workers and `verify` run these, so keep them accurate.
 - Install: `npm install`
-- Dev (Electron with HMR): `npm run dev`
+- Dev (Electron with HMR): `npm run dev` (`--watch`: main and preload changes rebuild and restart Electron; the renderer hot-reloads)
 - Build: `npm run build` (electron-vite, output in `out/`)
 - Typecheck: `npm run typecheck` (`tsc --noEmit` for `tsconfig.node.json` and `tsconfig.web.json`)
 - Lint: `npm run lint`

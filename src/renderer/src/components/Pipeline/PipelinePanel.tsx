@@ -1,9 +1,16 @@
-import { useEffect, useRef, useState } from 'react'
-import type { PipelineRunView, PipelineTaskView, PlanEntry } from '@shared/ipc'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import type { PipelineLogEntry, PipelineRunView, PipelineTaskView, PlanEntry } from '@shared/ipc'
 import type { UsePipeline } from '../../hooks/usePipeline'
+import { MergedBanner, RunFinished, type MergedInfo } from './RunFinished'
 import './pipeline.css'
 
-export type PipelinePanelProps = Omit<UsePipeline, 'projectId' | 'reloadPlans'> & { reloadPlans?: () => void }
+export type PipelinePanelProps = Omit<UsePipeline, 'projectId' | 'reloadPlans'> & {
+  reloadPlans?: () => void
+  /** Needed for Merge into main; without it the finished run shows no merge button. */
+  projectId?: string | null
+  /** Latest live log line per task (shown on running tasks). */
+  latestByTask?: Record<string, PipelineLogEntry>
+}
 
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms} ms`
@@ -77,7 +84,7 @@ function Findings({ findings }: { findings: NonNullable<PipelineTaskView['findin
   )
 }
 
-function TaskRow({ task }: { task: PipelineTaskView }) {
+function TaskRow({ task, latest }: { task: PipelineTaskView; latest?: PipelineLogEntry | undefined }) {
   const stage = stageLabel(task)
   return (
     <li className="pipeline__task">
@@ -88,8 +95,15 @@ function TaskRow({ task }: { task: PipelineTaskView }) {
         {!stage && task.fixRounds !== null && task.fixRounds > 0 && (
           <span className="pipeline__badge">fix rounds: {task.fixRounds}</span>
         )}
-        {task.status === 'done' && <span className="pipeline__badge">Committed, not reviewed</span>}
+        {task.status === 'done' && (
+          <span className="pipeline__badge">{task.findings ? 'Reviewed and merged' : 'Merged, not reviewed'}</span>
+        )}
       </div>
+      {task.status === 'running' && latest && (
+        <div className="pipeline__latest" aria-label={`${task.taskId} latest`}>
+          {latest.role === 'reviewer' ? (latest.agent ?? 'reviewer') : latest.role}: {latest.text}
+        </div>
+      )}
       <div className="pipeline__muted">
         {task.commit && <span>commit {task.commit}</span>}
         {task.checks && <span>checks {task.checks}</span>}
@@ -176,8 +190,12 @@ function RunView({
   discarding,
   discardError,
   onCancel,
-  onDiscard
+  onDiscard,
+  finished,
+  latestByTask
 }: {
+  finished?: ReactNode
+  latestByTask?: Record<string, PipelineLogEntry> | undefined
   run: PipelineRunView
   cancelling: boolean
   cancelError: string | null
@@ -196,7 +214,7 @@ function RunView({
         <h3>
           {run.planFile}{' '}
           <span className="pipeline__status">
-            {run.status === 'done' ? 'tasks committed, not reviewed' : run.status}
+            {run.status === 'done' ? 'finished' : run.status}
           </span>
         </h3>
         {run.active && (
@@ -230,10 +248,12 @@ function RunView({
           {[summary.counts, summary.cost].filter(Boolean).join(' · ')}
         </p>
       )}
-      <p role="status" className="pipeline__muted">
-        Work is merged into <code>{run.integrationBranch}</code> only. Nothing is merged into{' '}
-        <code>{run.baseBranch}</code> or pushed.
-      </p>
+      {finished ?? (
+        <p role="status" className="pipeline__muted">
+          Work is merged into <code>{run.integrationBranch}</code> only. Nothing is merged into{' '}
+          <code>{run.baseBranch}</code> or pushed.
+        </p>
+      )}
       {cancelError && (
         <p role="alert" className="pipeline__error">
           {cancelError}
@@ -246,7 +266,7 @@ function RunView({
             {run.tasks
               .filter((t) => t.wave === w)
               .map((t) => (
-                <TaskRow key={t.taskId} task={t} />
+                <TaskRow key={t.taskId} task={t} latest={latestByTask?.[t.taskId]} />
               ))}
           </ul>
         </div>
@@ -258,6 +278,9 @@ function RunView({
 export function PipelinePanel(p: PipelinePanelProps) {
   const busy = p.starting || (p.run?.active ?? false)
   const plansHeading = useRef<HTMLHeadingElement>(null)
+  const [merged, setMerged] = useState<(MergedInfo & { baseBranch: string; projectId: string }) | null>(null)
+  const shownMerged = merged !== null && merged.projectId === p.projectId ? merged : null
+  const run = p.run && shownMerged?.runId === p.run.runId ? null : p.run
   const onDiscard = async (): Promise<void> => {
     const ok = await p.discard()
     if (ok) plansHeading.current?.focus()
@@ -275,9 +298,23 @@ export function PipelinePanel(p: PipelinePanelProps) {
         </p>
       )}
       {p.runLoading && !p.run && <p className="pipeline__muted">Loading run…</p>}
-      {p.run && (
+      {shownMerged && <MergedBanner info={shownMerged} baseBranch={shownMerged.baseBranch} onClose={() => setMerged(null)} />}
+      {run && (
         <RunView
-          run={p.run}
+          run={run}
+          latestByTask={p.latestByTask}
+          finished={
+            run.status === 'done' && !run.active && p.projectId ? (
+              <RunFinished
+                projectId={p.projectId}
+                run={run}
+                onMerged={(info) => {
+                  if (p.projectId) setMerged({ ...info, projectId: p.projectId })
+                  p.reloadPlans?.()
+                }}
+              />
+            ) : undefined
+          }
           cancelling={p.cancelling}
           cancelError={p.cancelError}
           discarding={p.discarding}

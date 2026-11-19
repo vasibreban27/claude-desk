@@ -103,3 +103,22 @@
   margin: 0;
   font-weight: 600;
 }
+
+.pipeline__btn--primary {
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+}
+
+.pipeline__finished {
+  border-left: 3px solid var(--color-success);
+  padding: 8px 12px;
+  margin: 8px 0;
+}
+
+.pipeline__latest {
+  font-size: 0.85em;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

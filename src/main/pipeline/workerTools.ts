@@ -9,11 +9,12 @@ import { existsSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
+import { ALLOWED_COMMANDS, COMMAND_TIMEOUT_MS, checkCommand } from './commandPolicy'
 import type { CheckConfig } from '../../shared/settings'
 import { ownsCovers } from './planParser'
 
 export const WORK_SERVER_NAME = 'work'
-export const WORK_TOOL_NAMES = ['run_check', 'git_commit', 'report_blocked'] as const
+export const WORK_TOOL_NAMES = ['run_check', 'git_commit', 'report_blocked', 'run_command'] as const
 export const WORK_ALLOWED_TOOLS: readonly string[] = WORK_TOOL_NAMES.map((n) => `mcp__${WORK_SERVER_NAME}__${n}`)
 
 export const GIT_COMMIT_TIMEOUT_MS = 30_000
@@ -182,6 +183,10 @@ export interface WorkerToolsDeps {
   checks: readonly CheckConfig[]
   /** Called with the (capped) reason when the worker reports it is blocked. */
   onBlocked: (reason: string) => void
+  /** Project setting: enables the allow-listed `run_command` tool. */
+  allowCommands?: boolean
+  /** Receives one short outcome line per work-tool call (live pipeline log). */
+  onLog?: (line: { text: string; tone: 'ok' | 'error' }) => void
   exec?: ExecFn
   env?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
@@ -192,6 +197,7 @@ export interface WorkerHandlers {
   run_check: (input: unknown) => Promise<TextResult>
   git_commit: (input: unknown) => Promise<TextResult>
   report_blocked: (input: unknown) => Promise<TextResult>
+  run_command: (input: unknown) => Promise<TextResult>
 }
 
 export interface WorkerTools {
@@ -451,7 +457,67 @@ export function createWorkerTools(deps: WorkerToolsDeps): WorkerTools {
     return ok('Blocked recorded. Stop working on this task now.')
   }
 
-  const handlers: WorkerHandlers = { run_check, git_commit, report_blocked }
+  async function run_command(input: unknown): Promise<TextResult> {
+    if (deps.allowCommands !== true) return fail('run_command is disabled for this project (setting: allow commands)')
+    const raw = (typeof input === 'object' && input !== null ? input : {}) as { command?: unknown; args?: unknown }
+    const decision = checkCommand(raw.command, raw.args ?? [])
+    if (!decision.ok) return fail(decision.error)
+    const resolved = resolveCheckCommand(
+      { name: 'cmd', executable: decision.command, args: decision.args, timeoutMs: COMMAND_TIMEOUT_MS },
+      [],
+      { platform: deps.platform, env: deps.env, fileExists: deps.fileExists }
+    )
+    if ('error' in resolved) return fail(resolved.error)
+    try {
+      const { stdout, stderr } = await exec(resolved.file, resolved.args, {
+        cwd: deps.worktree,
+        env: checkEnv(deps.env ?? process.env),
+        timeout: COMMAND_TIMEOUT_MS,
+        maxBuffer: CHECK_OUTPUT_BUFFER
+      })
+      const out = tail(`${stdout}
+${stderr}`, CHECK_REPLY_CAP)
+      return ok(`${decision.command} finished${out ? `
+${out}` : ''}`)
+    } catch (e) {
+      const err = (e ?? {}) as ExecErr
+      const out = tail(`${typeof err.stdout === 'string' ? err.stdout : ''}
+${typeof err.stderr === 'string' ? err.stderr : ''}`, CHECK_REPLY_CAP)
+      if (err.killed === true || err.code === 'ETIMEDOUT') return fail(`${decision.command} timed out${out ? `
+${out}` : ''}`)
+      if (typeof err.code === 'number') return fail(`${decision.command} failed (exit code ${err.code})${out ? `
+${out}` : ''}`)
+      return fail(`${decision.command} could not start (${typeof err.code === 'string' ? err.code : 'unknown error'})`)
+    }
+  }
+
+  /** Wraps a handler so each call adds one outcome line to the live log (never the full output). */
+  const logged =
+    (name: keyof WorkerHandlers, fn: (input: unknown) => Promise<TextResult>) =>
+    async (input: unknown): Promise<TextResult> => {
+      const r = await fn(input)
+      if (deps.onLog) {
+        try {
+          const first = (r.content[0]?.text ?? '').split(/\r?\n/)[0] ?? ''
+          const raw = (typeof input === 'object' && input !== null ? input : {}) as { command?: unknown; args?: unknown }
+          const what =
+            name === 'run_command' && typeof raw.command === 'string'
+              ? `run_command ${raw.command} ${Array.isArray(raw.args) ? raw.args.filter((a) => typeof a === 'string').join(' ') : ''}`.trim()
+              : name
+          deps.onLog({ text: `${what}: ${first}`, tone: r.isError === true ? 'error' : 'ok' })
+        } catch {
+          // logging never changes a tool result
+        }
+      }
+      return r
+    }
+
+  const handlers: WorkerHandlers = {
+    run_check: logged('run_check', run_check),
+    git_commit: logged('git_commit', git_commit),
+    report_blocked: logged('report_blocked', report_blocked),
+    run_command: logged('run_command', run_command)
+  }
 
   return {
     handlers,
@@ -471,6 +537,12 @@ export function createWorkerTools(deps: WorkerToolsDeps): WorkerTools {
             'Commit explicit files (each inside your Owns, each changed) on your task branch. Pass paths and a short message.',
             { paths: z.array(z.string()), message: z.string() },
             (a) => handlers.git_commit(a)
+          ),
+          tool(
+            'run_command',
+            `Run an allow-listed command in the worktree (no shell): ${ALLOWED_COMMANDS.join(', ')}. Example: command "npm", args ["install", "express"]. Commit the files you want with git_commit afterwards.`,
+            { command: z.string(), args: z.array(z.string()).optional() },
+            (a) => handlers.run_command(a)
           ),
           tool(
             'report_blocked',

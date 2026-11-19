@@ -13,7 +13,7 @@ const ERRORS: Record<string, string> = {
 export interface ProposalCardProps {
   name: string
   brief: string
-  onCreated: (project: Project, brief: string) => void
+  onCreated: (project: Project) => void
   onCancel: () => void
 }
 
@@ -39,8 +39,8 @@ export function ProposalCard({ name, brief, onCreated, onCancel }: ProposalCardP
     setWorking(true)
     setError(null)
     try {
-      const r: ProjectsCreateResult = await window.api.createProject({ name })
-      if (r.ok) onCreated(r.project, brief)
+      const r: ProjectsCreateResult = await window.api.createProject({ name, enableCommands: true })
+      if (r.ok) onCreated(r.project)
       else setError(ERRORS[r.error] ?? 'Could not create the project.')
     } catch {
       setError('Could not create the project.')
@@ -56,7 +56,12 @@ export function ProposalCard({ name, brief, onCreated, onCancel }: ProposalCardP
         Create project <strong>{name}</strong>
       </p>
       <p>{root === null ? 'No projects folder set.' : `Folder: ${root}${sep}${name}`}</p>
-      <p>A git repository is created and a session starts with this brief: {brief}</p>
+      <p>
+        A git repository is created on main and the project opens in Plan mode: the toolkit planner (flow:plan, Opus)
+        continues with this request, then you start the pipeline that builds it. Its workers may run allow-listed commands
+        such as npm install.
+      </p>
+      <blockquote>{brief}</blockquote>
       {error && <p role="alert">{error}</p>}
       <button type="button" onClick={() => void pickRoot()}>
         {root === null ? 'Choose projects folder' : 'Change folder'}

@@ -49,11 +49,15 @@ describe('preload bridge', () => {
         'createProject',
         'projectsRootGet',
         'projectsRootPick',
+        'removeProject',
         'pipelinePlans',
         'pipelineStart',
         'pipelineStatus',
         'pipelineCancel',
         'pipelineDiscard',
+        'pipelineMerge',
+        'pipelineLog',
+        'onPipelineLog',
         'onPipelineEvent',
         'usageSummary'
       ].sort()

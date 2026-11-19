@@ -81,6 +81,8 @@ export const projectSettingsSchema = z.object({
     .min(AUTO_FIX_ROUNDS_RANGE.min)
     .max(AUTO_FIX_ROUNDS_RANGE.max)
     .optional(),
+  /** Added in Phase 7 without a version bump: workers may use the allow-listed run_command tool. */
+  allowCommands: z.boolean().optional(),
   reviewers: z
     .array(z.enum(REVIEWER_NAMES))
     .max(REVIEWERS_MAX_COUNT)

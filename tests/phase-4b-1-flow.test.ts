@@ -202,7 +202,8 @@ describe('phase 4b-1 pipeline from the IPC handlers (real git, in-memory db, fak
       list: () => Promise.resolve([project]),
       get: (id) => Promise.resolve(id === project.id ? project : undefined),
       add: () => Promise.resolve({ ok: false, error: 'unreadable' } as never),
-      update: () => Promise.resolve(undefined)
+      update: () => Promise.resolve(undefined),
+      remove: () => Promise.resolve(false)
     }
     const settings: SettingsStore = {
       get: () => ({ settings: { ...defaultSettings(), reviewers: [] }, notice: null }),

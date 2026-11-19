@@ -39,7 +39,7 @@ describe('tool list', () => {
   it('exposes exactly the three work tools and no push, merge or checkout', () => {
     const { h } = setup()
     expect(Object.keys(h).sort()).toEqual([...WORK_TOOL_NAMES].sort())
-    expect(WORK_TOOL_NAMES).toEqual(['run_check', 'git_commit', 'report_blocked'])
+    expect(WORK_TOOL_NAMES).toEqual(['run_check', 'git_commit', 'report_blocked', 'run_command'])
     expect(WORK_ALLOWED_TOOLS.some((n) => /push|merge|checkout|branch|reset/.test(n))).toBe(false)
   })
 })

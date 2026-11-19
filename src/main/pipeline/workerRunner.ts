@@ -1,4 +1,5 @@
 import { query, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk'
+import { logToolUse, type LogSink } from './pipelineLog'
 import { effectiveLimits, type ProjectSettings } from '../../shared/settings'
 import { guardWorkerToolUse } from './workerGuard'
 import { WORK_ALLOWED_TOOLS, WORK_SERVER_NAME, createWorkerTools, type CheckResult } from './workerTools'
@@ -41,6 +42,8 @@ export interface WorkerRunArgs {
   signal?: AbortSignal
   /** A fix round: the failing output or findings, and the session to resume (null/absent: fresh session). */
   fix?: FixInput & { sessionId?: string | null }
+  /** Live log: one short line per tool call (relative paths, no contents). */
+  onLog?: LogSink
 }
 
 export type WorkerRunner = (args: WorkerRunArgs) => Promise<WorkerOutcome>
@@ -78,16 +81,21 @@ export function buildWorkerOptions(
     branch: args.branch,
     owns: args.task.owns,
     checks: args.settings.checks ?? [],
+    allowCommands: args.settings.allowCommands === true,
+    ...(args.onLog ? { onLog: args.onLog } : {}),
     onBlocked: (reason) => {
       blocked = reason
     }
   })
-  const guard: HookCallback = async (input) =>
-    guardWorkerToolUse(input, {
+  const guard: HookCallback = async (input) => {
+    const out = guardWorkerToolUse(input, {
       worktree: args.worktree,
       owns: args.task.owns,
       protectedPatterns: args.settings.protectedPaths
     })
+    logToolUse(args.onLog, input, out, args.worktree)
+    return out
+  }
   const options: Options = {
     cwd: args.worktree,
     // Never load project/user settings: a worktree's .claude/settings.json is untrusted (see chat runner).

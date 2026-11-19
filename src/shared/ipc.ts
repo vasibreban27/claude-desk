@@ -3,10 +3,12 @@ import { projectSettingsSchema, type ProjectSettings } from './settings'
 
 import type { PipelineStage, TaskFindingsView } from './review'
 import type { ToolkitListResult } from './toolkit'
+import type { PipelineLogEntry, PipelineLogRequest, PipelineLogResult } from './pipelineLog'
 
 export * from './settings'
 export * from './review'
 export * from './toolkit'
+export * from './pipelineLog'
 
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
 
@@ -33,13 +35,17 @@ export const IPC = {
   projectsCreate: 'projects:create',
   projectsRootGet: 'projects:root-get',
   projectsRootPick: 'projects:root-pick',
+  projectsRemove: 'projects:remove',
   toolkitList: 'toolkit:list',
   pipelinePlans: 'pipeline:plans',
   pipelineStart: 'pipeline:start',
   pipelineStatus: 'pipeline:status',
   pipelineCancel: 'pipeline:cancel',
   pipelineDiscard: 'pipeline:discard',
-  pipelineEvent: 'pipeline:event'
+  pipelineMerge: 'pipeline:merge',
+  pipelineEvent: 'pipeline:event',
+  pipelineLog: 'pipeline:log',
+  pipelineLogEvent: 'pipeline:log-event'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -53,7 +59,9 @@ export const projectSchema = z.object({
   /** null on a detached HEAD; unborn branch name in a repo with no commits. */
   branch: z.string().nullable(),
   dirty: z.boolean(),
-  addedAt: z.iso.datetime({ offset: true })
+  addedAt: z.iso.datetime({ offset: true }),
+  /** Set by projects:list when the folder no longer exists (never stored). */
+  missing: z.boolean().optional()
 })
 export type Project = z.infer<typeof projectSchema>
 
@@ -73,9 +81,14 @@ export type ProjectsRefreshRequest = z.infer<typeof projectsRefreshRequestSchema
 export const chatHistoryRequestSchema = z.object({ projectId: z.uuid() })
 export type ChatHistoryRequest = z.infer<typeof chatHistoryRequestSchema>
 
+/** `plan`: the toolkit planner (flow:plan, Opus) that may write docs/plans/ only. */
+export const CHAT_MODES = ['chat', 'plan'] as const
+export type ChatMode = (typeof CHAT_MODES)[number]
+
 export const chatSendRequestSchema = z.object({
   projectId: z.uuid(),
-  text: z.string().min(1).max(CHAT_TEXT_MAX)
+  text: z.string().min(1).max(CHAT_TEXT_MAX),
+  mode: z.enum(CHAT_MODES).optional()
 })
 export type ChatSendRequest = z.infer<typeof chatSendRequestSchema>
 
@@ -124,6 +137,20 @@ export const pipelineDiscardRequestSchema = z.object({
   runId: z.string().min(1)
 })
 export type PipelineDiscardRequest = z.infer<typeof pipelineDiscardRequestSchema>
+
+/** Fast-forwards the base branch of the project to a finished run's branch (the user's click is the policy). */
+export const pipelineMergeRequestSchema = z.object({
+  projectId: z.uuid(),
+  runId: z.string().min(1).max(100)
+})
+export type PipelineMergeRequest = z.infer<typeof pipelineMergeRequestSchema>
+export type PipelineMergeResult =
+  | { ok: true; baseBranch: string; head: string; planCommitted: boolean; cleanedUp: boolean }
+  | {
+      ok: false
+      error: 'not-found' | 'not-finished' | 'wrong-branch' | 'dirty' | 'not-fast-forward' | 'git-failed'
+      message?: string
+    }
 
 // --- Results ----------------------------------------------------------------
 
@@ -232,13 +259,25 @@ export type ProjectsPickAndAddResult =
 
 export const projectsCreateRequestSchema = z.object({
   name: z.string().min(1).max(100),
-  claudeMd: z.boolean().optional()
+  claudeMd: z.boolean().optional(),
+  /** Lets this project's pipeline workers use the allow-listed run_command tool (npm install, venv, ...). */
+  enableCommands: z.boolean().optional()
 })
 export type ProjectsCreateRequest = z.infer<typeof projectsCreateRequestSchema>
 export type ProjectsCreateResult =
   | { ok: true; project: Project }
   | { ok: false; error: 'invalid-name' | 'no-root' | 'exists' | 'escape' | 'git-failed' | 'register-failed' }
 export type ProjectsRootResult = { root: string | null }
+
+export const projectsRemoveRequestSchema = z.object({
+  id: z.uuid(),
+  /** Also move the project folder to the Recycle Bin / Trash (recoverable). */
+  deleteFolder: z.boolean()
+})
+export type ProjectsRemoveRequest = z.infer<typeof projectsRemoveRequestSchema>
+export type ProjectsRemoveResult =
+  | { ok: true; folderDeleted: boolean }
+  | { ok: false; error: 'not-found' | 'busy' | 'unsafe-path' | 'trash-failed' | 'unreadable'; message?: string }
 
 export type RefreshError = 'not-found' | 'unreadable'
 export type ProjectsRefreshResult =
@@ -305,6 +344,7 @@ export type ChatEvent =
   | { projectId: string; turnId: string; type: 'text-delta'; text: string }
   | { projectId: string; turnId: string; type: 'done' }
   | { projectId: string; turnId: string; type: 'error'; message: string }
+  | { projectId: string; turnId: string; type: 'plan-ready'; planFile: string; problem: string | null }
   | { projectId: string; turnId: string; type: 'proposal'; name: string; brief: string }
 
 /** A change signal; the renderer re-fetches pipeline:status. */
@@ -363,13 +403,19 @@ export interface DeskApi {
   createProject(req: ProjectsCreateRequest): Promise<ProjectsCreateResult>
   projectsRootGet(): Promise<ProjectsRootResult>
   projectsRootPick(): Promise<ProjectsRootResult>
+  removeProject(req: ProjectsRemoveRequest): Promise<ProjectsRemoveResult>
   pipelinePlans(req: PipelinePlansRequest): Promise<PipelinePlansResult>
   pipelineStart(req: PipelineStartRequest): Promise<PipelineStartResult>
   pipelineStatus(req: PipelineStatusRequest): Promise<PipelineStatusResult>
   pipelineCancel(req: PipelineCancelRequest): Promise<PipelineCancelResult>
   pipelineDiscard(req: PipelineDiscardRequest): Promise<PipelineDiscardResult>
+  pipelineMerge(req: PipelineMergeRequest): Promise<PipelineMergeResult>
   /** Subscribe to pipeline change signals; returns an unsubscribe function. */
   onPipelineEvent(listener: (event: PipelineEvent) => void): () => void
+  /** The latest run's live log lines for a project (in memory, capped). */
+  pipelineLog(req: PipelineLogRequest): Promise<PipelineLogResult>
+  /** Subscribe to live pipeline log lines; returns an unsubscribe function. */
+  onPipelineLog(listener: (entry: PipelineLogEntry) => void): () => void
   /** Subscribe to activity events; returns an unsubscribe function. */
   onActivityEvent(listener: (event: ActivityEvent) => void): () => void
 }

@@ -210,7 +210,8 @@ describe('phase 5a review loop from the IPC handlers (real git, real checks gate
       list: () => Promise.resolve([project]),
       get: (id) => Promise.resolve(id === project.id ? project : undefined),
       add: () => Promise.resolve({ ok: false, error: 'unreadable' } as never),
-      update: () => Promise.resolve(undefined)
+      update: () => Promise.resolve(undefined),
+      remove: () => Promise.resolve(false)
     }
     const settings: SettingsStore = {
       get: () => ({ settings: { ...defaultSettings(), ...cfg }, notice: null }),

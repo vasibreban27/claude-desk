@@ -21,7 +21,8 @@ function setup(over: Partial<HandlerDeps> = {}) {
       list: vi.fn(async () => [project]),
       get: vi.fn(async (id: string) => (id === ID ? project : undefined)),
       add: vi.fn(async () => ({ ok: true as const, project })),
-      update: vi.fn(async (_id, s) => ({ ...project, ...s }))
+      update: vi.fn(async (_id, s) => ({ ...project, ...s })),
+      remove: vi.fn(async (id: string) => id === ID)
     },
     readGitStatus: vi.fn(async () => ({ ok: true as const, branch: 'main', dirty: true })),
     pickFolder: vi.fn(async () => '/repo'),
@@ -294,6 +295,42 @@ describe('settings and app info', () => {
     expect(await h.createProject({ name: 'ok-name' })).toEqual({ ok: false, error: 'no-root' })
   })
 
+  it('projects:create with enableCommands turns on allow-listed commands for that project', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const root = mkdtempSync(join(tmpdir(), 'hcreate-'))
+    try {
+      const project = { id: '11111111-1111-4111-8111-111111111111', name: 'demo-app', path: join(root, 'demo-app'), branch: 'main', dirty: false, addedAt: 'x' }
+      const store = { list: async () => [], get: async () => undefined, update: async () => undefined, remove: async () => false, add: async () => ({ ok: true as const, project }) }
+      const set = vi.fn(() => ({ ok: true as const, settings: {} as never }))
+      const h = setup({
+        store,
+        appSettings: { getProjectsRoot: async () => root, setProjectsRoot: async () => undefined },
+        gitRun: async () => undefined,
+        settingsStore: { get: () => ({ settings: {} as never, notice: null }), set } as never
+      }).h
+      const r = await h.createProject({ name: 'demo-app', enableCommands: true })
+      expect(r).toMatchObject({ ok: true })
+      expect(set).toHaveBeenCalledWith(project.id, expect.objectContaining({ allowCommands: true }))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('projects:list marks projects whose folder is gone', async () => {
+    const h = setup({ folderExists: async () => false }).h
+    expect(await h.listProjects()).toEqual([{ ...project, missing: true }])
+  })
+
+  it('projects:remove validates the payload and never deletes a folder without a trash function', async () => {
+    const h = setup().h
+    expect(await h.removeProject({ id: 'nope', deleteFolder: false })).toEqual({ ok: false, error: 'not-found' })
+    expect(await h.removeProject({ id: ID })).toEqual({ ok: false, error: 'not-found' })
+    expect(await h.removeProject({ id: ID, deleteFolder: true })).toMatchObject({ ok: false, error: 'trash-failed' })
+    expect(await h.removeProject({ id: ID, deleteFolder: false })).toEqual({ ok: true, folderDeleted: false })
+  })
+
   it('projects:root-pick stores the picked folder', async () => {
     let root: string | null = null
     const appSettings = { getProjectsRoot: async () => root, setProjectsRoot: async (r: string) => { root = r } }
@@ -331,7 +368,8 @@ describe('pipeline handlers', () => {
     start: vi.fn(async () => ({ ok: true as const, runId: 'r1' })),
     status: vi.fn(async () => ({ ok: true as const, run: null })),
     cancel: vi.fn(async () => ({ ok: true as const })),
-    discard: vi.fn(async () => ({ ok: true as const }))
+    discard: vi.fn(async () => ({ ok: true as const })),
+    merge: vi.fn(async () => ({ ok: true as const, baseBranch: 'main', head: 'abc1234', planCommitted: true, cleanedUp: true }))
   })
 
   it('passes valid payloads to the service and returns its result unchanged', async () => {
@@ -342,6 +380,8 @@ describe('pipeline handlers', () => {
     expect(await h.pipelineStatus({ projectId: ID })).toEqual({ ok: true, run: null })
     expect(await h.pipelineCancel({ projectId: ID, runId: 'r1' })).toEqual({ ok: true })
     expect(await h.pipelineDiscard({ projectId: ID, runId: 'r1' })).toEqual({ ok: true })
+    expect(await h.pipelineMerge({ projectId: ID, runId: 'r1' })).toMatchObject({ ok: true, head: 'abc1234' })
+    expect(pipeline.merge).toHaveBeenCalledWith(ID, 'r1')
     expect(pipeline.start).toHaveBeenCalledWith(ID, 'a.md')
     expect(pipeline.cancel).toHaveBeenCalledWith(ID, 'r1')
   })
@@ -354,6 +394,7 @@ describe('pipeline handlers', () => {
       expect(await h.pipelineStatus(bad)).toEqual({ ok: false, error: 'not-found' })
       expect(await h.pipelineCancel(bad)).toEqual({ ok: false, error: 'not-found' })
       expect(await h.pipelineDiscard(bad)).toEqual({ ok: false, error: 'not-found' })
+      expect(await h.pipelineMerge(bad)).toEqual({ ok: false, error: 'not-found' })
     }
     for (const bad of [null, 'x', 5, [], {}, { projectId: 'nope', planFile: 'a.md' }]) {
       expect(await h.pipelineStart(bad)).toEqual({ ok: false, error: 'not-found' })
@@ -372,7 +413,7 @@ describe('pipeline handlers', () => {
     const boom = vi.fn(async () => {
       throw new RangeError('secret /home/someone')
     })
-    const { h } = setup({ pipeline: { listPlans: boom, start: boom, status: boom, cancel: boom, discard: boom } })
+    const { h } = setup({ pipeline: { listPlans: boom, start: boom, status: boom, cancel: boom, discard: boom, merge: boom } })
     expect(await h.pipelinePlans({ projectId: ID })).toEqual({ ok: false, error: 'unreadable' })
     expect(await h.pipelineStart({ projectId: ID, planFile: 'a.md' })).toEqual({ ok: false, error: 'start-failed' })
     expect(await h.pipelineStatus({ projectId: ID })).toEqual({ ok: false, error: 'storage-unavailable' })

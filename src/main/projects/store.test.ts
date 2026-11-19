@@ -33,6 +33,16 @@ describe('ProjectStore', () => {
     }
   })
 
+  it('removes a project persistently and reports unknown ids', async () => {
+    const dir = newDir()
+    const a = await openJsonProjectStore(dir)
+    const res = await a.add({ path: repo('gone'), branch: 'main', dirty: false })
+    if (!res.ok) throw new Error('add failed')
+    expect(await a.remove(res.project.id)).toBe(true)
+    expect(await a.remove(res.project.id)).toBe(false)
+    expect(await (await openJsonProjectStore(dir)).list()).toEqual([])
+  })
+
   it('pathKey is case-insensitive only on win32', () => {
     expect(pathKey('/A/b', 'win32')).toBe(pathKey('/a/B', 'win32'))
     expect(pathKey('/A/b', 'linux')).not.toBe(pathKey('/a/B', 'linux'))

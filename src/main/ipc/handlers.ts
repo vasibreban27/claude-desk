@@ -5,6 +5,10 @@ import {
   chatSendRequestSchema,
   pipelineCancelRequestSchema,
   pipelineDiscardRequestSchema,
+  pipelineMergeRequestSchema,
+  pipelineLogRequestSchema,
+  type PipelineLogResult,
+  type PipelineMergeResult,
   pipelinePlansRequestSchema,
   pipelineStartRequestSchema,
   pipelineStatusRequestSchema,
@@ -15,6 +19,8 @@ import {
   type ToolkitListResult,
   type ProjectsCreateResult,
   type ProjectsRootResult,
+  type ProjectsRemoveResult,
+  projectsRemoveRequestSchema,
   projectsCreateRequestSchema,
   toolkitListingSchema,
   type SettingsGetResult,
@@ -33,6 +39,7 @@ import {
   type ProjectsRefreshResult
 } from '../../shared/ipc'
 import { createProject } from '../projects/createProject'
+import { removeProject } from '../projects/removeProject'
 import type { AppSettings } from '../projects/appSettings'
 import { scanToolkit } from '../toolkit/scan'
 import type { GitStatusResult } from '../git/status'
@@ -41,7 +48,7 @@ import type { ChatService } from '../chat/service'
 import { emptySummary, type RunStore } from '../db'
 import { createSettingsStore, type SettingsStore } from '../db/settingsStore'
 import type { PipelineService } from '../pipeline/service'
-import { needsSessionReset } from '../../shared/settings'
+import { defaultSettings, needsSessionReset } from '../../shared/settings'
 
 export interface HandlerDeps {
   store: ProjectStore
@@ -56,6 +63,14 @@ export interface HandlerDeps {
   readToolkitInfo?: () => AppInfoResult['toolkit']
   scanToolkit?: (folder: string) => Promise<unknown>
   appSettings?: AppSettings
+  /** Moves a folder to the Recycle Bin / Trash (Electron shell.trashItem). Absent: folders are never deleted. */
+  trash?: (folder: string) => Promise<void>
+  /** Folders that are never deleted besides the projects root (for example the app's data folder). */
+  protectedFolders?: () => string[]
+  /** Marks listed projects whose folder is gone (absent: no check). */
+  folderExists?: (folder: string) => Promise<boolean>
+  /** Live pipeline log (history only; lines are broadcast by the log itself). */
+  pipelineLog?: { history(projectId: string): PipelineLogResult }
   gitRun?: (cwd: string, args: string[]) => Promise<void>
   /** Undefined when the pipeline could not be set up; pipeline calls then report storage-unavailable. */
   pipeline?: PipelineService
@@ -75,11 +90,14 @@ export interface Handlers {
   createProject(payload: unknown): Promise<ProjectsCreateResult>
   projectsRootGet(): Promise<ProjectsRootResult>
   projectsRootPick(): Promise<ProjectsRootResult>
+  removeProject(payload: unknown): Promise<ProjectsRemoveResult>
   pipelinePlans(payload: unknown): Promise<PipelinePlansResult>
   pipelineStart(payload: unknown): Promise<PipelineStartResult>
   pipelineStatus(payload: unknown): Promise<PipelineStatusResult>
   pipelineCancel(payload: unknown): Promise<PipelineCancelResult>
   pipelineDiscard(payload: unknown): Promise<PipelineDiscardResult>
+  pipelineMerge(payload: unknown): Promise<PipelineMergeResult>
+  pipelineLog(payload: unknown): Promise<PipelineLogResult>
   /**
    * `route` runs before the turn starts (events may be emitted synchronously) and returns
    * an undo function that is called when the send is rejected.
@@ -102,7 +120,11 @@ export function createHandlers(deps: HandlerDeps): Handlers {
   return {
     async listProjects() {
       try {
-        return await deps.store.list()
+        const list = await deps.store.list()
+        const exists = deps.folderExists
+        if (!exists) return list
+        // A folder deleted outside the app is shown as missing, so it can be removed from the list.
+        return await Promise.all(list.map(async (p) => ((await exists(p.path).catch(() => true)) ? p : { ...p, missing: true })))
       } catch (err) {
         console.error('projects:list failed:', err instanceof Error ? err.name : 'unknown')
         return []
@@ -210,10 +232,46 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       if (!req.success) return { ok: false, error: 'invalid-name' }
       try {
         const root = (await deps.appSettings?.getProjectsRoot()) ?? null
-        return await createProject(root, req.data.name, { store: deps.store, ...(deps.gitRun ? { git: deps.gitRun } : {}) }, { claudeMd: req.data.claudeMd === true })
+        const created = await createProject(
+          root,
+          req.data.name,
+          { store: deps.store, ...(deps.gitRun ? { git: deps.gitRun } : {}) },
+          { claudeMd: req.data.claudeMd === true }
+        )
+        // A project the assistant creates may run allow-listed commands (npm install, venv, ...) in its workers.
+        if (created.ok && req.data.enableCommands === true) {
+          const saved = settingsStore.set(created.project.id, { ...defaultSettings(), allowCommands: true })
+          if (!saved.ok) console.error('projects:create: could not enable commands:', saved.error)
+        }
+        return created
       } catch (err) {
         console.error('projects:create failed:', errName(err))
         return { ok: false, error: 'register-failed' }
+      }
+    },
+
+    async removeProject(payload) {
+      const req = projectsRemoveRequestSchema.strict().safeParse(payload)
+      if (!req.success) return { ok: false, error: 'not-found' }
+      if (req.data.deleteFolder && !deps.trash) return { ok: false, error: 'trash-failed', message: 'Deleting folders is not available.' }
+      try {
+        const root = (await deps.appSettings?.getProjectsRoot()) ?? null
+        return await removeProject(req.data.id, req.data.deleteFolder, {
+          store: deps.store,
+          trash: deps.trash ?? (async () => undefined),
+          protectedFolders: [...(deps.protectedFolders?.() ?? []), ...(root ? [root] : [])],
+          isBusy: async (id) => {
+            const s = await pipeline?.status(id)
+            return s?.ok === true && s.run !== null && s.run.active
+          },
+          cleanupRuns: async (id) => {
+            const s = await pipeline?.status(id)
+            if (s?.ok && s.run && !s.run.active) await pipeline?.discard(id, s.run.runId)
+          }
+        })
+      } catch (err) {
+        console.error('projects:remove failed:', errName(err))
+        return { ok: false, error: 'unreadable' }
       }
     },
 
@@ -310,12 +368,34 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       }
     },
 
+    async pipelineLog(payload) {
+      const req = pipelineLogRequestSchema.strict().safeParse(payload)
+      if (!req.success || !deps.pipelineLog) return []
+      try {
+        return deps.pipelineLog.history(req.data.projectId)
+      } catch {
+        return []
+      }
+    },
+
+    async pipelineMerge(payload) {
+      const req = pipelineMergeRequestSchema.strict().safeParse(payload)
+      if (!req.success) return { ok: false, error: 'not-found' }
+      if (!pipeline) return { ok: false, error: 'git-failed' }
+      try {
+        return await pipeline.merge(req.data.projectId, req.data.runId)
+      } catch (err) {
+        console.error('pipeline:merge failed:', errName(err))
+        return { ok: false, error: 'git-failed' }
+      }
+    },
+
     async chatSend(payload, route) {
       const req = chatSendRequestSchema.safeParse(payload)
       if (!req.success) return { ok: false, error: 'invalid' }
       const undo = route?.(req.data.projectId)
       try {
-        const result = deps.chat.send(req.data.projectId, req.data.text)
+        const result = deps.chat.send(req.data.projectId, req.data.text, req.data.mode ?? 'chat')
         if (!result.ok) undo?.()
         return result
       } catch (err) {

@@ -8,10 +8,11 @@ export const BRIEF_MAX = 2000
 
 export const ASSISTANT_PROMPT = [
   'You are the workspace assistant of claude-desk. You are not inside any project and have no file or shell access.',
-  'Your only action is the create_project tool. When the user wants a new project, call it once with a short lowercase name',
-  '(letters, digits and hyphens) and a brief that tells the new project session what to build.',
-  'The tool only proposes the project: the user must confirm it in the UI. Tell the user to confirm, then stop.',
-  'For anything else, answer briefly in text.'
+  'When the user wants a new app or project, call create_project once with a short lowercase name (letters, digits, hyphens)',
+  'and a brief: the user request restated in a few lines (what to build, stack if given, constraints). Do not design it yourself.',
+  'The tool only proposes the project. After the user confirms the card, the app creates the folder and git repo and opens the',
+  "project in Plan mode, where the toolkit planner (flow:plan on Opus) continues with the brief, writes the plan and the user",
+  'starts the pipeline that builds it. Tell the user to confirm the card, then stop. For anything else, answer briefly.'
 ].join(' ')
 
 export interface Proposal {
@@ -27,7 +28,10 @@ export function createAssistantServer(onProposal: (p: Proposal) => void): Return
       tool(
         'create_project',
         'Propose a new project. Nothing is created until the user confirms in the UI.',
-        { name: z.string().max(100), brief: z.string().max(BRIEF_MAX) },
+        {
+          name: z.string().max(100),
+          brief: z.string().max(BRIEF_MAX)
+        },
         async (args) => {
           if (!validProjectName(args.name)) {
             return { content: [{ type: 'text' as const, text: 'Invalid name: use 2-49 lowercase letters, digits or hyphens, starting with a letter or digit.' }], isError: true }
