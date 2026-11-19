@@ -38,7 +38,7 @@ function errorsOf(md: string): PlanError[] {
 
 describe('parsePlan', () => {
   it('parses the real phase 3 plan', () => {
-    const md = readFileSync(path.join(process.cwd(), 'docs/plans/phase-3-project-settings.md'), 'utf8')
+    const md = readFileSync(path.join(__dirname, '__fixtures__', 'plans', 'phase-3-project-settings.md'), 'utf8')
     const r = parsePlan(md)
     expect(r.ok).toBe(true)
     if (!r.ok) return
@@ -298,7 +298,7 @@ describe('parsePlan flow-plan/1', () => {
 })
 
 describe('parsePlan real plan files', () => {
-  const read = (f: string): string => readFileSync(path.join(process.cwd(), 'docs/plans', f), 'utf8')
+  const read = (f: string): string => readFileSync(path.join(__dirname, '__fixtures__', 'plans', f), 'utf8')
   const count = (md: string): { waves: number; tasks: number; format: string } => {
     const r = parsePlan(md)
     if (!r.ok) throw new Error(JSON.stringify(r.errors))
