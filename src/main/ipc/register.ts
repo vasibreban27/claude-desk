@@ -1,7 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import { mkdirSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { createMcpStore, type SecretBox } from '../mcp/store'
+import { loadChatMcp } from '../mcp/servers'
+import { discoverTools } from '../mcp/discover'
 import { createPlanUsageReader } from '../usage/planUsage'
 import { IPC, type ActivityEvent, type ChatEvent, type PipelineEvent, type PipelineLogEntry } from '../../shared/ipc'
 import { ChatService } from '../chat/service'
@@ -109,7 +112,25 @@ export function registerIpc(
 ): () => void {
   const targets = new Map<string, EventTarget>()
 
+  // MCP connections: values of env vars and headers are encrypted with the OS keychain (safeStorage).
+  const box: SecretBox = {
+    available: () => safeStorage.isEncryptionAvailable(),
+    encrypt: (plain) => safeStorage.encryptString(plain),
+    decrypt: (data) => safeStorage.decryptString(data)
+  }
+  const mcpStore = createMcpStore(() => join(app.getPath('userData'), 'data'), box)
+  const mcp = {
+    store: mcpStore,
+    discover: (server: string, config: Parameters<typeof discoverTools>[1]) => {
+      const cwd = join(app.getPath('userData'), 'mcp-check')
+      mkdirSync(cwd, { recursive: true })
+      return discoverTools(server, config, { cwd })
+    }
+  }
+
   const chat = new ChatService({
+    // Chat and Plan turns get the user's enabled MCP connections (only the tools they allowed).
+    loadMcp: () => loadChatMcp(mcpStore),
     resolveProjectPath: (id) => knownPaths.get(id),
     runner: sdkRunner,
     emit: (event: ChatEvent) => {
@@ -165,6 +186,7 @@ export function registerIpc(
       openExternal: (url: string) => shell.openExternal(url),
       ...(pipeline ? { pipeline } : {}),
       ...(runStore ? { runStore } : {}),
+      mcp,
       planUsage
     })
 
@@ -205,6 +227,10 @@ export function registerIpc(
   ipcMain.handle(IPC.pipelineLog, (event, payload: unknown) => make(event).pipelineLog(payload))
   ipcMain.handle(IPC.pipelinePr, (event, payload: unknown) => make(event).pipelinePr(payload))
   ipcMain.handle(IPC.openUrl, (event, payload: unknown) => make(event).openUrl(payload))
+  ipcMain.handle(IPC.mcpList, (event) => make(event).mcpList())
+  ipcMain.handle(IPC.mcpSave, (event, payload: unknown) => make(event).mcpSave(payload))
+  ipcMain.handle(IPC.mcpDelete, (event, payload: unknown) => make(event).mcpDelete(payload))
+  ipcMain.handle(IPC.mcpTest, (event, payload: unknown) => make(event).mcpTest(payload))
   ipcMain.handle(IPC.chatSend, async (event, payload: unknown) => {
     try {
       await refreshPaths()
@@ -223,7 +249,7 @@ export function registerIpc(
 
   return () => {
     for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.usagePlan, IPC.settingsGet, IPC.settingsSet, IPC.appInfo, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick, IPC.projectsRemove,
-      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineResume, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.openUrl]) {
+      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineResume, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.openUrl, IPC.mcpList, IPC.mcpSave, IPC.mcpDelete, IPC.mcpTest]) {
       ipcMain.removeHandler(channel)
     }
     targets.clear()

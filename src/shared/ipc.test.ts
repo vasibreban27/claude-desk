@@ -83,6 +83,10 @@ describe('IPC channels', () => {
         'pipeline:merge',
         'pipeline:pr',
         'app:open-url',
+        'mcp:list',
+        'mcp:save',
+        'mcp:delete',
+        'mcp:test',
         'pipeline:log',
         'pipeline:log-event',
         'pipeline:event'

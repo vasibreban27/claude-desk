@@ -1,0 +1,104 @@
+.mcp__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.mcp__item {
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.mcp__item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.mcp__target {
+  word-break: break-all;
+  font-family: var(--font-mono);
+}
+.mcp__badge {
+  display: inline-block;
+  margin-left: var(--space-1);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+.mcp__badge--write {
+  color: var(--color-warning);
+  border-color: currentColor;
+}
+.mcp__actions,
+.mcp__tool-actions,
+.mcp__presets {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.mcp__add {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.mcp__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: var(--space-3);
+}
+.mcp__form input[type='text'],
+.mcp__form input[type='password'] {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: var(--space-1) var(--space-2);
+}
+.mcp__secrets,
+.mcp__tools {
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.mcp__secret {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(140px, 2fr) auto;
+  gap: var(--space-2);
+}
+.mcp__tool-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 320px;
+  overflow: auto;
+}
+.mcp__test {
+  margin: 0;
+  font-size: 0.85em;
+}
+.mcp__test--ok {
+  color: var(--color-success);
+}
+.mcp__test--bad {
+  color: var(--color-danger-text);
+}

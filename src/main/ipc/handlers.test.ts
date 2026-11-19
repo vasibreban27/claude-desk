@@ -407,6 +407,73 @@ describe('settings and app info', () => {
   })
 })
 
+describe('mcp handlers', () => {
+  const conn = {
+    id: ID,
+    name: 'linear',
+    transport: 'http' as const,
+    command: null,
+    args: [],
+    url: 'https://mcp.linear.app/mcp',
+    secretKeys: ['Authorization'],
+    enabled: true,
+    knownTools: [],
+    allowedTools: []
+  }
+  const store = () => ({
+    list: vi.fn(async () => [conn]),
+    get: vi.fn(async (id: string) => (id === ID ? conn : undefined)),
+    save: vi.fn(async () => ({ ok: true as const, connection: conn })),
+    remove: vi.fn(async () => ({ ok: true as const })),
+    setKnownTools: vi.fn(async (_id: string, tools: { name: string; description: string | null; readOnly: boolean | null }[]) => ({ ...conn, knownTools: tools })),
+    secretsFor: vi.fn(async () => ({ Authorization: 'Bearer secret-token' })),
+    secretsAvailable: vi.fn(() => true)
+  })
+  const saveReq = { id: null, name: 'linear', transport: 'http', command: null, args: [], url: 'https://mcp.linear.app/mcp', enabled: true, allowedTools: [], secrets: { Authorization: 'Bearer x' } }
+
+  it('lists, saves and deletes through the store with validated payloads', async () => {
+    const s = store()
+    const { h } = setup({ mcp: { store: s, discover: vi.fn() } })
+    expect(await h.mcpList()).toEqual({ ok: true, connections: [conn], secretsAvailable: true })
+    expect(await h.mcpSave(saveReq)).toEqual({ ok: true, connection: conn })
+    expect(s.save).toHaveBeenCalledWith(saveReq)
+    expect(await h.mcpDelete({ id: ID })).toEqual({ ok: true })
+    for (const bad of [null, {}, { ...saveReq, name: 'git' }, { ...saveReq, url: 'http://evil.example' }, { ...saveReq, extra: 1 }, { ...saveReq, secrets: { 'bad key': 'x' } }]) {
+      expect(await h.mcpSave(bad)).toMatchObject({ ok: false, error: 'invalid' })
+    }
+    expect(await h.mcpDelete({ id: 'x' })).toEqual({ ok: false, error: 'not-found' })
+    expect(s.save).toHaveBeenCalledTimes(1)
+    expect(s.remove).toHaveBeenCalledTimes(1)
+  })
+
+  it('tests a connection with its secrets, stores the tools when connected, and never echoes thrown errors', async () => {
+    const s = store()
+    const tools = [{ name: 'list_issues', description: null, readOnly: true }]
+    const discover = vi.fn(async () => ({ status: 'connected' as const, tools, error: null }))
+    const { h } = setup({ mcp: { store: s, discover } })
+    const r = await h.mcpTest({ id: ID })
+    expect(r).toMatchObject({ ok: true, status: 'connected', tools, connection: { knownTools: tools } })
+    expect(discover).toHaveBeenCalledWith('linear', { type: 'http', url: 'https://mcp.linear.app/mcp', headers: { Authorization: 'Bearer secret-token' } })
+    expect(await h.mcpTest({ id: OTHER })).toEqual({ ok: false, error: 'not-found' })
+
+    discover.mockResolvedValueOnce({ status: 'needs-auth', tools: [], error: 'the server needs a sign-in or token' } as never)
+    expect(await h.mcpTest({ id: ID })).toMatchObject({ ok: true, status: 'needs-auth', connection: conn })
+    expect(s.setKnownTools).toHaveBeenCalledTimes(1)
+
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    discover.mockRejectedValueOnce(new Error('Bearer secret-token rejected'))
+    expect(await h.mcpTest({ id: ID })).toEqual({ ok: false, error: 'test-failed' })
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain('secret-token')
+  })
+
+  it('reports errors without an MCP store', async () => {
+    const { h } = setup()
+    expect(await h.mcpList()).toEqual({ ok: false, error: 'unreadable' })
+    expect(await h.mcpSave(saveReq)).toEqual({ ok: false, error: 'storage-error' })
+    expect(await h.mcpTest({ id: ID })).toEqual({ ok: false, error: 'test-failed' })
+  })
+})
+
 describe('pipeline handlers', () => {
   const service = () => ({
     listPlans: vi.fn(async () => ({ ok: true as const, plans: [] })),

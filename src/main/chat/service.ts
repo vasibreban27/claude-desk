@@ -16,6 +16,7 @@ import {
 } from '../../shared/settings'
 import type { ActivityDraft, AgentUsage, RunUsage } from './activity'
 import type { ChatRunner } from './runner'
+import type { ChatMcp } from '../mcp/servers'
 import type { ChatMode, PipelineStartResult } from '../../shared/ipc'
 import { BUILD_IN_APP_NOTE } from './deskTools'
 import { PLAN_COMMAND, findPlansWrittenSince, framePlanFormat, loadPlanFormat, type PlanFound } from './plans'
@@ -54,6 +55,8 @@ export interface ChatServiceDeps {
   loadPlanFormat?: (pluginPath: string) => Promise<string | null>
   /** Plan mode: lets the planner start the app's pipeline when the user asks to build. */
   startPipeline?: (projectId: string, planFile: string) => Promise<PipelineStartResult>
+  /** The user's MCP connections for Chat and Plan turns; read once per turn. A failure means none. */
+  loadMcp?: () => Promise<ChatMcp>
 }
 
 const GENERIC_ERROR = 'The Claude session failed. Check that Claude Code is logged in and try again.'
@@ -111,6 +114,7 @@ export class ChatService {
       run = this.startRun(projectId, planning ? 'plan' : 'chat')
       const resume = this.resumeId(projectId, settings)
       const format = planning ? await (this.deps.loadPlanFormat ?? loadPlanFormat)(cfg.config.toolkitPath).catch(() => null) : null
+      const mcp = this.deps.loadMcp ? await this.deps.loadMcp().catch(() => null) : null
       const stream = this.deps.runner({
         // A new planning session starts the toolkit's plan skill; later turns continue that conversation.
         prompt: planning && resume === undefined ? `${PLAN_COMMAND} ${text}` : text,
@@ -118,6 +122,7 @@ export class ChatService {
         pluginPath: cfg.config.toolkitPath,
         resume,
         settings,
+        ...(mcp !== null && mcp.allowedTools.length > 0 ? { mcp } : {}),
         ...(planning
           ? { appendPrompt: [format ? framePlanFormat(format) : '', BUILD_IN_APP_NOTE].filter(Boolean).join('\n\n') }
           : {}),

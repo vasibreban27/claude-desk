@@ -57,6 +57,10 @@ beforeEach(() => {
     }),
     activityHistory: vi.fn().mockResolvedValue([] as ActivityEvent[]),
     usageSummary: vi.fn().mockResolvedValue(SUMMARY),
+    mcpList: vi.fn().mockResolvedValue({ ok: true, connections: [], secretsAvailable: true }),
+    mcpSave: vi.fn(),
+    mcpDelete: vi.fn(),
+    mcpTest: vi.fn(),
     usagePlan: vi.fn().mockResolvedValue({ ok: false, error: 'failed' }),
     onActivityEvent: vi.fn().mockImplementation((l: (e: ActivityEvent) => void) => {
       emitActivity = l

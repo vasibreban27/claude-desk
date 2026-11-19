@@ -55,6 +55,18 @@ import type { ChatService } from '../chat/service'
 import { emptySummary, type RunStore } from '../db'
 import { createSettingsStore, type SettingsStore } from '../db/settingsStore'
 import type { PipelineService } from '../pipeline/service'
+import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
+import {
+  mcpIdRequestSchema,
+  mcpSaveRequestSchema,
+  type McpDeleteResult,
+  type McpListResult,
+  type McpSaveResult,
+  type McpTestResult
+} from '../../shared/mcp'
+import type { McpStore } from '../mcp/store'
+import type { DiscoverResult } from '../mcp/discover'
+import { serverConfig } from '../mcp/servers'
 import type { PlanUsageReader } from '../usage/planUsage'
 import { defaultSettings, needsSessionReset } from '../../shared/settings'
 
@@ -84,6 +96,11 @@ export interface HandlerDeps {
   gitRun?: (cwd: string, args: string[]) => Promise<void>
   /** Undefined when the pipeline could not be set up; pipeline calls then report storage-unavailable. */
   pipeline?: PipelineService
+  /** MCP connections (store + tool discovery). Absent: the MCP calls report errors. */
+  mcp?: {
+    store: McpStore
+    discover: (server: string, config: McpServerConfig) => Promise<DiscoverResult>
+  }
   /** Reads the plan limits (Claude Code `/usage`). Absent: usage:plan reports failed. */
   planUsage?: PlanUsageReader
 }
@@ -114,6 +131,10 @@ export interface Handlers {
   pipelinePr(payload: unknown): Promise<PipelinePrResult>
   openUrl(payload: unknown): Promise<boolean>
   pipelineLog(payload: unknown): Promise<PipelineLogResult>
+  mcpList(): Promise<McpListResult>
+  mcpSave(payload: unknown): Promise<McpSaveResult>
+  mcpDelete(payload: unknown): Promise<McpDeleteResult>
+  mcpTest(payload: unknown): Promise<McpTestResult>
   /**
    * `route` runs before the turn starts (events may be emitted synchronously) and returns
    * an undo function that is called when the send is rejected.
@@ -415,6 +436,58 @@ export function createHandlers(deps: HandlerDeps): Handlers {
         return deps.pipelineLog.history(req.data.projectId)
       } catch {
         return []
+      }
+    },
+
+    async mcpList() {
+      if (!deps.mcp) return { ok: false, error: 'unreadable' }
+      try {
+        return { ok: true, connections: await deps.mcp.store.list(), secretsAvailable: deps.mcp.store.secretsAvailable() }
+      } catch (err) {
+        console.error('mcp:list failed:', errName(err))
+        return { ok: false, error: 'unreadable' }
+      }
+    },
+
+    async mcpSave(payload) {
+      const req = mcpSaveRequestSchema.strict().safeParse(payload)
+      if (!req.success) return { ok: false, error: 'invalid', message: req.error.issues[0]?.message ?? 'invalid connection' }
+      if (!deps.mcp) return { ok: false, error: 'storage-error' }
+      try {
+        return await deps.mcp.store.save(req.data)
+      } catch (err) {
+        console.error('mcp:save failed:', errName(err))
+        return { ok: false, error: 'storage-error' }
+      }
+    },
+
+    async mcpDelete(payload) {
+      const req = mcpIdRequestSchema.strict().safeParse(payload)
+      if (!req.success) return { ok: false, error: 'not-found' }
+      if (!deps.mcp) return { ok: false, error: 'storage-error' }
+      try {
+        return await deps.mcp.store.remove(req.data.id)
+      } catch (err) {
+        console.error('mcp:delete failed:', errName(err))
+        return { ok: false, error: 'storage-error' }
+      }
+    },
+
+    async mcpTest(payload) {
+      const req = mcpIdRequestSchema.strict().safeParse(payload)
+      if (!req.success) return { ok: false, error: 'not-found' }
+      const mcp = deps.mcp
+      if (!mcp) return { ok: false, error: 'test-failed' }
+      try {
+        const c = await mcp.store.get(req.data.id)
+        if (c === undefined) return { ok: false, error: 'not-found' }
+        const found = await mcp.discover(c.name, serverConfig(c, await mcp.store.secretsFor(c.id)))
+        const updated = found.status === 'connected' ? await mcp.store.setKnownTools(c.id, found.tools) : undefined
+        return { ok: true, status: found.status, tools: found.tools, error: found.error, connection: updated ?? c }
+      } catch (err) {
+        // Never echo the error text: it could contain a header or env value.
+        console.error('mcp:test failed:', errName(err))
+        return { ok: false, error: 'test-failed' }
       }
     },
 
