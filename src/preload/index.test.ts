@@ -54,6 +54,7 @@ describe('preload bridge', () => {
         'pipelineStart',
         'pipelineStatus',
         'pipelineCancel',
+        'pipelineResume',
         'pipelineDiscard',
         'pipelineMerge',
         'pipelinePr',

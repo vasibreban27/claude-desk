@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import type { PipelineStore, RunStatus, TaskPatch } from '../db/pipelineStore'
 import type { SettingsStore } from '../db/settingsStore'
 import {
@@ -64,8 +64,23 @@ export type StartRunResult =
   | { ok: true; runId: string; finished: Promise<RunSummary> }
   | { ok: false; error: string }
 
+export interface ResumeRunInput {
+  projectId: string
+  /** Absolute path of the project's primary checkout. */
+  projectPath: string
+  runId: string
+}
+
+/** Run statuses a resume accepts: the run stopped and its branch still holds the tasks that were merged. */
+export const RESUMABLE_STATUSES: readonly RunStatus[] = ['failed', 'cancelled']
+
 export interface Orchestrator {
   startRun(input: StartRunInput): Promise<StartRunResult>
+  /**
+   * Continues a failed or cancelled run on its own branch: tasks already `done` (merged into `run/<id>`) are kept,
+   * every other task is reset and runs again in a fresh worktree. Refused when the plan file changed.
+   */
+  resumeRun(input: ResumeRunInput): Promise<StartRunResult>
   /** Aborts the running session and cancels queued tasks. False when the run is not active. */
   cancel(runId: string): boolean
 }
@@ -90,6 +105,8 @@ export interface OrchestratorDeps {
    */
   uncommitted?: (cwd: string) => Promise<string[]>
   readPlan?: (planPath: string) => Promise<string>
+  /** True when the run's integration worktree is still on disk (resume needs it). */
+  pathExists?: (p: string) => Promise<boolean>
   /** Live, short progress lines for the Activity tab. Never throws into a run. */
   onLog?: (projectId: string, line: PipelineLogInput) => void
   newRunId?: () => string
@@ -131,6 +148,17 @@ const defaultResolveRef: ResolveRef = (cwd, ref) =>
     )
   })
 
+const defaultPathExists = async (p: string): Promise<boolean> => {
+  try {
+    await access(p)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex')
+
 const defaultReadPlan = async (planPath: string): Promise<string> => {
   const buf = await readFile(planPath)
   if (buf.byteLength > MAX_PLAN_BYTES) throw new Error('plan file is too large')
@@ -154,6 +182,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const resolveRef = deps.resolveRef ?? defaultResolveRef
   const uncommitted = deps.uncommitted ?? (deps.resolveRef ? async () => [] : defaultUncommitted)
   const readPlan = deps.readPlan ?? defaultReadPlan
+  const pathExists = deps.pathExists ?? defaultPathExists
   const newRunId = deps.newRunId ?? randomUUID
   const active = new Map<string, ActiveRun>()
   const runGate = deps.gate ?? ((args: ChecksGateArgs) => runChecksGate(args))
@@ -174,9 +203,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   async function execute(
     runId: string,
     plan: ParsedPlan,
-    ctx: { settings: ProjectSettings; manager: WorktreeManager; handle: ActiveRun; projectId: string }
+    ctx: {
+      settings: ProjectSettings
+      manager: WorktreeManager
+      handle: ActiveRun
+      projectId: string
+      /** Resume: tasks already merged into the run branch; they are not run again. */
+      alreadyDone?: ReadonlySet<string>
+    }
   ): Promise<RunSummary> {
     const { manager, handle } = ctx
+    const alreadyDone = ctx.alreadyDone ?? new Set<string>()
     const say = (taskId: string | null, role: PipelineLogRole, text: string, tone: PipelineLogTone = 'info', agent: string | null = null): void => {
       try {
         deps.onLog?.(ctx.projectId, { runId, taskId, role, agent, text, tone })
@@ -197,6 +234,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       reasons.set(taskId, reason)
     }
     const tasks: PlanTask[] = plan.waves.flatMap((w) => w.tasks)
+    for (const id of alreadyDone) {
+      status.set(id, 'done')
+      reasons.set(id, null)
+    }
     let runReason: string | null = null
     let finalStatus: RunStatus = 'done'
     /** Set by the first database error: no new task starts and running ones are left unsettled. */
@@ -461,11 +502,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
     }
 
-    say(null, 'pipeline', `run started: ${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'} in ${plan.waves.length} ${plan.waves.length === 1 ? 'wave' : 'waves'}`)
+    const todo = tasks.filter((t) => !alreadyDone.has(t.id))
+    say(
+      null,
+      'pipeline',
+      alreadyDone.size > 0
+        ? `run resumed: ${todo.length} of ${tasks.length} tasks left, ${alreadyDone.size} already merged`
+        : `run started: ${tasks.length} ${tasks.length === 1 ? 'task' : 'tasks'} in ${plan.waves.length} ${plan.waves.length === 1 ? 'wave' : 'waves'}`
+    )
     try {
       for (const wave of plan.waves) {
         if (abortReason !== null) break
-        await runPool(wave.tasks, maxParallel, guarded)
+        const left = wave.tasks.filter((t) => !alreadyDone.has(t.id))
+        if (left.length > 0) await runPool(left, maxParallel, guarded)
       }
     } catch (e) {
       abortRun(short(e))
@@ -556,7 +605,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             id: runId,
             projectId: input.projectId,
             planPath: input.planPath,
-            planSha256: createHash('sha256').update(text).digest('hex'),
+            planSha256: sha256(text),
             baseBranch: input.baseBranch,
             baseCommit: started.baseHash,
             integrationBranch: started.branch,
@@ -577,6 +626,85 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const handle: ActiveRun = { cancelled: false, controller: new AbortController() }
         active.set(runId, handle)
         const finished = execute(runId, parsed.plan, { settings: loaded.settings, manager, handle, projectId: input.projectId })
+          .catch((e): RunSummary => ({ runId, status: 'failed', reason: short(e), tasks: [] }))
+          .finally(() => active.delete(runId))
+        return { ok: true, runId, finished }
+      } catch (e) {
+        return { ok: false, error: cap(short(e)) }
+      }
+    },
+
+    async resumeRun(input) {
+      try {
+        if (active.has(input.runId)) return { ok: false, error: 'the run is still active' }
+        const run = deps.store.getRun(input.runId)
+        if (!run.ok) return { ok: false, error: run.error === 'not-found' ? 'run not found' : `database error: ${run.error}` }
+        if (run.value.projectId !== input.projectId) return { ok: false, error: 'run not found' }
+        if (!RESUMABLE_STATUSES.includes(run.value.status)) return { ok: false, error: `a ${run.value.status} run cannot be resumed` }
+
+        let text: string
+        try {
+          text = await readPlan(run.value.planPath)
+        } catch (e) {
+          return { ok: false, error: cap(`could not read the plan: ${short(e)}`) }
+        }
+        // The stored task rows and the merged work belong to this exact plan.
+        if (sha256(text) !== run.value.planSha256) {
+          return { ok: false, error: 'the plan changed since this run started: start a new run instead' }
+        }
+        const parsed = parsePlan(text)
+        if (!parsed.ok) return { ok: false, error: 'invalid plan' }
+        if (!(await pathExists(run.value.integrationPath))) {
+          return { ok: false, error: 'the run branch worktree is gone: start a new run instead' }
+        }
+        const rows = deps.store.listTasks(input.runId)
+        if (!rows.ok) return { ok: false, error: `database error: ${rows.error}` }
+        const planIds = new Set(parsed.plan.waves.flatMap((w) => w.tasks.map((t) => t.id)))
+        const alreadyDone = new Set(rows.value.filter((t) => t.status === 'done' && planIds.has(t.taskId)).map((t) => t.taskId))
+        const left = rows.value.filter((t) => !alreadyDone.has(t.taskId))
+        if (left.length === 0) return { ok: false, error: 'every task is already done' }
+
+        const loaded = deps.settings.get(input.projectId)
+        if (loaded.notice === 'storage-unavailable') return { ok: false, error: 'settings could not be loaded' }
+
+        const manager = createManager({ projectPath: input.projectPath, runId: input.runId })
+        // A stopped task leaves its worktree and branch behind; it starts again from the run branch.
+        for (const t of left) {
+          const removed = await manager.removeTask(t.taskId)
+          if (!removed.ok) return { ok: false, error: cap(`could not clean up ${t.taskId}: ${removed.error}`) }
+        }
+        for (const t of left) {
+          const r = deps.store.updateTask(input.runId, t.taskId, {
+            status: 'queued',
+            reason: null,
+            branch: null,
+            worktreePath: null,
+            commitSha: null,
+            checksResult: null,
+            turns: null,
+            costUsd: null,
+            startedAt: null,
+            finishedAt: null,
+            durationMs: null,
+            stage: null,
+            fixRounds: null,
+            findings: null
+          })
+          if (!r.ok) return { ok: false, error: `database error: ${r.error}` }
+        }
+        const reopened = deps.store.setRunStatus(input.runId, 'running', null)
+        if (!reopened.ok) return { ok: false, error: `database error: ${reopened.error}` }
+
+        const runId = input.runId
+        const handle: ActiveRun = { cancelled: false, controller: new AbortController() }
+        active.set(runId, handle)
+        const finished = execute(runId, parsed.plan, {
+          settings: loaded.settings,
+          manager,
+          handle,
+          projectId: input.projectId,
+          alreadyDone
+        })
           .catch((e): RunSummary => ({ runId, status: 'failed', reason: short(e), tasks: [] }))
           .finally(() => active.delete(runId))
         return { ok: true, runId, finished }

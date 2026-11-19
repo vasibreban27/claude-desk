@@ -66,6 +66,8 @@ function setup(opts: {
   review?: (a: ReviewRunArgs, n: number) => ReviewOutcome | Promise<ReviewOutcome>
   uncommitted?: (cwd: string) => Promise<string[]>
   onLog?: OrchestratorDeps['onLog']
+  readPlan?: () => Promise<string>
+  pathExists?: (p: string) => Promise<boolean>
 }) {
   const db = new Database(':memory:')
   migrate(db)
@@ -99,7 +101,8 @@ function setup(opts: {
     reviewRunner,
     pluginPath: '/plugin',
     createManager: () => manager,
-    readPlan: async () => opts.plan ?? PLAN,
+    readPlan: opts.readPlan ?? (async () => opts.plan ?? PLAN),
+    pathExists: opts.pathExists ?? (async () => true),
     newRunId: () => 'abcd1234-0000',
     ...(opts.uncommitted ? { uncommitted: opts.uncommitted } : {}),
     ...(opts.onLog ? { onLog: opts.onLog } : {}),
@@ -1177,5 +1180,67 @@ describe('orchestrator: review loop gap coverage', () => {
     expect(rows[0]).toMatchObject({ status: 'failed', stage: null })
     expect(rows[0]?.findings).toMatchObject({ blocking: 1 })
     expect(rows[1]).toMatchObject({ status: 'done', findings: { blocking: 0, minor: 0 } })
+  })
+})
+
+describe('orchestrator resume', () => {
+  /** A run where T4 (wave 3) fails the first time and passes after a resume. */
+  async function failedRun(over: Parameters<typeof setup>[0] = {}) {
+    let t4Runs = 0
+    const c = setup({
+      runner: async (a) => {
+        if (a.task.id === 'T4' && ++t4Runs === 1) return finishedOutcome({ status: 'error', error: 'interrupted' })
+        return finishedOutcome()
+      },
+      // Each worker run moves its branch forward, also on the second attempt of a task.
+      heads: (_branch, _call, workerRuns) => `sha-${workerRuns}`,
+      ...over
+    })
+    const r = await c.orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    const s = await r.finished
+    expect(s.status).toBe('failed')
+    return { c, runId: r.runId }
+  }
+
+  it('reruns only the unfinished tasks on the same run branch', async () => {
+    const { c, runId } = await failedRun()
+    c.order.length = 0
+    const r = await c.orch.resumeRun({ projectId: 'p', projectPath: '/proj', runId })
+    if (!r.ok) throw new Error(r.error)
+    expect(r.runId).toBe(runId)
+    const s = await r.finished
+    expect(s.status).toBe('done')
+    expect(c.order).toEqual(['T4'])
+    expect(c.manager.removeTask).toHaveBeenCalledWith('T4')
+    expect(c.manager.removeTask).toHaveBeenCalledTimes(1)
+    expect(c.manager.startRun).toHaveBeenCalledTimes(1)
+    const run = c.store.getRun(runId)
+    expect(run.ok && run.value.status).toBe('done')
+    const tasks = c.store.listTasks(runId)
+    if (!tasks.ok) throw new Error('no tasks')
+    expect(tasks.value.map((t) => t.status)).toEqual(['done', 'done', 'done', 'done'])
+  })
+
+  it('refuses when the plan changed, the run branch is gone, the run is done or still active', async () => {
+    let plan = PLAN
+    let exists = true
+    const { c, runId } = await failedRun({ readPlan: async () => plan, pathExists: async () => exists })
+    const resume = () => c.orch.resumeRun({ projectId: 'p', projectPath: '/proj', runId })
+
+    plan = `${PLAN}\n`
+    expect(await resume()).toEqual({ ok: false, error: expect.stringContaining('the plan changed') })
+    plan = PLAN
+    exists = false
+    expect(await resume()).toEqual({ ok: false, error: expect.stringContaining('worktree is gone') })
+    exists = true
+    expect(await c.orch.resumeRun({ projectId: 'other', projectPath: '/proj', runId })).toEqual({ ok: false, error: 'run not found' })
+    expect(c.runner).toHaveBeenCalledTimes(4)
+
+    const r = await resume()
+    if (!r.ok) throw new Error(r.error)
+    expect(await resume()).toEqual({ ok: false, error: 'the run is still active' })
+    await r.finished
+    expect(await resume()).toEqual({ ok: false, error: 'a done run cannot be resumed' })
   })
 })

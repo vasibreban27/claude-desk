@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PipelineRunView, PipelineStartError, PlanEntry } from '@shared/ipc'
+import type { PipelineResumeError, PipelineRunView, PipelineStartError, PlanEntry } from '@shared/ipc'
 
 export const START_ERROR_MESSAGES: Record<PipelineStartError, string> = {
   busy: 'A run is already active for this project.',
@@ -9,6 +9,14 @@ export const START_ERROR_MESSAGES: Record<PipelineStartError, string> = {
   'not-found': 'The project or the plan file was not found.',
   'storage-unavailable': 'Run storage is unavailable.',
   'start-failed': 'The run could not be started.'
+}
+
+export const RESUME_ERROR_MESSAGES: Record<PipelineResumeError, string> = {
+  busy: 'A run is already active for this project.',
+  'no-toolkit': 'The toolkit is not set up. Configure it before resuming a run.',
+  'not-found': 'The run was not found.',
+  'storage-unavailable': 'Run storage is unavailable.',
+  'resume-failed': 'The run could not be resumed.'
 }
 
 const EVENT_THROTTLE_MS = 150
@@ -29,6 +37,8 @@ export interface UsePipeline {
   discarding: boolean
   discardError: string | null
   start: (planFile: string) => Promise<void>
+  /** Continues the shown run (failed or cancelled): merged tasks are kept. Errors land in `startError`. */
+  resume: () => Promise<void>
   cancel: () => Promise<void>
   /** Resolves true when the run was discarded. */
   discard: () => Promise<boolean>
@@ -212,6 +222,26 @@ export function usePipeline(projectId: string | null): UsePipeline {
     [fetchStatus]
   )
 
+  const resume = useCallback(async (): Promise<void> => {
+    const api = window.api
+    const pid = current.current
+    const runId = state.run?.runId
+    if (!api || pid === null || !runId || startingRef.current) return
+    startingRef.current = true
+    setState((s) => (s.projectId === pid ? { ...s, starting: true, startError: null, discardError: null, discardErrorRunId: null } : s))
+    let startError: string | null = null
+    try {
+      const res = await api.pipelineResume({ projectId: pid, runId })
+      if (!res.ok) startError = res.message ? `${RESUME_ERROR_MESSAGES[res.error]} ${res.message}` : RESUME_ERROR_MESSAGES[res.error]
+    } catch {
+      startError = RESUME_ERROR_MESSAGES['resume-failed']
+    }
+    startingRef.current = false
+    if (current.current !== pid) return
+    setState((s) => (s.projectId === pid ? { ...s, starting: false, startError } : s))
+    await fetchStatus(pid)
+  }, [state.run?.runId, fetchStatus])
+
   const cancel = useCallback(async (): Promise<void> => {
     const api = window.api
     const pid = current.current
@@ -269,5 +299,5 @@ export function usePipeline(projectId: string | null): UsePipeline {
 
   const { discardErrorRunId: _unused, cancellingRunId, ...exposed } = state
   void _unused
-  return { ...exposed, cancelling: cancellingRunId !== null, start, cancel, discard, reloadPlans }
+  return { ...exposed, cancelling: cancellingRunId !== null, start, resume, cancel, discard, reloadPlans }
 }

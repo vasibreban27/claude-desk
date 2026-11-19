@@ -66,6 +66,7 @@ beforeEach(() => {
     pipelineStart: vi.fn(),
     pipelineStatus: vi.fn().mockResolvedValue({ ok: true, run: null }),
     pipelineCancel: vi.fn(),
+    pipelineResume: vi.fn(),
     pipelineDiscard: vi.fn(),
     pipelineMerge: vi.fn(),
     pipelinePr: vi.fn(),

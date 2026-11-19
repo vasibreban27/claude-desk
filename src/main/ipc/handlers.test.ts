@@ -378,6 +378,7 @@ describe('pipeline handlers', () => {
     start: vi.fn(async () => ({ ok: true as const, runId: 'r1' })),
     status: vi.fn(async () => ({ ok: true as const, run: null })),
     cancel: vi.fn(async () => ({ ok: true as const })),
+    resume: vi.fn(async () => ({ ok: true as const, runId: 'r1' })),
     discard: vi.fn(async () => ({ ok: true as const })),
     merge: vi.fn(async () => ({ ok: true as const, baseBranch: 'main', head: 'abc1234', planCommitted: true, cleanedUp: true })),
     openPr: vi.fn(async () => ({ ok: true as const, url: 'https://github.com/o/r/pull/1', branch: 'desk/x-1', host: 'github' as const }))
@@ -390,6 +391,8 @@ describe('pipeline handlers', () => {
     expect(await h.pipelineStart({ projectId: ID, planFile: 'a.md' })).toEqual({ ok: true, runId: 'r1' })
     expect(await h.pipelineStatus({ projectId: ID })).toEqual({ ok: true, run: null })
     expect(await h.pipelineCancel({ projectId: ID, runId: 'r1' })).toEqual({ ok: true })
+    expect(await h.pipelineResume({ projectId: ID, runId: 'r1' })).toEqual({ ok: true, runId: 'r1' })
+    expect(pipeline.resume).toHaveBeenCalledWith(ID, 'r1')
     expect(await h.pipelineDiscard({ projectId: ID, runId: 'r1' })).toEqual({ ok: true })
     expect(await h.pipelineMerge({ projectId: ID, runId: 'r1' })).toMatchObject({ ok: true, head: 'abc1234' })
     expect(pipeline.merge).toHaveBeenCalledWith(ID, 'r1')
@@ -406,6 +409,7 @@ describe('pipeline handlers', () => {
       expect(await h.pipelinePlans(bad)).toEqual({ ok: false, error: 'not-found' })
       expect(await h.pipelineStatus(bad)).toEqual({ ok: false, error: 'not-found' })
       expect(await h.pipelineCancel(bad)).toEqual({ ok: false, error: 'not-found' })
+      expect(await h.pipelineResume(bad)).toEqual({ ok: false, error: 'not-found' })
       expect(await h.pipelineDiscard(bad)).toEqual({ ok: false, error: 'not-found' })
       expect(await h.pipelineMerge(bad)).toEqual({ ok: false, error: 'not-found' })
       expect(await h.pipelinePr(bad)).toEqual({ ok: false, error: 'not-found' })
@@ -427,12 +431,15 @@ describe('pipeline handlers', () => {
     const boom = vi.fn(async () => {
       throw new RangeError('secret /home/someone')
     })
-    const { h } = setup({ pipeline: { listPlans: boom, start: boom, status: boom, cancel: boom, discard: boom, merge: boom, openPr: boom } })
+    const { h } = setup({
+      pipeline: { listPlans: boom, start: boom, status: boom, cancel: boom, resume: boom, discard: boom, merge: boom, openPr: boom }
+    })
     expect(await h.pipelinePlans({ projectId: ID })).toEqual({ ok: false, error: 'unreadable' })
     expect(await h.pipelineStart({ projectId: ID, planFile: 'a.md' })).toEqual({ ok: false, error: 'start-failed' })
     expect(await h.pipelineStatus({ projectId: ID })).toEqual({ ok: false, error: 'storage-unavailable' })
     expect(await h.pipelineCancel({ projectId: ID, runId: 'r' })).toEqual({ ok: false, error: 'not-found' })
     expect(await h.pipelineDiscard({ projectId: ID, runId: 'r' })).toEqual({ ok: false, error: 'cleanup-failed' })
+    expect(await h.pipelineResume({ projectId: ID, runId: 'r' })).toEqual({ ok: false, error: 'resume-failed' })
     expect(JSON.stringify(spy.mock.calls)).not.toContain('someone')
     expect(spy.mock.calls[0]).toEqual(['pipeline:plans failed:', 'RangeError'])
   })
