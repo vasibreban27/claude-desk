@@ -62,7 +62,8 @@ describe('preload bridge', () => {
         'pipelineLog',
         'onPipelineLog',
         'onPipelineEvent',
-        'usageSummary'
+        'usageSummary',
+        'usagePlan'
       ].sort()
     )
     expect(Object.values(api).every((v) => typeof v === 'function')).toBe(true)

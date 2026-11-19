@@ -13,6 +13,7 @@ function summary(runs = 1): UsageSummary {
     totals: { runs, costUsd: 0.5, inputTokens: 1, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0 },
     byDay: [],
     byAgent: [],
+    byKind: [],
     byProject: []
   }
 }
@@ -27,12 +28,12 @@ afterEach(() => {
 })
 
 describe('useUsage', () => {
-  it('fetches 30 days for the project on mount', async () => {
+  it('fetches 7 days for the project on mount', async () => {
     const fn = vi.fn().mockResolvedValue(summary())
     mockApi(fn)
     const { result } = renderHook(() => useUsage(PID))
     await waitFor(() => expect(result.current.summary).not.toBeNull())
-    expect(fn).toHaveBeenCalledWith({ projectId: PID, days: 30 })
+    expect(fn).toHaveBeenCalledWith({ projectId: PID, days: 7 })
   })
 
   it('refetches when the range or scope changes', async () => {
@@ -40,10 +41,10 @@ describe('useUsage', () => {
     mockApi(fn)
     const { result } = renderHook(() => useUsage(PID))
     await waitFor(() => expect(fn).toHaveBeenCalledTimes(1))
-    act(() => result.current.setDays(7))
-    await waitFor(() => expect(fn).toHaveBeenLastCalledWith({ projectId: PID, days: 7 }))
+    act(() => result.current.setDays(30))
+    await waitFor(() => expect(fn).toHaveBeenLastCalledWith({ projectId: PID, days: 30 }))
     act(() => result.current.setScope('all'))
-    await waitFor(() => expect(fn).toHaveBeenLastCalledWith({ projectId: null, days: 7 }))
+    await waitFor(() => expect(fn).toHaveBeenLastCalledWith({ projectId: null, days: 30 }))
     expect(fn).toHaveBeenCalledTimes(3)
   })
 
@@ -51,7 +52,7 @@ describe('useUsage', () => {
     const fn = vi.fn().mockResolvedValue(summary())
     mockApi(fn)
     const { result } = renderHook(() => useUsage(null))
-    await waitFor(() => expect(fn).toHaveBeenCalledWith({ projectId: null, days: 30 }))
+    await waitFor(() => expect(fn).toHaveBeenCalledWith({ projectId: null, days: 7 }))
     expect(result.current.scope).toBe('all')
   })
 

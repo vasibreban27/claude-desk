@@ -1,5 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
+import { mkdirSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
+import { join } from 'node:path'
+import { createPlanUsageReader } from '../usage/planUsage'
 import { IPC, type ActivityEvent, type ChatEvent, type PipelineEvent, type PipelineLogEntry } from '../../shared/ipc'
 import { ChatService } from '../chat/service'
 import { sdkRunner } from '../chat/runner'
@@ -10,6 +13,7 @@ import { createOrchestrator, type Orchestrator } from '../pipeline/orchestrator'
 import { createPipelineService, type PipelineService } from '../pipeline/service'
 import { createWorkerRunner } from '../pipeline/workerRunner'
 import { createPipelineLog, type PipelineLog } from '../pipeline/pipelineLog'
+import { pipelineUsageRecorder } from '../pipeline/usageRecorder'
 import type { SettingsStore } from '../db/settingsStore'
 import type { AppSettings } from '../projects/appSettings'
 import { readToolkitInfo } from '../config'
@@ -43,7 +47,8 @@ function buildPipeline(
   rawStore: PipelineStore,
   settings: SettingsStore,
   projects: ProjectStore,
-  pipelineLog: PipelineLog
+  pipelineLog: PipelineLog,
+  runStore?: RunStore
 ): PipelineService {
   // 4a crash recovery: runs left `running` by a killed app are failed at registration, not on first start.
   try {
@@ -65,7 +70,8 @@ function buildPipeline(
         runner,
         pluginPath: toolkit.path,
         log: (m) => console.error(m),
-        onLog: (projectId, line) => pipelineLog.add(projectId, line)
+        onLog: (projectId, line) => pipelineLog.add(projectId, line),
+        ...(runStore ? { recordUsage: pipelineUsageRecorder(runStore) } : {})
       })
     }
     return orchestrator
@@ -135,8 +141,17 @@ export function registerIpc(
     return result.canceled || first === undefined ? undefined : first
   }
 
+  // One reader for the app: its cache keeps `/usage` checks sparse.
+  const planUsage = createPlanUsageReader({
+    cwd: () => {
+      const dir = join(app.getPath('userData'), 'usage-check')
+      mkdirSync(dir, { recursive: true })
+      return dir
+    }
+  })
+
   const pipelineLog = createPipelineLog(broadcastPipelineLog)
-  const pipeline = pipelineStore ? buildPipeline(pipelineStore, settingsStore, store, pipelineLog) : undefined
+  const pipeline = pipelineStore ? buildPipeline(pipelineStore, settingsStore, store, pipelineLog, runStore) : undefined
 
   const make = (event: IpcMainInvokeEvent) =>
     createHandlers({ store, readGitStatus, pickFolder: () => pickFolder(event), chat,
@@ -149,7 +164,8 @@ export function registerIpc(
       pipelineLog,
       openExternal: (url: string) => shell.openExternal(url),
       ...(pipeline ? { pipeline } : {}),
-      ...(runStore ? { runStore } : {})
+      ...(runStore ? { runStore } : {}),
+      planUsage
     })
 
   ipcMain.handle(IPC.projectsList, async (event) => {
@@ -166,6 +182,7 @@ export function registerIpc(
   ipcMain.handle(IPC.chatHistory, (event, payload: unknown) => make(event).chatHistory(payload))
   ipcMain.handle(IPC.activityHistory, (event, payload: unknown) => make(event).activityHistory(payload))
   ipcMain.handle(IPC.usageSummary, (event, payload: unknown) => make(event).usageSummary(payload))
+  ipcMain.handle(IPC.usagePlan, (event, payload: unknown) => make(event).usagePlan(payload))
   ipcMain.handle(IPC.settingsGet, (event, payload: unknown) => make(event).settingsGet(payload))
   ipcMain.handle(IPC.settingsSet, (event, payload: unknown) => make(event).settingsSet(payload))
   ipcMain.handle(IPC.appInfo, (event) => make(event).appInfo())
@@ -205,7 +222,7 @@ export function registerIpc(
   })
 
   return () => {
-    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.settingsGet, IPC.settingsSet, IPC.appInfo, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick, IPC.projectsRemove,
+    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.usagePlan, IPC.settingsGet, IPC.settingsSet, IPC.appInfo, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick, IPC.projectsRemove,
       IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineResume, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.openUrl]) {
       ipcMain.removeHandler(channel)
     }

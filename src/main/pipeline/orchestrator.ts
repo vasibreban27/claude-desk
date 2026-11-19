@@ -18,6 +18,7 @@ import type { WorkerOutcome, WorkerRunner } from './workerRunner'
 import { runChecksGate, type ChecksGateArgs, type ChecksGateResult } from './checksGate'
 import { MAX_REPORTED_PATHS, uncommittedWork } from './uncommitted'
 import type { PipelineLogInput } from './pipelineLog'
+import type { RunUsage } from '../chat/activity'
 import type { PipelineLogRole, PipelineLogTone } from '../../shared/pipelineLog'
 import { createReviewRunner, type ReviewOutcome, type ReviewRunner } from './reviewRunner'
 import {
@@ -64,6 +65,16 @@ export type StartRunResult =
   | { ok: true; runId: string; finished: Promise<RunSummary> }
   | { ok: false; error: string }
 
+export interface PipelineUsageInput {
+  projectId: string
+  kind: 'worker' | 'reviewer'
+  /** The worker or reviewer name, e.g. `node-developer`. */
+  agent: string
+  /** Epoch ms when the session started. */
+  startedAt: number
+  usage: RunUsage
+}
+
 export interface ResumeRunInput {
   projectId: string
   /** Absolute path of the project's primary checkout. */
@@ -105,6 +116,8 @@ export interface OrchestratorDeps {
    */
   uncommitted?: (cwd: string) => Promise<string[]>
   readPlan?: (planPath: string) => Promise<string>
+  /** Records the token usage of each worker and reviewer session (the Usage tab). Best effort. */
+  recordUsage?: (input: PipelineUsageInput) => void
   /** True when the run's integration worktree is still on disk (resume needs it). */
   pathExists?: (p: string) => Promise<boolean>
   /** Live, short progress lines for the Activity tab. Never throws into a run. */
@@ -221,6 +234,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         // the live log never breaks a run
       }
     }
+    /** A usage sink for one session; the start time is taken when the session is about to start. */
+    const usageSink = (kind: PipelineUsageInput['kind'], agent: string): ((usage: RunUsage) => void) => {
+      const startedAt = now()
+      return (usage) => {
+        try {
+          deps.recordUsage?.({ projectId: ctx.projectId, kind, agent, startedAt, usage })
+        } catch (e) {
+          log(`pipeline: could not record usage: ${short(e)}`)
+        }
+      }
+    }
     const update = (taskId: string, patch: TaskPatch): void => {
       const r = deps.store.updateTask(runId, taskId, patch)
       if (!r.ok) throw new RunAbort(`database error: ${r.error}`)
@@ -317,7 +341,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           settings,
           pluginPath: deps.pluginPath,
           signal,
-          onLog: (l) => say(task.id, 'worker', l.text, l.tone, task.worker)
+          onLog: (l) => say(task.id, 'worker', l.text, l.tone, task.worker),
+          onUsage: usageSink('worker', task.worker)
         })
         if (abortReason !== null) return
         absorb(outcome)
@@ -386,7 +411,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     settings,
                     pluginPath: deps.pluginPath,
                     signal,
-                    onLog: (l) => say(task.id, 'reviewer', l.text, l.tone, reviewer)
+                    onLog: (l) => say(task.id, 'reviewer', l.text, l.tone, reviewer),
+                    onUsage: usageSink('reviewer', reviewer)
                   })
                 } catch (e) {
                   if (abortReason !== null) return
@@ -449,7 +475,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               pluginPath: deps.pluginPath,
               signal,
               fix: { kind: fix.kind, text: fix.text, sessionId: outcome.sessionId ?? null },
-              onLog: (l) => say(task.id, 'fix', l.text, l.tone, task.worker)
+              onLog: (l) => say(task.id, 'fix', l.text, l.tone, task.worker),
+              onUsage: usageSink('worker', task.worker)
             })
             if (abortReason !== null) return
             absorb(outcome)

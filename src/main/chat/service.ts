@@ -26,6 +26,8 @@ interface RunState {
   startedAt: Date
   seq: number
   usage: { usage: RunUsage; agents: AgentUsage[] } | null
+  /** Recorded as a `plan` run (planner) or a `chat` run. */
+  kind: 'chat' | 'plan'
   finished: boolean
   /** toolUseIds that already have a tool-finished (a denied tool may also fire PostToolUseFailure). */
   finishedTools: Set<string>
@@ -106,7 +108,7 @@ export class ChatService {
     try {
       const cfg = (this.deps.loadConfig ?? (() => loadConfig()))()
       if (!cfg.ok) throw cfg.error
-      run = this.startRun(projectId)
+      run = this.startRun(projectId, planning ? 'plan' : 'chat')
       const resume = this.resumeId(projectId, settings)
       const format = planning ? await (this.deps.loadPlanFormat ?? loadPlanFormat)(cfg.config.toolkitPath).catch(() => null) : null
       const stream = this.deps.runner({
@@ -209,9 +211,9 @@ export class ChatService {
     return (this.activity.get(projectId) ?? []).map((e) => ({ ...e }))
   }
 
-  private startRun(projectId: string): RunState {
+  private startRun(projectId: string, kind: RunState['kind']): RunState {
     const startedAt = this.now()
-    const run: RunState = { projectId, runId: this.id(), startedAt, seq: 0, usage: null, finished: false, finishedTools: new Set() }
+    const run: RunState = { projectId, runId: this.id(), startedAt, seq: 0, usage: null, kind, finished: false, finishedTools: new Set() }
     this.activity.set(projectId, [])
     this.recordActivity(run, { agent: 'main', agentId: null, type: 'run-started' })
     return run
@@ -258,6 +260,7 @@ export class ChatService {
         this.deps.runStore.recordRun({
           runId: run.runId,
           projectId: run.projectId,
+          kind: run.kind,
           startedAt: run.startedAt.getTime(),
           usage: run.usage.usage,
           agents: run.usage.agents

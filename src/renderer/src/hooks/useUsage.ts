@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { UsageSummary } from '@shared/ipc'
 
 export type UsageScope = 'project' | 'all'
-export const USAGE_RANGES = [7, 30, 90] as const
+export const USAGE_RANGES = [1, 7, 30] as const
 export type UsageRange = (typeof USAGE_RANGES)[number]
 
 export interface UseUsage {
@@ -25,7 +25,7 @@ export function useUsage(projectId: string | null, refreshSignal: number = 0): U
   const [result, setResult] = useState<{ key: string; summary: UsageSummary } | null>(null)
   const [failure, setFailure] = useState<{ key: string; message: string } | null>(null)
   const [fetching, setFetching] = useState(false)
-  const [days, setDays] = useState<UsageRange>(30)
+  const [days, setDays] = useState<UsageRange>(7)
   const [chosenScope, setScope] = useState<UsageScope>('project')
 
   const scope: UsageScope = projectId === null ? 'all' : chosenScope

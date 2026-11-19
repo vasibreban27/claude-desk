@@ -5,6 +5,7 @@ import { guardWorkerToolUse } from './workerGuard'
 import { WORK_ALLOWED_TOOLS, WORK_SERVER_NAME, createWorkerTools, type CheckResult } from './workerTools'
 import { buildFixPrompt, buildWorkerPrompt, buildWorkerSystemPrompt, type FixInput } from './prompts'
 import type { PlanTask } from './planParser'
+import { parseResultMessage, type RunUsage } from '../chat/activity'
 
 /**
  * Runs one worker session (Agent SDK `query()`), following docs/notes/phase-4a-spike.md:
@@ -44,6 +45,8 @@ export interface WorkerRunArgs {
   fix?: FixInput & { sessionId?: string | null }
   /** Live log: one short line per tool call (relative paths, no contents). */
   onLog?: LogSink
+  /** Token usage of each session's result message (for the Usage tab). */
+  onUsage?: (usage: RunUsage) => void
 }
 
 export type WorkerRunner = (args: WorkerRunArgs) => Promise<WorkerOutcome>
@@ -197,6 +200,7 @@ export function createWorkerRunner(deps: WorkerRunnerDeps = {}): WorkerRunner {
             sessionId = message['session_id']
           }
           if (message['type'] === 'result') {
+            reportUsage(args.onUsage, message)
             if (typeof message['num_turns'] === 'number') turns = message['num_turns']
             if (typeof message['total_cost_usd'] === 'number') costUsd = message['total_cost_usd']
             if (message['subtype'] === 'error_max_turns') hitTurnLimit = true
@@ -253,6 +257,17 @@ function outcome(
   error?: string
 ): WorkerOutcome {
   return { status, blocked, turns, costUsd, checksResult, ...(error !== undefined ? { error: error.slice(0, 300) } : {}) }
+}
+
+/** Hands the parsed result usage to the sink; a broken sink never breaks the session. */
+export function reportUsage(sink: ((usage: RunUsage) => void) | undefined, message: unknown): void {
+  if (sink === undefined) return
+  try {
+    const usage = parseResultMessage(message)
+    if (usage !== null) sink(usage)
+  } catch {
+    // usage tracking is best effort
+  }
 }
 
 function errText(e: unknown): string {

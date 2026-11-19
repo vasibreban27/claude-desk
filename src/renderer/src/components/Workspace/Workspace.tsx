@@ -2,6 +2,22 @@ import { useRef, useState, type KeyboardEvent } from 'react'
 import { ActivityFeed, PipelineLogFeed } from '../Activity'
 import { usePipelineLog } from '../../hooks/usePipelineLog'
 import { UsagePanel } from '../Usage'
+import { usePlanUsage } from '../../hooks/usePlanUsage'
+import type { UseUsage } from '../../hooks/useUsage'
+
+/** Mounted only while the Usage tab is open, so the plan check (`/usage`) runs only when someone looks. */
+function UsageTab({
+  usage,
+  projectNames,
+  refreshSignal
+}: {
+  usage: UseUsage
+  projectNames: Record<string, string> | undefined
+  refreshSignal: number
+}) {
+  const plan = usePlanUsage(refreshSignal)
+  return <UsagePanel {...usage} {...(projectNames ? { projectNames } : {})} plan={plan} />
+}
 import { SettingsPanel } from '../Settings'
 import { PipelinePanel } from '../Pipeline'
 import { ToolkitPanel } from '../Toolkit'
@@ -149,7 +165,7 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
         ) : tab === 'pipeline' ? (
           <PipelinePanel {...pipeline} latestByTask={pipelineLog.latestByTask} />
         ) : tab === 'usage' ? (
-          <UsagePanel {...usage} projectNames={projectNames} />
+          <UsageTab usage={usage} projectNames={projectNames} refreshSignal={refresh.signal} />
         ) : tab === 'toolkit' ? (
           <ToolkitPanel />
         ) : (

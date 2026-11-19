@@ -4,7 +4,8 @@ import { FINDINGS_MAX_COUNT, type Finding, type ReviewerName } from '../../share
 import { effectiveLimits, type ProjectSettings } from '../../shared/settings'
 import { guardPreToolUse, type GuardOutput } from '../chat/tools'
 import type { PlanTask } from './planParser'
-import type { QueryFn, QueryLike } from './workerRunner'
+import { reportUsage, type QueryFn, type QueryLike } from './workerRunner'
+import type { RunUsage } from '../chat/activity'
 import { REVIEW_ALLOWED_TOOLS, REVIEW_SERVER_NAME, createReviewTools } from './reviewTools'
 
 /**
@@ -40,6 +41,8 @@ export interface ReviewRunArgs {
   signal?: AbortSignal
   /** Live log: one short line per tool call. */
   onLog?: LogSink
+  /** Token usage of the session's result message (for the Usage tab). */
+  onUsage?: (usage: RunUsage) => void
 }
 
 export type ReviewRunner = (args: ReviewRunArgs) => Promise<ReviewOutcome>
@@ -206,6 +209,7 @@ export function createReviewRunner(deps: ReviewRunnerDeps = {}): ReviewRunner {
           if (!isRecord(message)) continue
           if (message['type'] === 'assistant') assistantTurns += 1
           if (message['type'] === 'result') {
+            reportUsage(args.onUsage, message)
             if (typeof message['num_turns'] === 'number') turns = message['num_turns']
             if (typeof message['total_cost_usd'] === 'number') costUsd = message['total_cost_usd']
             if (message['subtype'] === 'error_max_turns') hitTurnLimit = true

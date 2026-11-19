@@ -1,6 +1,8 @@
 import {
   activityHistoryRequestSchema,
   usageSummaryRequestSchema,
+  planUsageRequestSchema,
+  type PlanUsageResult,
   chatHistoryRequestSchema,
   chatSendRequestSchema,
   pipelineCancelRequestSchema,
@@ -53,6 +55,7 @@ import type { ChatService } from '../chat/service'
 import { emptySummary, type RunStore } from '../db'
 import { createSettingsStore, type SettingsStore } from '../db/settingsStore'
 import type { PipelineService } from '../pipeline/service'
+import type { PlanUsageReader } from '../usage/planUsage'
 import { defaultSettings, needsSessionReset } from '../../shared/settings'
 
 export interface HandlerDeps {
@@ -81,6 +84,8 @@ export interface HandlerDeps {
   gitRun?: (cwd: string, args: string[]) => Promise<void>
   /** Undefined when the pipeline could not be set up; pipeline calls then report storage-unavailable. */
   pipeline?: PipelineService
+  /** Reads the plan limits (Claude Code `/usage`). Absent: usage:plan reports failed. */
+  planUsage?: PlanUsageReader
 }
 
 export interface Handlers {
@@ -90,6 +95,7 @@ export interface Handlers {
   chatHistory(payload: unknown): Promise<ChatHistoryResult>
   activityHistory(payload: unknown): Promise<ActivityHistoryResult>
   usageSummary(payload: unknown): Promise<UsageSummaryResult>
+  usagePlan(payload: unknown): Promise<PlanUsageResult>
   settingsGet(payload: unknown): Promise<SettingsGetResult>
   settingsSet(payload: unknown): Promise<SettingsSetResult>
   appInfo(): Promise<AppInfoResult>
@@ -197,6 +203,18 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       } catch (err) {
         console.error('usage:summary failed:', err instanceof Error ? err.name : 'unknown')
         return emptySummary(req.data.days)
+      }
+    },
+
+    async usagePlan(payload) {
+      const req = planUsageRequestSchema.strict().safeParse(payload)
+      if (!req.success) return { ok: false, error: 'failed', message: 'invalid request' }
+      if (!deps.planUsage) return { ok: false, error: 'failed', message: 'plan usage is not available' }
+      try {
+        return await deps.planUsage.get(req.data.refresh)
+      } catch (err) {
+        console.error('usage:plan failed:', errName(err))
+        return { ok: false, error: 'failed' }
       }
     },
 

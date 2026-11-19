@@ -1,10 +1,12 @@
 import type Database from 'better-sqlite3'
-import type { UsageSummary } from '../../shared/ipc'
+import { USAGE_KINDS, type UsageKind, type UsageSummary } from '../../shared/ipc'
 import type { AgentUsage, RunUsage } from '../chat/activity'
 
 export interface RecordRunInput {
   runId: string
   projectId: string
+  /** Defaults to `chat`. */
+  kind?: UsageKind
   /** Epoch milliseconds. */
   startedAt: number
   usage: RunUsage
@@ -43,6 +45,7 @@ export function emptySummary(days: number): UsageSummary {
     },
     byDay: [],
     byAgent: [],
+    byKind: [],
     byProject: []
   }
 }
@@ -83,6 +86,7 @@ interface DayRow {
   cost: number
   i: number
   o: number
+  t: number
 }
 interface AgentRow {
   agent: string
@@ -93,6 +97,12 @@ interface AgentRow {
   cc: number
   approx: number
 }
+interface KindRow {
+  kind: string
+  runs: number
+  cost: number
+  tokens: number
+}
 interface ProjectRow {
   project_id: string
   runs: number
@@ -102,8 +112,8 @@ interface ProjectRow {
 export function createRunStore(db: Database.Database, now: () => number = Date.now): RunStore {
   const insertRun = db.prepare(
     `INSERT INTO runs (id, project_id, started_at, day, status, cost_usd, duration_ms,
-       input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
   const insertModel = db.prepare(
     `INSERT INTO usage_models (run_id, model, cost_usd, input_tokens, output_tokens,
@@ -139,7 +149,8 @@ export function createRunStore(db: Database.Database, now: () => number = Date.n
       t.inputTokens,
       t.outputTokens,
       t.cacheReadTokens,
-      t.cacheCreationTokens
+      t.cacheCreationTokens,
+      r.kind ?? 'chat'
     )
     for (const m of r.usage.models) {
       insertModel.run(
@@ -175,7 +186,8 @@ export function createRunStore(db: Database.Database, now: () => number = Date.n
   )
   const dayStmt = db.prepare(
     `SELECT day, COUNT(*) AS runs, COALESCE(SUM(cost_usd), 0) AS cost,
-       SUM(input_tokens) AS i, SUM(output_tokens) AS o
+       SUM(input_tokens) AS i, SUM(output_tokens) AS o,
+       SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens) AS t
      FROM runs WHERE day >= ? AND day <= ? AND (? IS NULL OR project_id = ?)
      GROUP BY day ORDER BY day ASC`
   )
@@ -186,6 +198,12 @@ export function createRunStore(db: Database.Database, now: () => number = Date.n
      FROM usage_agents a JOIN runs r ON r.id = a.run_id
      WHERE r.day >= ? AND r.day <= ? AND (? IS NULL OR r.project_id = ?)
      GROUP BY a.agent ORDER BY (SUM(a.input_tokens) + SUM(a.output_tokens)) DESC, a.agent ASC`
+  )
+  const kindStmt = db.prepare(
+    `SELECT kind, COUNT(*) AS runs, COALESCE(SUM(cost_usd), 0) AS cost,
+       SUM(input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens) AS tokens
+     FROM runs WHERE day >= ? AND day <= ? AND (? IS NULL OR project_id = ?)
+     GROUP BY kind ORDER BY tokens DESC, kind ASC`
   )
   const projectStmt = db.prepare(
     `SELECT project_id, COUNT(*) AS runs, COALESCE(SUM(cost_usd), 0) AS cost
@@ -210,7 +228,8 @@ export function createRunStore(db: Database.Database, now: () => number = Date.n
         runs: r.runs,
         costUsd: r.cost,
         inputTokens: r.i,
-        outputTokens: r.o
+        outputTokens: r.o,
+        tokens: r.t
       }))
       const byAgent = (agentStmt.all(start, end, projectId, projectId) as AgentRow[]).map((r) => ({
         agent: r.agent,
@@ -221,6 +240,9 @@ export function createRunStore(db: Database.Database, now: () => number = Date.n
         cacheCreationTokens: r.cc,
         approximate: r.approx === 1
       }))
+      const byKind = (kindStmt.all(start, end, projectId, projectId) as KindRow[])
+        .filter((r): r is KindRow & { kind: UsageKind } => (USAGE_KINDS as readonly string[]).includes(r.kind))
+        .map((r) => ({ kind: r.kind, runs: r.runs, costUsd: r.cost, tokens: r.tokens }))
       const byProject =
         projectId === null
           ? (projectStmt.all(start, end) as ProjectRow[]).map((r) => ({
@@ -242,6 +264,7 @@ export function createRunStore(db: Database.Database, now: () => number = Date.n
         },
         byDay,
         byAgent,
+        byKind,
         byProject
       }
     }
