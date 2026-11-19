@@ -68,6 +68,7 @@ function setup(opts: {
   onLog?: OrchestratorDeps['onLog']
   readPlan?: () => Promise<string>
   pathExists?: (p: string) => Promise<boolean>
+  loadDefaultModel?: OrchestratorDeps['loadDefaultModel']
 }) {
   const db = new Database(':memory:')
   migrate(db)
@@ -96,6 +97,7 @@ function setup(opts: {
   const deps: OrchestratorDeps = {
     store,
     settings,
+    ...(opts.loadDefaultModel ? { loadDefaultModel: opts.loadDefaultModel } : {}),
     runner,
     gate,
     reviewRunner,
@@ -142,6 +144,20 @@ describe('orchestrator', () => {
       expect(t.durationMs).toBeGreaterThan(0)
       expect(t.commitSha).toBe(`end-${t.branch}`)
     }
+  })
+
+  it('uses the app model for tasks when the project inherits it', async () => {
+    const c = setup({ loadDefaultModel: async () => 'sonnet' })
+    const started = await c.orch.startRun(input)
+    if (!started.ok) throw new Error(started.error)
+    await started.finished
+    expect(c.runner.mock.calls[0]?.[0].settings.model).toBe('sonnet')
+
+    const overridden = setup({ cfg: { model: 'haiku' }, loadDefaultModel: async () => 'sonnet' })
+    const second = await overridden.orch.startRun(input)
+    if (!second.ok) throw new Error(second.error)
+    await second.finished
+    expect(overridden.runner.mock.calls[0]?.[0].settings.model).toBe('haiku')
   })
 
   it('never runs a task before its dependencies are done (one at a time)', async () => {

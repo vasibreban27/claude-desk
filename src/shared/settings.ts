@@ -21,6 +21,8 @@ export const PROTECTED_PATH_MAX_LENGTH = 200
 export const PROTECTED_PATHS_MAX_COUNT = 100
 
 export const MODEL_CHOICES = ['auto', 'haiku', 'sonnet', 'opus'] as const
+export const DELIVERY_CHOICES = ['manual', 'open-pr', 'merge-local'] as const
+export type DeliveryChoice = (typeof DELIVERY_CHOICES)[number]
 
 const protectedPathSchema = z
   .string()
@@ -83,6 +85,8 @@ export const projectSettingsSchema = z.object({
     .optional(),
   /** Added in Phase 7 without a version bump: workers may use the allow-listed run_command tool. */
   allowCommands: z.boolean().optional(),
+  /** What the app does after a successful pipeline run. */
+  delivery: z.enum(DELIVERY_CHOICES).optional(),
   reviewers: z
     .array(z.enum(REVIEWER_NAMES))
     .max(REVIEWERS_MAX_COUNT)
@@ -106,6 +110,8 @@ export function defaultSettings(): ProjectSettings {
     maxTurns: MAX_TURNS_RANGE.default,
     taskTimeoutMinutes: TIME_LIMIT_MINUTES_RANGE.default,
     autoFixRounds: AUTO_FIX_ROUNDS_RANGE.default,
+    allowCommands: false,
+    delivery: 'manual',
     reviewers: [...DEFAULT_REVIEWERS]
   }
 }
@@ -155,6 +161,8 @@ export function parseSettingsOrDefaults(raw: string | undefined): SettingsParseR
       maxTurns: limits.maxTurns,
       taskTimeoutMinutes: limits.timeCapMs / 60000,
       autoFixRounds: parsed.data.autoFixRounds ?? AUTO_FIX_ROUNDS_RANGE.default,
+      allowCommands: parsed.data.allowCommands ?? false,
+      delivery: parsed.data.delivery ?? 'manual',
       reviewers: parsed.data.reviewers ?? [...DEFAULT_REVIEWERS]
     },
     case: 'ok'

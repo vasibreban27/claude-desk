@@ -25,7 +25,7 @@ export interface SettingsStore {
 }
 
 /** Optional fields a caller may omit; the stored value is kept (closes the 4c review follow-up). */
-const OPTIONAL_KEYS = ['checks', 'maxParallel', 'maxTurns', 'taskTimeoutMinutes', 'autoFixRounds', 'reviewers'] as const
+const OPTIONAL_KEYS = ['checks', 'maxParallel', 'maxTurns', 'taskTimeoutMinutes', 'autoFixRounds', 'reviewers', 'allowCommands', 'delivery'] as const
 
 /** `db` is null when opening the database failed. */
 export function createSettingsStore(

@@ -35,6 +35,8 @@ describe('preload bridge', () => {
     expect(Object.keys(api).sort()).toEqual(
       [
         'activityHistory',
+        'appModelGet',
+        'appModelSet',
         'chatHistory',
         'chatSend',
         'listProjects',
@@ -44,6 +46,7 @@ describe('preload bridge', () => {
         'refreshProject',
         'settingsGet',
         'settingsSet',
+        'settingsSuggestions',
         'appInfo',
         'toolkitList',
         'createProject',

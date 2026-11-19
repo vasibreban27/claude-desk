@@ -323,7 +323,7 @@ describe('settings and app info', () => {
   })
 
   it('projects:create validates the payload, uses the stored root and never takes a path', async () => {
-    const appSettings = { getProjectsRoot: async () => null, setProjectsRoot: async () => undefined }
+    const appSettings = { getProjectsRoot: async () => null, setProjectsRoot: async () => undefined, getDefaultModel: async () => 'auto' as const, setDefaultModel: async () => undefined }
     const h = setup({ appSettings }).h
     expect(await h.createProject({ name: '../x' })).toEqual({ ok: false, error: 'invalid-name' })
     expect(await h.createProject({ name: 'ok-name', path: '/etc' })).toEqual({ ok: false, error: 'invalid-name' })
@@ -341,7 +341,7 @@ describe('settings and app info', () => {
       const set = vi.fn(() => ({ ok: true as const, settings: {} as never }))
       const h = setup({
         store,
-        appSettings: { getProjectsRoot: async () => root, setProjectsRoot: async () => undefined },
+        appSettings: { getProjectsRoot: async () => root, setProjectsRoot: async () => undefined, getDefaultModel: async () => 'auto' as const, setDefaultModel: async () => undefined },
         gitRun: async () => undefined,
         settingsStore: { get: () => ({ settings: {} as never, notice: null }), set } as never
       }).h
@@ -378,7 +378,7 @@ describe('settings and app info', () => {
 
   it('projects:root-pick stores the picked folder', async () => {
     let root: string | null = null
-    const appSettings = { getProjectsRoot: async () => root, setProjectsRoot: async (r: string) => { root = r } }
+    const appSettings = { getProjectsRoot: async () => root, setProjectsRoot: async (r: string) => { root = r }, getDefaultModel: async () => 'auto' as const, setDefaultModel: async () => undefined }
     const h = setup({ appSettings, pickFolder: async () => '/projects' }).h
     expect(await h.projectsRootPick()).toEqual({ root: '/projects' })
     expect(await h.projectsRootGet()).toEqual({ root: '/projects' })

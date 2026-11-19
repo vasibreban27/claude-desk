@@ -153,6 +153,15 @@ describe('SettingsStore', () => {
     })
   })
 
+  it('keeps command permission and delivery policy when an older form omits them', () => {
+    const store = createSettingsStore(db)
+    store.set(P, { ...custom(), allowCommands: true, delivery: 'open-pr' })
+    const { allowCommands, delivery, ...olderForm } = custom()
+    void [allowCommands, delivery]
+    expect(store.set(P, olderForm).ok).toBe(true)
+    expect(store.get(P).settings).toMatchObject({ allowCommands: true, delivery: 'open-pr' })
+  })
+
   it('omitting fields when the stored row is corrupt falls back to empty checks and does not throw', () => {
     db.prepare('INSERT INTO project_settings VALUES (?, ?, 0)').run(P, '{not json')
     const { autoFixRounds, reviewers, ...legacy } = custom()

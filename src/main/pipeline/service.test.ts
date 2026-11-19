@@ -4,11 +4,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppInfo } from '../../shared/ipc'
+import { defaultSettings } from '../../shared/settings'
 import { migrate } from '../db/migrations'
 import { createPipelineStore, type PipelineStore } from '../db/pipelineStore'
 import type { GitStatusResult } from '../git/status'
 import type { Orchestrator, RunSummary, StartRunResult } from './orchestrator'
-import { createPipelineService, type PipelineService } from './service'
+import { createPipelineService, type PipelineService, type PipelineServiceDeps } from './service'
 import type { WorktreeManager } from './worktrees'
 
 const PID = '11111111-1111-4111-8111-111111111111'
@@ -47,14 +48,15 @@ describe('pipeline service', () => {
   let toolkit: AppInfo['toolkit']
   let service: PipelineService
 
-  function build(overrides: { store?: PipelineStore } = {}): PipelineService {
+  function build(overrides: Partial<PipelineServiceDeps> = {}): PipelineService {
     return createPipelineService({
       projects: { get: async (id) => (id === PID ? { id, path: project, name: 'p', branch: 'main', dirty: false, addedAt: '' } : undefined) },
       store: overrides.store ?? store,
       orchestrator: { startRun, resumeRun, cancel },
       getToolkit: () => toolkit,
       readBranch: async () => branch,
-      createManager: () => ({ removeRun }) as unknown as WorktreeManager
+      createManager: () => ({ removeRun }) as unknown as WorktreeManager,
+      ...overrides
     })
   }
 
@@ -237,6 +239,50 @@ describe('pipeline service', () => {
     it('reports a git failure as start-failed', async () => {
       branch = { ok: false, error: 'not-a-git-repo' }
       expect(await service.start(PID, 'a.md')).toMatchObject({ ok: false, error: 'start-failed' })
+    })
+  })
+
+  describe('automatic delivery', () => {
+    beforeEach(() => writeFileSync(path.join(plans, 'a.md'), FLOW))
+
+    it('opens a PR after a successful run and uses the policy captured at start', async () => {
+      const policy = { value: 'open-pr' as 'open-pr' | 'manual' }
+      const openPullRequest = vi.fn(async () => ({ ok: true as const, url: 'https://example.test/pr/1', branch: 'review/r1', host: 'github' as const }))
+      const onDelivery = vi.fn()
+      service = build({
+        settings: { get: () => ({ settings: { ...defaultSettings(), delivery: policy.value }, notice: null }) },
+        openPullRequest,
+        onDelivery
+      })
+      const s = started('r1')
+      startRun.mockImplementationOnce(async () => { seedRun('r1'); return s.result })
+      expect(await service.start(PID, 'a.md')).toEqual({ ok: true, runId: 'r1' })
+      policy.value = 'manual'
+      store.setRunStatus('r1', 'done', 1)
+      s.finish()
+      await vi.waitFor(() => expect(openPullRequest).toHaveBeenCalledTimes(1))
+      expect(onDelivery).toHaveBeenCalledWith(PID, 'r1', expect.stringContaining('pull request opened'), 'ok')
+    })
+
+    it('merges locally after success and does not deliver a failed run', async () => {
+      const mergeRun = vi.fn(async () => ({ ok: true as const, head: 'abc123', planCommitted: true }))
+      service = build({
+        settings: { get: () => ({ settings: { ...defaultSettings(), delivery: 'merge-local' }, notice: null }) },
+        mergeRun
+      })
+      const failed = started('r1')
+      startRun.mockImplementationOnce(async () => { seedRun('r1'); return failed.result })
+      await service.start(PID, 'a.md')
+      store.setRunStatus('r1', 'failed', 1)
+      failed.finish({ status: 'failed' })
+      const done = started('r2')
+      startRun.mockImplementationOnce(async () => { seedRun('r2'); return done.result })
+      await vi.waitFor(async () => expect(await service.start(PID, 'a.md')).toEqual({ ok: true, runId: 'r2' }))
+      expect(mergeRun).not.toHaveBeenCalled()
+      store.setRunStatus('r2', 'done', 2)
+      done.finish()
+      await vi.waitFor(() => expect(mergeRun).toHaveBeenCalledTimes(1))
+      await vi.waitFor(() => expect(store.getRun('r2').ok).toBe(false))
     })
   })
 

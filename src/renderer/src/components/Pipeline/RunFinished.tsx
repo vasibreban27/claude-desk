@@ -50,6 +50,9 @@ export function RunFinished({
   const blocking = run.tasks.reduce((n, t) => n + (t.findings?.blocking ?? 0), 0)
   const minor = run.tasks.reduce((n, t) => n + (t.findings?.minor ?? 0), 0)
   const reviewed = run.tasks.some((t) => t.findings !== null)
+  const delivery = run.delivery
+  const autoBusy = delivery?.status === 'pending' || delivery?.status === 'working'
+  const autoPrUrl = delivery?.policy === 'open-pr' && delivery.status === 'done' ? delivery.url : undefined
 
   async function merge() {
     setWorking(true)
@@ -97,6 +100,10 @@ export function RunFinished({
         Your project folder still shows <code>{run.baseBranch}</code> without this work until you merge it here or
         through a pull request.
       </p>
+      {autoBusy && <p role="status">{delivery?.policy === 'open-pr' ? 'Opening the pull request automatically…' : 'Merging into the local project automatically…'}</p>}
+      {delivery?.status === 'failed' && <p role="alert" className="pipeline__error">Automatic action failed: {delivery.message ?? 'Try the action manually.'}</p>}
+      {delivery?.policy === 'merge-local' && delivery.status === 'done' && <p role="status">Merged into the local project.</p>}
+      {autoPrUrl && <p role="status">Opened pull request: <a href={autoPrUrl} onClick={(e) => { e.preventDefault(); void window.api.openUrl({ url: autoPrUrl }).catch(() => false) }}>{autoPrUrl}</a></p>}
       {pr && (
         <p role="status" aria-label="Pull request">
           Opened {prWord} from <code>{pr.branch}</code>:{' '}
@@ -116,12 +123,12 @@ export function RunFinished({
           {error}
         </p>
       )}
-      {confirming === null && (
+      {confirming === null && !autoBusy && !(delivery?.policy === 'merge-local' && delivery.status === 'done') && (
         <div className="pipeline__actions">
           <button type="button" className="pipeline__btn pipeline__btn--primary" onClick={() => setConfirming('merge')}>
             Merge into {run.baseBranch}
           </button>
-          {!pr && (
+          {!pr && !autoPrUrl && (
             <button type="button" className="pipeline__btn" onClick={() => setConfirming('pr')}>
               Open pull request
             </button>

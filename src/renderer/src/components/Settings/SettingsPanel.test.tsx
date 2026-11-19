@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { defaultSettings, type AppInfo, type DeskApi, type ProjectSettings } from '@shared/ipc'
 import { Workspace } from '../Workspace'
@@ -15,6 +15,10 @@ let api: {
   settingsGet: ReturnType<typeof vi.fn>
   settingsSet: ReturnType<typeof vi.fn>
   appInfo: ReturnType<typeof vi.fn>
+  appModelGet: ReturnType<typeof vi.fn>
+  appModelSet: ReturnType<typeof vi.fn>
+  projectsRootGet: ReturnType<typeof vi.fn>
+  settingsSuggestions: ReturnType<typeof vi.fn>
 }
 
 beforeEach(() => {
@@ -25,7 +29,11 @@ beforeEach(() => {
       settings,
       sessionReset: false
     })),
-    appInfo: vi.fn().mockResolvedValue(INFO)
+    appInfo: vi.fn().mockResolvedValue(INFO),
+    appModelGet: vi.fn().mockResolvedValue({ model: 'auto' }),
+    appModelSet: vi.fn().mockImplementation(async ({ model }) => ({ ok: true, model })),
+    projectsRootGet: vi.fn().mockResolvedValue({ root: null }),
+    settingsSuggestions: vi.fn().mockResolvedValue([])
   }
   window.api = api as unknown as DeskApi
 })
@@ -37,6 +45,37 @@ afterEach(() => {
 })
 
 describe('SettingsPanel', () => {
+  it('saves the app default model separately from the project model', async () => {
+    render(<SettingsPanel projectId={P1} />)
+    const app = await screen.findByRole('region', { name: 'App' })
+    fireEvent.change(within(app).getByLabelText('Default model'), { target: { value: 'sonnet' } })
+    fireEvent.click(within(app).getByRole('button', { name: 'Save default model' }))
+    await waitFor(() => expect(api.appModelSet).toHaveBeenCalledWith({ model: 'sonnet' }))
+    expect(api.settingsSet).not.toHaveBeenCalled()
+  })
+
+  it('offers a detected Maven check and saves it only after the user adds it', async () => {
+    api.settingsSuggestions.mockResolvedValue([{ name: 'maven-test', executable: 'mvn', args: ['-q', 'test'], timeoutMs: 120000 }])
+    render(<SettingsPanel projectId={P1} />)
+    const command = await screen.findByText('mvn -q test')
+    expect(api.settingsSet).not.toHaveBeenCalled()
+    fireEvent.click(within(command.parentElement as HTMLElement).getByRole('button', { name: 'Add check' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(api.settingsSet).toHaveBeenCalledWith(expect.objectContaining({
+      settings: expect.objectContaining({ checks: [{ name: 'maven-test', executable: 'mvn', args: ['-q', 'test'], timeoutMs: 120000 }] })
+    })))
+  })
+
+  it('saves the chosen automatic delivery policy', async () => {
+    render(<SettingsPanel projectId={P1} />)
+    await screen.findByLabelText('Model')
+    fireEvent.change(screen.getByLabelText('After a successful run'), { target: { value: 'merge-local' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(api.settingsSet).toHaveBeenCalledWith(expect.objectContaining({
+      settings: expect.objectContaining({ delivery: 'merge-local' })
+    })))
+  })
+
   it('loads and shows model, paths, both toggles off, hints and Save', async () => {
     render(<SettingsPanel projectId={P1} />)
     expect(screen.getByText(/Loading settings/)).toBeInTheDocument()
@@ -44,7 +83,7 @@ describe('SettingsPanel', () => {
     expect(api.settingsGet).toHaveBeenCalledWith({ projectId: P1 })
     expect(model).toHaveValue('auto')
     expect(Array.from((model as HTMLSelectElement).options).map((o) => o.text)).toEqual([
-      'Auto',
+      'Use app default',
       'Haiku',
       'Sonnet',
       'Opus'

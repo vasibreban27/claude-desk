@@ -68,6 +68,9 @@ beforeEach(() => {
     }),
     settingsGet: vi.fn().mockResolvedValue({ ok: true, settings: defaultSettings(), notice: null }),
     settingsSet: vi.fn(),
+    settingsSuggestions: vi.fn().mockResolvedValue([]),
+    appModelGet: vi.fn().mockResolvedValue({ model: 'auto' }),
+    appModelSet: vi.fn(),
     pipelinePlans: vi.fn().mockResolvedValue({ ok: true, plans: [] }),
     pipelineStart: vi.fn(),
     pipelineStatus: vi.fn().mockResolvedValue({ ok: true, run: null }),
@@ -231,11 +234,11 @@ describe('workspace', () => {
     await screen.findByRole('tablist', { name: 'Workspace views' })
   }
 
-  it('shows the empty state and no tabs when no project is selected', async () => {
+  it('shows app settings without a selected project', async () => {
     render(<App />)
     await screen.findByText('alpha')
     expect(screen.queryByRole('tablist')).toBeNull()
-    expect(screen.getByText('Nothing running yet')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'App' })).toBeInTheDocument()
   })
 
   it('shows Activity selected by default with a labelled tabpanel', async () => {
