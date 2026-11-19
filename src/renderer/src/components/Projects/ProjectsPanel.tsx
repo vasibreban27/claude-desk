@@ -5,14 +5,63 @@ import { ThemeToggle } from '../ThemeToggle'
 import { RemoveProjectDialog } from './RemoveProjectDialog'
 import './projects.css'
 
-export function ProjectsPanel({ projects, selectedId, loading, loadError, addError, adding, add, select, remove }: UseProjects) {
+export interface ProjectsPanelProps extends UseProjects {
+  /** Switches the chat to "describe a new project"; without it Add project only opens a folder. */
+  onNewProject?: () => void
+}
+
+export function ProjectsPanel({
+  projects,
+  selectedId,
+  loading,
+  loadError,
+  addError,
+  adding,
+  add,
+  select,
+  remove,
+  onNewProject
+}: ProjectsPanelProps) {
   const [removing, setRemoving] = useState<Project | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
   return (
     <div className="projects">
       <div className="projects__body">
-        <button type="button" className="projects__add" onClick={() => void add()} disabled={adding}>
-          Add project
-        </button>
+        <div className="projects__add-wrap">
+          <button
+            type="button"
+            className="projects__add"
+            onClick={() => (onNewProject ? setMenuOpen((o) => !o) : void add())}
+            disabled={adding}
+            {...(onNewProject ? { 'aria-expanded': menuOpen, 'aria-controls': 'projects-add-menu' } : {})}
+          >
+            Add project
+          </button>
+          {onNewProject && menuOpen && (
+            <div id="projects-add-menu" className="projects__add-menu" role="group" aria-label="Add project">
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false)
+                  onNewProject()
+                }}
+              >
+                New project
+                <span>Describe it in the chat</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false)
+                  void add()
+                }}
+              >
+                Existing folder…
+                <span>Open a git repository</span>
+              </button>
+            </div>
+          )}
+        </div>
         {addError && (
           <p role="alert" className="projects__error">
             {addError}
@@ -26,7 +75,7 @@ export function ProjectsPanel({ projects, selectedId, loading, loadError, addErr
         )}
         {!loading && !loadError && projects.length === 0 && (
           <div className="projects__empty">
-            <p className="projects__empty-title">No projects yet. Add a git folder to start.</p>
+            <p className="projects__empty-title">No projects yet. Create one or add a git folder to start.</p>
             <p className="projects__empty-hint">Projects you add appear here with their branch and status.</p>
           </div>
         )}

@@ -1,13 +1,13 @@
-import { useMemo, useState } from 'react'
-import { ASSISTANT_PROJECT_ID, type ChatMode, type Project } from '@shared/ipc'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ChatMode } from '@shared/ipc'
 import { Layout } from './components/Layout'
 import { ProjectsPanel } from './components/Projects'
 import { ChatPanel } from './components/Chat'
-import { ProposalCard } from './components/Chat/ProposalCard'
 import { PlanReadyCard } from './components/Chat/PlanReadyCard'
 import { Workspace, WORKSPACE_TAB_KEY } from './components/Workspace'
 import { useProjects } from './hooks/useProjects'
-import { useChat } from './hooks/useChat'
+import { useChat, type UseChat } from './hooks/useChat'
+import { useStartProject } from './hooks/useStartProject'
 import './styles/layout.css'
 
 function showPipelineTab(): void {
@@ -18,18 +18,26 @@ function showPipelineTab(): void {
   }
 }
 
+const NEW_PROJECT_PLACEHOLDER = 'Describe a new app: a project is created and the planner (Opus) starts'
+const NEW_PROJECT_EMPTY =
+  'Start a new project: describe what to build. The app creates a git project for it in your projects folder and the toolkit planner (flow:plan, Opus) takes it from there. To work on an existing repository, use Add project.'
+const PLAN_PLACEHOLDER = 'Describe what to build: the toolkit planner (Opus) writes the plan'
+
 export function App() {
   const projects = useProjects()
-  const [assistant, setAssistant] = useState(false)
-  /** Chat or Plan (toolkit planner) per project; Plan is the default for projects the assistant created. */
+  /** The user chose "New project": the chat starts a project even while one is selected. */
+  const [newChat, setNewChat] = useState(false)
+  /** Chat or Plan (toolkit planner) per project; Plan is the default for projects started from the chat. */
   const [modes, setModes] = useState<Record<string, ChatMode>>({})
   /** Bumped to remount the workspace on the Pipeline tab. */
   const [workspaceKey, setWorkspaceKey] = useState(0)
-  const [handOffError, setHandOffError] = useState<string | null>(null)
+  const starter = useStartProject()
+  /** The first message of a project started from the chat, sent once its chat has loaded. */
+  const firstMessage = useRef<{ projectId: string; text: string } | null>(null)
 
-  const projectId = assistant ? ASSISTANT_PROJECT_ID : projects.selectedId
-  const mode: ChatMode = !assistant && projects.selectedId !== null ? (modes[projects.selectedId] ?? 'chat') : 'chat'
-  const chat = useChat(projectId, mode)
+  const selected = newChat ? null : projects.selectedId
+  const mode: ChatMode = selected !== null ? (modes[selected] ?? 'chat') : 'chat'
+  const chat = useChat(selected, mode)
   // "build it" in the Plan chat started a run: show it.
   const startedRun = chat.pipelineStarted?.runId ?? null
   const [shownRun, setShownRun] = useState<string | null>(null)
@@ -40,56 +48,66 @@ export function App() {
     setWorkspaceKey((k) => k + 1)
   }
 
+  // Send the first message through the project's own chat, after its (empty) history loaded, so it shows normally.
+  const { loading: chatLoading, send: chatSend } = chat
+  useEffect(() => {
+    const first = firstMessage.current
+    if (first === null || first.projectId !== selected || chatLoading) return
+    firstMessage.current = null
+    void chatSend(first.text)
+  }, [selected, chatLoading, chatSend])
+
   const projectNames = useMemo(
     () => Object.fromEntries(projects.projects.map((p) => [p.id, p.name])),
     [projects.projects]
   )
 
-  /** The project exists: continue with the planner in that project, starting from the assistant's brief. */
-  async function handOff(project: Project, brief: string) {
-    chat.clearProposal()
-    setHandOffError(null)
+  /** No project: the first message creates one named from it and opens it in Plan mode with that message. */
+  async function startProject(text: string) {
+    const project = await starter.start(text)
+    if (project === null) return
+    firstMessage.current = { projectId: project.id, text }
     setModes((m) => ({ ...m, [project.id]: 'plan' }))
     projects.adopt(project)
-    setAssistant(false)
-    try {
-      const r = await window.api.chatSend({ projectId: project.id, text: brief, mode: 'plan' })
-      if (!r.ok) setHandOffError('Project created, but the planner did not start. Send your request again in Plan mode.')
-    } catch {
-      setHandOffError('Project created, but the planner did not start. Send your request again in Plan mode.')
-    }
+    setNewChat(false)
   }
 
-  const selected = !assistant ? projects.selectedId : null
-  const placeholder = assistant
-    ? 'Describe the app to build: the assistant creates the project'
-    : mode === 'plan'
-      ? 'Plan with the toolkit planner (Opus)'
-      : undefined
+  const startChat: UseChat = {
+    messages: [],
+    loading: false,
+    busy: starter.starting,
+    error: starter.error,
+    send: startProject,
+    planReady: null,
+    clearPlanReady: () => undefined,
+    pipelineStarted: null
+  }
 
   return (
     <Layout
       projects={
-        <>
-          <button type="button" className="projects__assistant" aria-pressed={assistant} onClick={() => setAssistant(true)}>
-            Assistant
-          </button>
-          <ProjectsPanel
-            {...projects}
-            selectedId={selected}
-            select={async (id) => {
-              setAssistant(false)
-              await projects.select(id)
-            }}
-          />
-        </>
+        <ProjectsPanel
+          {...projects}
+          selectedId={selected}
+          onNewProject={() => setNewChat(true)}
+          add={async () => {
+            setNewChat(false)
+            await projects.add()
+          }}
+          select={async (id) => {
+            setNewChat(false)
+            await projects.select(id)
+          }}
+        />
       }
       workspace={
         selected !== null ? <Workspace key={`${selected}:${workspaceKey}`} projectId={selected} projectNames={projectNames} /> : undefined
       }
       chat={
-        <>
-          {selected !== null && (
+        selected === null ? (
+          <ChatPanel {...startChat} hasProject placeholder={NEW_PROJECT_PLACEHOLDER} emptyText={NEW_PROJECT_EMPTY} />
+        ) : (
+          <>
             <div className="chat__modes" role="radiogroup" aria-label="Chat mode">
               {(['chat', 'plan'] as const).map((m) => (
                 <button
@@ -103,35 +121,22 @@ export function App() {
                 </button>
               ))}
             </div>
-          )}
-          {handOffError && (
-            <p role="alert" className="chat__handoff-error">
-              {handOffError}
-            </p>
-          )}
-          {assistant && chat.proposal && (
-            <ProposalCard
-              name={chat.proposal.name}
-              brief={chat.proposal.brief}
-              onCreated={(p) => void handOff(p, chat.proposal?.brief ?? '')}
-              onCancel={chat.clearProposal}
-            />
-          )}
-          {selected !== null && chat.planReady && (
-            <PlanReadyCard
-              projectId={selected}
-              planFile={chat.planReady.planFile}
-              problem={chat.planReady.problem}
-              onStarted={() => {
-                chat.clearPlanReady()
-                showPipelineTab()
-                setWorkspaceKey((k) => k + 1)
-              }}
-              onDismiss={chat.clearPlanReady}
-            />
-          )}
-          <ChatPanel {...chat} hasProject={projectId !== null} {...(placeholder ? { placeholder } : {})} />
-        </>
+            {chat.planReady && (
+              <PlanReadyCard
+                projectId={selected}
+                planFile={chat.planReady.planFile}
+                problem={chat.planReady.problem}
+                onStarted={() => {
+                  chat.clearPlanReady()
+                  showPipelineTab()
+                  setWorkspaceKey((k) => k + 1)
+                }}
+                onDismiss={chat.clearPlanReady}
+              />
+            )}
+            <ChatPanel {...chat} hasProject {...(mode === 'plan' ? { placeholder: PLAN_PLACEHOLDER } : {})} />
+          </>
+        )
       }
     />
   )

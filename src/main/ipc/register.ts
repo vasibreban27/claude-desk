@@ -1,8 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type WebContents } from 'electron'
-import { mkdirSync } from 'node:fs'
 import { stat } from 'node:fs/promises'
-import { join } from 'node:path'
-import { ASSISTANT_PROJECT_ID, IPC, type ActivityEvent, type ChatEvent, type PipelineEvent, type PipelineLogEntry } from '../../shared/ipc'
+import { IPC, type ActivityEvent, type ChatEvent, type PipelineEvent, type PipelineLogEntry } from '../../shared/ipc'
 import { ChatService } from '../chat/service'
 import { sdkRunner } from '../chat/runner'
 import { readGitStatus } from '../git/status'
@@ -88,12 +86,6 @@ function buildPipeline(
  * Registers all IPC handlers. Chat events are routed only to the window that last
  * sent a message for that project. Returns a function that removes the handlers.
  */
-function assistantDir(): string {
-  const dir = join(app.getPath('userData'), 'assistant')
-  mkdirSync(dir, { recursive: true })
-  return dir
-}
-
 export function registerIpc(
   store: ProjectStore,
   runStore?: RunStore,
@@ -104,7 +96,7 @@ export function registerIpc(
   const targets = new Map<string, EventTarget>()
 
   const chat = new ChatService({
-    resolveProjectPath: (id) => (id === ASSISTANT_PROJECT_ID ? assistantDir() : knownPaths.get(id)),
+    resolveProjectPath: (id) => knownPaths.get(id),
     runner: sdkRunner,
     emit: (event: ChatEvent) => {
       const target = targets.get(event.projectId)

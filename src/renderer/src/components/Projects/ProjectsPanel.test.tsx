@@ -54,6 +54,32 @@ describe('ProjectsPanel', () => {
     expect(screen.getByRole('button', { name: 'Add project' })).toBeEnabled()
   })
 
+  it('Add project opens a folder directly when the app offers no new-project chat', () => {
+    const p = props()
+    render(<ProjectsPanel {...p} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Add project' }))
+    expect(p.add).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('group', { name: 'Add project' })).toBeNull()
+  })
+
+  it('Add project offers a new project in chat or an existing folder', () => {
+    const p = props()
+    const onNewProject = vi.fn()
+    render(<ProjectsPanel {...p} onNewProject={onNewProject} />)
+    const add = screen.getByRole('button', { name: 'Add project' })
+    expect(add).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(add)
+    expect(add).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(screen.getByRole('button', { name: /^New project/ }))
+    expect(onNewProject).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('group', { name: 'Add project' })).toBeNull()
+
+    fireEvent.click(add)
+    fireEvent.click(screen.getByRole('button', { name: /^Existing folder/ }))
+    expect(p.add).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('group', { name: 'Add project' })).toBeNull()
+  })
+
   it('shows loading and hides the empty state', () => {
     render(<ProjectsPanel {...props({ loading: true })} />)
     expect(screen.getByText('Loading projects…')).toBeInTheDocument()

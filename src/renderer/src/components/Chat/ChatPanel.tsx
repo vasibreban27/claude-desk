@@ -7,11 +7,13 @@ import './chat.css'
 
 export interface ChatPanelProps extends UseChat {
   hasProject: boolean
-  /** Overrides the input placeholder (assistant and plan mode). */
+  /** Overrides the input placeholder (plan mode, new project). */
   placeholder?: string
+  /** Overrides the text shown when there are no messages yet. */
+  emptyText?: string
 }
 
-export function ChatPanel({ hasProject, messages, loading, busy, error, send, placeholder }: ChatPanelProps) {
+export function ChatPanel({ hasProject, messages, loading, busy, error, send, placeholder, emptyText }: ChatPanelProps) {
   const [draft, setDraft] = useState('')
   const [pinned, setPinned] = useState(true)
   const listRef = useRef<HTMLDivElement>(null)
@@ -97,7 +99,7 @@ export function ChatPanel({ hasProject, messages, loading, busy, error, send, pl
             <p className="chat__empty">Add or select a project to start chatting with Claude.</p>
           )}
           {!loading && hasProject && messages.length === 0 && (
-            <p className="chat__empty">No messages yet. Ask Claude about this project.</p>
+            <p className="chat__empty">{emptyText ?? 'No messages yet. Ask Claude about this project.'}</p>
           )}
           {messages.map((m) => {
             const author = m.role === 'user' ? 'You' : 'Claude'
