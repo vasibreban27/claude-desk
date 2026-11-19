@@ -67,7 +67,7 @@ describe('migration 4: task review columns', () => {
        VALUES ('r1', 'T1', 'one', 'w', 1, 'running')`
     ).run()
 
-    expect(migrate(db)).toBe(MIGRATIONS.length - 3)
+    expect(migrate(db, MIGRATIONS.slice(0, 4))).toBe(1)
     expect(db.pragma('user_version', { simple: true })).toBe(4)
     const cols = db.prepare('PRAGMA table_info(pipeline_tasks)').all() as {
       name: string
@@ -80,7 +80,29 @@ describe('migration 4: task review columns', () => {
       db.prepare('SELECT title, status, stage, fix_rounds, findings_json FROM pipeline_tasks').get()
     ).toEqual({ title: 'one', status: 'running', stage: null, fix_rounds: null, findings_json: null })
 
-    expect(migrate(db)).toBe(0)
+    expect(migrate(db, MIGRATIONS.slice(0, 4))).toBe(0)
     expect(db.pragma('user_version', { simple: true })).toBe(4)
+  })
+})
+
+describe('migration 5: run kind', () => {
+  it('adds kind with chat as the default for existing runs and rejects unknown kinds', () => {
+    const db = new Database(':memory:')
+    migrate(db, MIGRATIONS.slice(0, 4))
+    db.prepare(
+      `INSERT INTO runs (id, project_id, started_at, day, status, cost_usd, duration_ms,
+         input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
+       VALUES ('old', 'p', 1, '2026-01-01', 'success', 0.1, 10, 1, 1, 0, 0)`
+    ).run()
+
+    expect(migrate(db)).toBe(1)
+    expect(db.pragma('user_version', { simple: true })).toBe(5)
+    expect(db.prepare('SELECT kind FROM runs WHERE id = ?').get('old')).toEqual({ kind: 'chat' })
+    const insert = db.prepare(
+      `INSERT INTO runs (id, project_id, started_at, day, status, input_tokens, output_tokens,
+         cache_read_tokens, cache_creation_tokens, kind) VALUES (?, 'p', 1, '2026-01-01', 'success', 0, 0, 0, 0, ?)`
+    )
+    expect(() => insert.run('w', 'worker')).not.toThrow()
+    expect(() => insert.run('x', 'other')).toThrow()
   })
 })

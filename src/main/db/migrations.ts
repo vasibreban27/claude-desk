@@ -89,6 +89,9 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE pipeline_tasks ADD COLUMN stage TEXT CHECK (stage IN ('checks', 'review', 'fixing'));
   ALTER TABLE pipeline_tasks ADD COLUMN fix_rounds INTEGER CHECK (fix_rounds >= 0);
   ALTER TABLE pipeline_tasks ADD COLUMN findings_json TEXT;
+  `,
+  `
+  ALTER TABLE runs ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat' CHECK (kind IN ('chat', 'plan', 'worker', 'reviewer'));
   `
 ]
 
