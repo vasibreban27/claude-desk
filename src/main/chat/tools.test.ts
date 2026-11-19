@@ -804,6 +804,18 @@ describe('guardPreToolUse git tools (T8)', () => {
     expect(gp(policy({ allowGitRead: true }), tool, {})).toEqual({})
   })
 
+  it('allows exactly the MCP tools the user ticked, and ToolSearch to load them', () => {
+    const p = policy({ extraTools: ['mcp__linear__list_issues'] })
+    expect(gp(p, 'mcp__linear__list_issues', { team: 'x' })).toEqual({})
+    expect(isDenied(gp(p, 'mcp__linear__create_issue', {}))).toBe(true)
+    expect(isDenied(gp(p, 'mcp__other__list_issues', {}))).toBe(true)
+    expect(gp(p, 'ToolSearch', { query: 'linear' })).toEqual({})
+    expect(isDenied(gp(policy(), 'mcp__linear__list_issues', {}))).toBe(true)
+    // A malformed list denies everything.
+    expect(isDenied(gp({ ...policy(), extraTools: ['Bash'] }, 'Read', { file_path: 'a.ts' }))).toBe(true)
+    expect(isDenied(gp({ ...policy(), extraTools: 'mcp__x__y' }, 'Read', { file_path: 'a.ts' }))).toBe(true)
+  })
+
   it('allows ToolSearch in plan mode, where it loads the deferred start_pipeline tool', () => {
     expect(gp(policy({ allowPipelineStart: true }), 'ToolSearch', { query: 'select:mcp__desk__start_pipeline' })).toEqual({})
     expect(isDenied(gp(policy({ allowPipelineStart: true }), 'ToolSearch', 'start'))).toBe(true)

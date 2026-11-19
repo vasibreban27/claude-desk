@@ -19,6 +19,8 @@ export interface ToolPolicy {
   allowPlanWrites: boolean
   /** Plan mode: allows the app's in-process start_pipeline tool (and `ToolSearch`, which loads it). */
   allowPipelineStart?: boolean
+  /** Exact `mcp__<server>__<tool>` names of the user's MCP connections that are allowed (and `ToolSearch`). */
+  extraTools?: readonly string[]
 }
 
 const DEFAULT_POLICY: ToolPolicy = {
@@ -34,6 +36,8 @@ function readPolicy(policy: unknown): ToolPolicy | null {
   const p = policy as Record<string, unknown>
   if (!Array.isArray(p['protectedPatterns']) || !p['protectedPatterns'].every((x) => typeof x === 'string')) return null
   if (typeof p['allowGitRead'] !== 'boolean' || typeof p['allowPlanWrites'] !== 'boolean') return null
+  const extra = p['extraTools']
+  if (extra !== undefined && (!Array.isArray(extra) || !extra.every((x) => typeof x === 'string' && x.startsWith('mcp__')))) return null
   const patterns = p['protectedPatterns'] as string[]
   // An unusable list (invalid entry) must never loosen anything: use the defaults, here and in the matcher.
   const usable = createProtectedMatcher(patterns, { realRoot: path.resolve('.') }).usable
@@ -41,7 +45,8 @@ function readPolicy(policy: unknown): ToolPolicy | null {
     protectedPatterns: usable ? patterns : DEFAULT_PROTECTED_PATHS,
     allowGitRead: p['allowGitRead'],
     allowPlanWrites: p['allowPlanWrites'],
-    allowPipelineStart: p['allowPipelineStart'] === true
+    allowPipelineStart: p['allowPipelineStart'] === true,
+    ...(Array.isArray(extra) && extra.length > 0 ? { extraTools: [...(extra as string[])] } : {})
   }
 }
 
@@ -95,7 +100,8 @@ export function isToolAllowed(name: string, policy?: ToolPolicy): boolean {
   if (policy.allowPipelineStart === true && name === START_PIPELINE_TOOL) return true
   // The SDK defers in-process MCP tools: ToolSearch loads their schemas. It only makes tools visible; using any of
   // them still goes through this guard.
-  if (name === 'ToolSearch') return policy.allowGitRead || policy.allowPipelineStart === true
+  if (policy.extraTools?.includes(name) === true) return true
+  if (name === 'ToolSearch') return policy.allowGitRead || policy.allowPipelineStart === true || (policy.extraTools?.length ?? 0) > 0
   return policy.allowPlanWrites && name === 'Write'
 }
 

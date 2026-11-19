@@ -4,11 +4,13 @@ import { projectSettingsSchema, type ProjectSettings } from './settings'
 import type { PipelineStage, TaskFindingsView } from './review'
 import type { ToolkitListResult } from './toolkit'
 import type { PipelineLogEntry, PipelineLogRequest, PipelineLogResult } from './pipelineLog'
+import type { McpDeleteResult, McpIdRequest, McpListResult, McpSaveRequest, McpSaveResult, McpTestResult } from './mcp'
 
 export * from './settings'
 export * from './review'
 export * from './toolkit'
 export * from './pipelineLog'
+export * from './mcp'
 
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
 
@@ -43,6 +45,10 @@ export const IPC = {
   pipelineMerge: 'pipeline:merge',
   pipelinePr: 'pipeline:pr',
   openUrl: 'app:open-url',
+  mcpList: 'mcp:list',
+  mcpSave: 'mcp:save',
+  mcpDelete: 'mcp:delete',
+  mcpTest: 'mcp:test',
   pipelineEvent: 'pipeline:event',
   pipelineLog: 'pipeline:log',
   pipelineLogEvent: 'pipeline:log-event'
@@ -449,6 +455,11 @@ export interface DeskApi {
   pipelineMerge(req: PipelineMergeRequest): Promise<PipelineMergeResult>
   pipelinePr(req: PipelinePrRequest): Promise<PipelinePrResult>
   openUrl(req: OpenUrlRequest): Promise<boolean>
+  mcpList(): Promise<McpListResult>
+  mcpSave(req: McpSaveRequest): Promise<McpSaveResult>
+  mcpDelete(req: McpIdRequest): Promise<McpDeleteResult>
+  /** Connects to the server, lists its tools and stores them; nothing is sent to the model. */
+  mcpTest(req: McpIdRequest): Promise<McpTestResult>
   /** Subscribe to pipeline change signals; returns an unsubscribe function. */
   onPipelineEvent(listener: (event: PipelineEvent) => void): () => void
   /** The latest run's live log lines for a project (in memory, capped). */

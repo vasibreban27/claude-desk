@@ -15,6 +15,8 @@ import { GIT_ALLOWED_TOOLS, GIT_SERVER_NAME, createGitMcpServer } from './gitToo
 import { createProtectedMatcher } from './protectedPaths'
 import { frameProjectContext, loadProjectContext } from './projectContext'
 import { DESK_SERVER, START_PIPELINE_TOOL, createDeskServer, type StartPipeline } from './deskTools'
+import { RESERVED_MCP_NAMES } from '../../shared/mcp'
+import type { ChatMcp } from '../mcp/servers'
 import { ALLOWED_TOOLS, guardPreToolUse, isDenied, type ToolPolicy } from './tools'
 
 /** What the chat service needs from the SDK; the renderer never sees raw SDK objects. */
@@ -36,6 +38,8 @@ export interface RunnerArgs {
   appendPrompt?: string
   /** Plan mode: offers the in-process start_pipeline tool, which starts the app's pipeline. */
   startPipeline?: StartPipeline
+  /** The user's MCP connections for Chat and Plan: their servers and the exact tool names they allowed. */
+  mcp?: ChatMcp
 }
 
 /** The per-turn guard policy derived from the settings. */
@@ -197,12 +201,23 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
   else args.signal?.addEventListener('abort', () => abortController.abort(), { once: true })
   const queue = createQueue<RunnerItem>()
   const settings = args.settings ?? defaultSettings()
-  const policy: ToolPolicy = { ...policyFromSettings(settings), ...(args.startPipeline ? { allowPipelineStart: true } : {}) }
+  // A user connection may never replace one of the app's own servers.
+  const userServers = Object.fromEntries(
+    Object.entries(args.mcp?.servers ?? {}).filter(([name]) => !RESERVED_MCP_NAMES.includes(name))
+  )
+  const userTools = (args.mcp?.allowedTools ?? []).filter((t) => Object.keys(userServers).some((s) => t.startsWith(`mcp__${s}__`)))
+  const policy: ToolPolicy = {
+    ...policyFromSettings(settings),
+    ...(args.startPipeline ? { allowPipelineStart: true } : {}),
+    ...(userTools.length > 0 ? { extraTools: userTools } : {})
+  }
   const allowedTools: string[] = [...ALLOWED_TOOLS]
   if (settings.allowPlanWrites) allowedTools.push('Write')
   if (settings.allowGitRead) allowedTools.push(...GIT_ALLOWED_TOOLS)
   if (args.startPipeline) allowedTools.push(START_PIPELINE_TOOL)
+  allowedTools.push(...userTools)
   const mcpServers: NonNullable<Options['mcpServers']> = {
+    ...userServers,
     ...(settings.allowGitRead
       ? { [GIT_SERVER_NAME]: createGitMcpServer({ cwd: args.cwd, isProtected: createGitIsProtected(args.cwd, settings.protectedPaths) }) }
       : {}),

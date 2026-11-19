@@ -34,6 +34,10 @@ const api: DeskApi = {
   pipelineMerge: (req) => ipcRenderer.invoke(IPC.pipelineMerge, req),
   pipelinePr: (req) => ipcRenderer.invoke(IPC.pipelinePr, req),
   openUrl: (req) => ipcRenderer.invoke(IPC.openUrl, req),
+  mcpList: () => ipcRenderer.invoke(IPC.mcpList),
+  mcpSave: (req) => ipcRenderer.invoke(IPC.mcpSave, req),
+  mcpDelete: (req) => ipcRenderer.invoke(IPC.mcpDelete, req),
+  mcpTest: (req) => ipcRenderer.invoke(IPC.mcpTest, req),
   pipelineLog: (req) => ipcRenderer.invoke(IPC.pipelineLog, req),
   onPipelineLog: (listener) => {
     const wrapped = (_e: IpcRendererEvent, entry: PipelineLogEntry): void => listener(entry)

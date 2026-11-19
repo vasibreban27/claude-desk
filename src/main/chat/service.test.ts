@@ -143,6 +143,33 @@ describe('ChatService', () => {
     await end
     expect(runner.mock.calls[1]?.[0].resume).toBe('s-1')
   })
+
+  it('passes the MCP connections each turn, and none when there are no allowed tools or loading fails', async () => {
+    const runner = vi.fn(streamOf([{ kind: 'text', text: 't' }]))
+    const mcp = { servers: { linear: { type: 'http' as const, url: 'https://x', headers: {} } }, allowedTools: ['mcp__linear__list_issues'] }
+    const loads = [Promise.resolve(mcp), Promise.resolve({ servers: {}, allowedTools: [] }), Promise.reject(new Error('x'))]
+    const events: ChatEvent[] = []
+    let done: () => void = () => {}
+    const service = new ChatService({
+      resolveProjectPath: (id) => paths[id],
+      runner,
+      emit: (e) => {
+        events.push(e)
+        if (e.type === 'done' || e.type === 'error') done()
+      },
+      loadConfig: () => ({ ok: true, config: { toolkitPath: TOOLKIT } }),
+      loadMcp: () => loads.shift() ?? Promise.resolve(mcp)
+    })
+    for (let i = 0; i < 3; i++) {
+      const end = new Promise<void>((r) => (done = r))
+      service.send('p1', `m${i}`, i === 0 ? 'chat' : 'plan')
+      await end
+    }
+    expect(runner.mock.calls[0]?.[0].mcp).toEqual(mcp)
+    expect(runner.mock.calls[1]?.[0].mcp).toBeUndefined()
+    expect(runner.mock.calls[2]?.[0].mcp).toBeUndefined()
+    expect(events.filter((e) => e.type === 'error')).toEqual([])
+  })
 })
 
 const usageItem = (isError = false): RunnerItem => ({

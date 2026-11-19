@@ -10,6 +10,7 @@ import {
   type LimitValues
 } from './LimitsEditor'
 import { ReviewEditor, reviewFromSettings, validateReview, type ReviewValues } from './ReviewEditor'
+import { McpConnections } from './McpConnections'
 import './settings.css'
 
 const MODEL_LABELS: Record<ModelChoice, string> = {
@@ -238,6 +239,7 @@ export function SettingsPanel({ projectId }: SettingsPanelProps) {
           onEdit={s.clearSaveState}
         />
       ) : null}
+      <McpConnections />
       <section className="settings__section" aria-label="App">
         <h3 className="settings__heading">App</h3>
         {s.appInfoError ? (
