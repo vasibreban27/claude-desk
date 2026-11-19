@@ -182,6 +182,7 @@ describe('usage:summary', () => {
     totals: { runs: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
     byDay: [],
     byAgent: [],
+    byKind: [],
     byProject: []
   })
 
@@ -220,6 +221,40 @@ describe('usage:summary', () => {
     })
     expect(await h.usageSummary({ projectId: null, days: 30 })).toEqual(empty(30))
     expect(console.error).toHaveBeenCalledWith('usage:summary failed:', 'TypeError')
+  })
+})
+
+describe('usage:plan handler', () => {
+  const ok = { ok: true as const, usage: { status: 'unavailable' as const, limits: [], extraUsage: null, text: null, fetchedAt: '2026-01-01T00:00:00.000Z' } }
+
+  it('passes the refresh flag to the reader and returns its result', async () => {
+    const get = vi.fn(async () => ok)
+    const { h } = setup({ planUsage: { get } })
+    expect(await h.usagePlan({ refresh: true })).toEqual(ok)
+    expect(get).toHaveBeenCalledWith(true)
+  })
+
+  it('rejects invalid payloads and works without a reader', async () => {
+    const get = vi.fn(async () => ok)
+    const { h } = setup({ planUsage: { get } })
+    for (const bad of [null, {}, { refresh: 'yes' }, { refresh: true, x: 1 }]) {
+      expect(await h.usagePlan(bad)).toMatchObject({ ok: false, error: 'failed' })
+    }
+    expect(get).not.toHaveBeenCalled()
+    expect(await setup().h.usagePlan({ refresh: false })).toMatchObject({ ok: false, error: 'failed' })
+  })
+
+  it('maps a throwing reader to failed and logs only the error name', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const { h } = setup({
+      planUsage: {
+        get: async () => {
+          throw new TypeError('token secret')
+        }
+      }
+    })
+    expect(await h.usagePlan({ refresh: false })).toEqual({ ok: false, error: 'failed' })
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain('secret')
   })
 })
 

@@ -5,12 +5,14 @@ import type { PipelineStage, TaskFindingsView } from './review'
 import type { ToolkitListResult } from './toolkit'
 import type { PipelineLogEntry, PipelineLogRequest, PipelineLogResult } from './pipelineLog'
 import type { McpDeleteResult, McpIdRequest, McpListResult, McpSaveRequest, McpSaveResult, McpTestResult } from './mcp'
+import type { PlanUsageRequest, PlanUsageResult } from './usage'
 
 export * from './settings'
 export * from './review'
 export * from './toolkit'
 export * from './pipelineLog'
 export * from './mcp'
+export * from './usage'
 
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
 
@@ -28,6 +30,7 @@ export const IPC = {
   activityEvent: 'activity:event',
   activityHistory: 'activity:history',
   usageSummary: 'usage:summary',
+  usagePlan: 'usage:plan',
   settingsGet: 'settings:get',
   settingsSet: 'settings:set',
   appInfo: 'app:info',
@@ -349,6 +352,8 @@ export interface UsageByDay {
   costUsd: number
   inputTokens: number
   outputTokens: number
+  /** Input + output + cache read + cache write. */
+  tokens: number
 }
 
 export interface UsageByAgent {
@@ -359,6 +364,18 @@ export interface UsageByAgent {
   cacheReadTokens: number
   cacheCreationTokens: number
   approximate: boolean
+}
+
+/** What a recorded session was: a chat turn, a planner turn, a pipeline worker or a reviewer. */
+export const USAGE_KINDS = ['chat', 'plan', 'worker', 'reviewer'] as const
+export type UsageKind = (typeof USAGE_KINDS)[number]
+
+export interface UsageByKind {
+  kind: UsageKind
+  runs: number
+  costUsd: number
+  /** Input + output + cache read + cache write. */
+  tokens: number
 }
 
 export interface UsageByProject {
@@ -374,6 +391,8 @@ export interface UsageSummary {
   totals: UsageTotals
   byDay: UsageByDay[]
   byAgent: UsageByAgent[]
+  /** Only kinds with at least one run, largest first. */
+  byKind: UsageByKind[]
   /** Empty when the request named a project. */
   byProject: UsageByProject[]
 }
@@ -438,6 +457,7 @@ export interface DeskApi {
   onChatEvent(listener: (event: ChatEvent) => void): () => void
   activityHistory(req: ActivityHistoryRequest): Promise<ActivityHistoryResult>
   usageSummary(req: UsageSummaryRequest): Promise<UsageSummaryResult>
+  usagePlan(req: PlanUsageRequest): Promise<PlanUsageResult>
   settingsGet(req: SettingsGetRequest): Promise<SettingsGetResult>
   settingsSet(req: SettingsSetRequest): Promise<SettingsSetResult>
   appInfo(): Promise<AppInfoResult>

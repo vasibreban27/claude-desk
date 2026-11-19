@@ -65,6 +65,7 @@ describe('IPC channels', () => {
         'activity:event',
         'activity:history',
         'usage:summary',
+        'usage:plan',
         'settings:get',
         'settings:set',
         'app:info',

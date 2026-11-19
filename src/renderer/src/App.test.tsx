@@ -31,6 +31,7 @@ const SUMMARY: UsageSummary = {
   totals: { runs: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
   byDay: [],
   byAgent: [],
+  byKind: [],
   byProject: []
 }
 let api: { [K in keyof DeskApi]: ReturnType<typeof vi.fn> }
@@ -60,6 +61,7 @@ beforeEach(() => {
     mcpSave: vi.fn(),
     mcpDelete: vi.fn(),
     mcpTest: vi.fn(),
+    usagePlan: vi.fn().mockResolvedValue({ ok: false, error: 'failed' }),
     onActivityEvent: vi.fn().mockImplementation((l: (e: ActivityEvent) => void) => {
       emitActivity = l
       return () => undefined
