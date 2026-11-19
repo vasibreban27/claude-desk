@@ -37,22 +37,34 @@ export function PlanReadyCard({ projectId, planFile, problem, onStarted, onDismi
   }
 
   return (
-    <div className="chat__proposal" role="group" aria-label="Plan ready">
-      <p>
-        Plan written: <strong>docs/plans/{planFile}</strong>
-      </p>
-      {problem ? (
-        <p role="alert">The pipeline cannot run it yet ({problem}). Ask the planner to fix the plan.</p>
-      ) : (
-        <p>Start the pipeline: workers build each task on its own branch, then checks and reviewers run.</p>
-      )}
-      {error && <p role="alert">{error}</p>}
-      <button type="button" onClick={() => void start()} disabled={working || problem !== null}>
-        Start pipeline
-      </button>{' '}
-      <button type="button" onClick={onDismiss} disabled={working}>
-        Dismiss
-      </button>
+    <div className={problem ? 'plan-card plan-card--problem' : 'plan-card'} role="group" aria-label="Plan ready">
+      <div className="plan-card__body">
+        <p className="plan-card__title">
+          {problem ? 'Plan needs a fix' : 'Plan ready'} <code>docs/plans/{planFile}</code>
+        </p>
+        {problem ? (
+          <p role="alert" className="plan-card__text">
+            The pipeline cannot run it yet: {problem}. Ask the planner to fix it.
+          </p>
+        ) : (
+          <p className="plan-card__text">
+            Workers build each task on its own branch, then checks and reviewers run. Your current branch is not changed.
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="plan-card__error">
+            {error}
+          </p>
+        )}
+      </div>
+      <div className="plan-card__actions">
+        <button type="button" className="plan-card__start" onClick={() => void start()} disabled={working || problem !== null}>
+          {working ? 'Starting…' : 'Start pipeline'}
+        </button>
+        <button type="button" className="plan-card__dismiss" onClick={onDismiss} disabled={working}>
+          Dismiss
+        </button>
+      </div>
     </div>
   )
 }

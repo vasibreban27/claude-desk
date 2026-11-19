@@ -121,20 +121,26 @@ export function App() {
                 </button>
               ))}
             </div>
-            {chat.planReady && (
-              <PlanReadyCard
-                projectId={selected}
-                planFile={chat.planReady.planFile}
-                problem={chat.planReady.problem}
-                onStarted={() => {
-                  chat.clearPlanReady()
-                  showPipelineTab()
-                  setWorkspaceKey((k) => k + 1)
-                }}
-                onDismiss={chat.clearPlanReady}
-              />
-            )}
-            <ChatPanel {...chat} hasProject {...(mode === 'plan' ? { placeholder: PLAN_PLACEHOLDER } : {})} />
+            <ChatPanel
+              {...chat}
+              hasProject
+              {...(mode === 'plan' ? { placeholder: PLAN_PLACEHOLDER } : {})}
+              aboveInput={
+                chat.planReady ? (
+                  <PlanReadyCard
+                    projectId={selected}
+                    planFile={chat.planReady.planFile}
+                    problem={chat.planReady.problem}
+                    onStarted={() => {
+                      chat.clearPlanReady()
+                      showPipelineTab()
+                      setWorkspaceKey((k) => k + 1)
+                    }}
+                    onDismiss={chat.clearPlanReady}
+                  />
+                ) : undefined
+              }
+            />
           </>
         )
       }

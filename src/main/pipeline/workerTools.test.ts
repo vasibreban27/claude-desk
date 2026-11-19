@@ -141,6 +141,61 @@ describe('run_check', () => {
   })
 })
 
+describe('Maven on Windows', () => {
+  const mvn: CheckConfig = { name: 'test', executable: 'mvn', args: ['-q', 'test'], timeoutMs: 5000 }
+  const home = 'C:\\tools\\apache-maven-3.9.16'
+  const cmd = `${home}\\bin\\mvn.cmd`
+  const java = 'C:\\jdk-21\\bin\\java.exe'
+  const env = { PATH: `C:\\Windows;${home}\\bin;C:\\jdk-21\\bin` }
+  const listDir = (d: string) => (d === `${home}\\boot` ? ['plexus-classworlds.license', 'plexus-classworlds-2.11.0.jar'] : [])
+
+  it('runs java with the classworlds launcher instead of mvn.cmd (no shell)', () => {
+    const r = resolveCheckCommand(mvn, ['-Dtest=X'], {
+      platform: 'win32',
+      env,
+      cwd: 'C:\\w\\t1',
+      listDir,
+      fileExists: (p) => p === cmd || p === java
+    })
+    expect(r).toEqual({
+      file: java,
+      args: [
+        '-classpath',
+        `${home}\\boot\\plexus-classworlds-2.11.0.jar`,
+        `-Dclassworlds.conf=${home}\\bin\\m2.conf`,
+        `-Dmaven.home=${home}`,
+        '-Dmaven.multiModuleProjectDirectory=C:\\w\\t1',
+        'org.codehaus.plexus.classworlds.launcher.Launcher',
+        '-q',
+        'test',
+        '-Dtest=X'
+      ]
+    })
+    expect(JSON.stringify(r).toLowerCase()).not.toContain('cmd.exe')
+  })
+
+  it('prefers JAVA_HOME and explains what is missing', () => {
+    const jh = 'C:\\jdk-17\\bin\\java.exe'
+    const viaHome = resolveCheckCommand(mvn, [], {
+      platform: 'win32',
+      env: { ...env, JAVA_HOME: 'C:\\jdk-17' },
+      listDir,
+      fileExists: (p) => p === cmd || p === java || p === jh
+    })
+    expect('file' in viaHome && viaHome.file).toBe(jh)
+    expect(resolveCheckCommand(mvn, [], { platform: 'win32', env, listDir, fileExists: () => false })).toEqual({
+      error: expect.stringContaining('Maven was not found')
+    })
+    expect(resolveCheckCommand(mvn, [], { platform: 'win32', env, listDir: () => [], fileExists: (p) => p === cmd })).toEqual({
+      error: expect.stringContaining('boot jar')
+    })
+    expect(resolveCheckCommand(mvn, [], { platform: 'win32', env, listDir, fileExists: (p) => p === cmd })).toEqual({
+      error: expect.stringContaining('java was not found')
+    })
+    expect(resolveCheckCommand(mvn, [], { platform: 'linux', env })).toEqual({ file: 'mvn', args: ['-q', 'test'] })
+  })
+})
+
 describe('npm on Windows', () => {
   const npm: CheckConfig = { name: 'unit', executable: 'npm', args: ['test'], timeoutMs: 5000 }
   const nodePath = 'C:\\Program Files\\nodejs\\node.exe'

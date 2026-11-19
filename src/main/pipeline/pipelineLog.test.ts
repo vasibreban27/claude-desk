@@ -53,9 +53,29 @@ describe('tool lines', () => {
     logToolUse((l) => lines.push(l), pre('Write', { file_path: `${WT}\\app\\db.py`, content: 'secret body' }), {}, WT)
     logToolUse((l) => lines.push(l), pre('Bash', { command: 'rm -rf /' }), DENY, WT)
     logToolUse((l) => lines.push(l), pre('mcp__work__run_command', { command: 'npm' }), {}, WT)
-    expect(lines.map((l) => l.text)).toEqual(['Write app/db.py', 'Bash', 'Bash denied'])
-    expect(lines[2]?.tone).toBe('denied')
+    expect(lines.map((l) => l.text)).toEqual(['Write app/db.py', 'Bash denied: no'])
+    expect(lines[1]?.tone).toBe('denied')
     expect(lines.some((l) => l.text.includes('secret body'))).toBe(false)
+  })
+
+  it('shows what Grep and Glob search for, and one denial line with the target and the guard reason', () => {
+    const lines: { text: string; tone?: string }[] = []
+    logToolUse((l) => lines.push(l), pre('Grep', { pattern: 'class Ticket', path: WT }), {}, WT)
+    logToolUse((l) => lines.push(l), pre('Glob', { pattern: '**/*.java', path: `${WT}\\src` }), {}, WT)
+    const outside = {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse' as const,
+        permissionDecision: 'deny' as const,
+        permissionDecisionReason: `Path is outside the worktree ${WT}.`
+      }
+    }
+    logToolUse((l) => lines.push(l), pre('Glob', { pattern: '*', path: 'C:/Users/me/.m2' }), outside, WT)
+    expect(lines.map((l) => l.text)).toEqual([
+      'Grep class Ticket',
+      'Glob **/*.java in src',
+      'Glob * in C:/Users/me/.m2 denied: Path is outside the worktree .'
+    ])
+    expect(lines[2]?.tone).toBe('denied')
   })
 
   it('never throws and ignores unknown input', () => {

@@ -48,8 +48,18 @@ export function buildFixPrompt(fix: FixInput): string {
 }
 
 /** The user prompt of a worker session: title, acceptance criteria, Owns and contract. */
-export function buildWorkerPrompt(task: PlanTask): string {
+/** A plan file name the prompt may show (the parser and service already validate it; this is a second guard). */
+const SAFE_PLAN_FILE = /^[a-z0-9][a-z0-9._-]{0,98}\.md$/i
+
+export function buildWorkerPrompt(task: PlanTask, planFile?: string): string {
   const lines: string[] = [`Task ${task.id}: ${cap(task.title, MAX_ITEM)}`, '']
+  if (planFile !== undefined && SAFE_PLAN_FILE.test(planFile)) {
+    lines.push(
+      `Plan: docs/plans/${planFile} in your worktree (a read-only copy; never edit or commit it). Read only its shared ` +
+        `sections (Goal, Architecture, Data model, Contract) and your own task block ${task.id}, as needed.`
+    )
+    lines.push('')
+  }
   lines.push('Owns (the only files you may write; a path ending in / is a directory prefix):')
   for (const p of task.owns) lines.push(`- ${cap(p, MAX_ITEM)}`)
   lines.push('')

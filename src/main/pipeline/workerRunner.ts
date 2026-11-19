@@ -43,6 +43,8 @@ export interface WorkerRunArgs {
   signal?: AbortSignal
   /** A fix round: the failing output or findings, and the session to resume (null/absent: fresh session). */
   fix?: FixInput & { sessionId?: string | null }
+  /** The plan file name; a copy is at docs/plans/<planFile> in the worktree. */
+  planFile?: string
   /** Live log: one short line per tool call (relative paths, no contents). */
   onLog?: LogSink
   /** Token usage of each session's result message (for the Usage tab). */
@@ -118,10 +120,10 @@ export function buildWorkerOptions(
   // Resume keeps the conversation, so the fix text alone is enough; a fresh session also needs the task.
   const prompt =
     args.fix === undefined
-      ? buildWorkerPrompt(args.task)
+      ? buildWorkerPrompt(args.task, args.planFile)
       : resumeId !== null
         ? buildFixPrompt(args.fix)
-        : `${buildWorkerPrompt(args.task)}\n\n${buildFixPrompt(args.fix)}`
+        : `${buildWorkerPrompt(args.task, args.planFile)}\n\n${buildFixPrompt(args.fix)}`
   return {
     options,
     prompt,

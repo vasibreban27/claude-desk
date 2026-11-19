@@ -147,7 +147,11 @@ describe('ChatService', () => {
   it('passes the MCP connections each turn, and none when there are no allowed tools or loading fails', async () => {
     const runner = vi.fn(streamOf([{ kind: 'text', text: 't' }]))
     const mcp = { servers: { linear: { type: 'http' as const, url: 'https://x', headers: {} } }, allowedTools: ['mcp__linear__list_issues'] }
-    const loads = [Promise.resolve(mcp), Promise.resolve({ servers: {}, allowedTools: [] }), Promise.reject(new Error('x'))]
+    const loads = [
+      () => Promise.resolve(mcp),
+      () => Promise.resolve({ servers: {}, allowedTools: [] }),
+      () => Promise.reject(new Error('x'))
+    ]
     const events: ChatEvent[] = []
     let done: () => void = () => {}
     const service = new ChatService({
@@ -158,7 +162,7 @@ describe('ChatService', () => {
         if (e.type === 'done' || e.type === 'error') done()
       },
       loadConfig: () => ({ ok: true, config: { toolkitPath: TOOLKIT } }),
-      loadMcp: () => loads.shift() ?? Promise.resolve(mcp)
+      loadMcp: () => loads.shift()?.() ?? Promise.resolve(mcp)
     })
     for (let i = 0; i < 3; i++) {
       const end = new Promise<void>((r) => (done = r))

@@ -1244,3 +1244,44 @@ describe('orchestrator resume', () => {
     expect(await resume()).toEqual({ ok: false, error: 'a done run cannot be resumed' })
   })
 })
+
+describe('orchestrator plan copy', () => {
+  it('copies the plan into each task worktree, names it to the worker and never counts it as uncommitted work', async () => {
+    const copied: [string, string, string][] = []
+    const c = setup({
+      uncommitted: async () => ['docs/plans/plan.md'],
+      cfg: { checks: [{ name: 'unit', executable: 'node', args: ['--test'], timeoutMs: 5000 }] }
+    })
+    const orch = createOrchestrator({
+      ...c.deps,
+      copyPlan: async (wt, file, text) => {
+        copied.push([wt, file, text])
+      }
+    })
+    const r = await orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    const s = await r.finished
+    expect(s.status).toBe('done')
+    expect(copied.map(([wt, file]) => [wt, file])).toEqual([
+      ['/wt/T1', 'plan.md'],
+      ['/wt/T2', 'plan.md'],
+      ['/wt/T3', 'plan.md'],
+      ['/wt/T4', 'plan.md']
+    ])
+    expect(copied[0]?.[2]).toBe(PLAN)
+    expect(c.runner.mock.calls.every((call) => call[0].planFile === 'plan.md')).toBe(true)
+  })
+
+  it('keeps going when the copy fails', async () => {
+    const c = setup({})
+    const orch = createOrchestrator({
+      ...c.deps,
+      copyPlan: async () => {
+        throw new Error('disk full')
+      }
+    })
+    const r = await orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    expect((await r.finished).status).toBe('done')
+  })
+})

@@ -108,16 +108,37 @@ export function toolLine(draft: ActivityDraft | null, worktree: string): LogLine
   return null
 }
 
-/** Logs a PreToolUse hook call: the started tool, and the denial when the guard said no. Never throws. */
+/** Grep/Glob: the pattern and, when it is not the whole worktree, the folder searched. Null for other tools. */
+export function searchLine(input: unknown, worktree: string): string | null {
+  if (typeof input !== 'object' || input === null) return null
+  const rec = input as Record<string, unknown>
+  const tool = typeof rec['tool_name'] === 'string' ? rec['tool_name'] : ''
+  if (tool !== 'Grep' && tool !== 'Glob') return null
+  const ti = (typeof rec['tool_input'] === 'object' && rec['tool_input'] !== null ? rec['tool_input'] : {}) as Record<string, unknown>
+  const pattern = typeof ti['pattern'] === 'string' ? ti['pattern'].slice(0, 120) : ''
+  const where = typeof ti['path'] === 'string' ? relativize(ti['path'], worktree) : ''
+  return `${tool}${pattern ? ` ${pattern}` : ''}${where ? ` in ${where}` : ''}`
+}
+
+/**
+ * Logs a PreToolUse hook call: the started tool, or, when the guard said no, one line with the tool, its target and
+ * the guard's reason. Never throws.
+ */
 export function logToolUse(sink: LogSink | undefined, input: unknown, out: GuardOutput, worktree: string): void {
   if (!sink) return
   try {
     const started = toolLine(mapHookInput(input), worktree)
-    if (started) sink(started)
+    const search = searchLine(input, worktree)
+    const what = search ?? started?.text ?? null
     if (isDenied(out)) {
-      const denied = toolLine(mapDeniedToolUse(input), worktree)
-      if (denied) sink(denied)
+      const reason = out.hookSpecificOutput?.permissionDecisionReason
+      const tool = toolLine(mapDeniedToolUse(input), worktree)
+      if (what === null && tool === null) return
+      const why = typeof reason === 'string' && reason.trim() !== '' ? `: ${relativize(reason, worktree)}` : ''
+      sink({ text: `${what ?? tool?.text ?? 'tool'} denied${why}`, tone: 'denied' })
+      return
     }
+    if (what !== null) sink(started && search === null ? started : { text: what })
   } catch {
     // tracking must never break a run
   }

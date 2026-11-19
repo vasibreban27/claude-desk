@@ -59,7 +59,7 @@ export async function runChecksGate(args: ChecksGateArgs, deps: ChecksGateDeps =
   for (const check of args.checks) {
     if (args.signal?.aborted) return { status: 'failed', check: check.name, output: 'cancelled' }
     try {
-      const command = resolveCheckCommand(check, [], { platform: deps.platform, env: deps.env, fileExists: deps.fileExists })
+      const command = resolveCheckCommand(check, [], { platform: deps.platform, env: deps.env, fileExists: deps.fileExists, cwd: args.worktree })
       if ('error' in command) return { status: 'failed', check: check.name, output: tail(command.error, GATE_OUTPUT_CAP) }
       try {
         await exec(command.file, command.args, {

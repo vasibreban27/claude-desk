@@ -102,7 +102,7 @@ export function isToolAllowed(name: string, policy?: ToolPolicy): boolean {
   // them still goes through this guard.
   if (policy.extraTools?.includes(name) === true) return true
   if (name === 'ToolSearch') return policy.allowGitRead || policy.allowPipelineStart === true || (policy.extraTools?.length ?? 0) > 0
-  return policy.allowPlanWrites && name === 'Write'
+  return policy.allowPlanWrites && (name === 'Write' || name === 'Edit')
 }
 
 const PROTECTED_MESSAGE = 'This path is protected by the project settings and cannot be accessed.'
@@ -580,20 +580,36 @@ function dirState(p: string): boolean | 'missing' {
 
 const WIN_DEVICE_SLUG = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i
 
-function checkPlanWrite(input: Record<string, unknown>, ctx: ProbeCtx): string | null {
+const PLAN_TOOL_KEYS: Record<'Write' | 'Edit', readonly string[]> = {
+  Write: ['file_path', 'content'],
+  Edit: ['file_path', 'old_string', 'new_string', 'replace_all']
+}
+
+/**
+ * `Write` may create or overwrite docs/plans/<slug>.md; `Edit` may change an existing one (the planner fixes its own
+ * plan). Same path, link and protected-path rules for both.
+ */
+function checkPlanWrite(input: Record<string, unknown>, ctx: ProbeCtx, tool: 'Write' | 'Edit' = 'Write'): string | null {
   const toolInput = input['tool_input']
   if (typeof toolInput !== 'object' || toolInput === null || Array.isArray(toolInput)) return 'Malformed tool request.'
   const args = toolInput as Record<string, unknown>
-  const shape = 'Tool "Write" may only create or overwrite docs/plans/<slug>.md (lowercase letters, digits and single hyphens).'
+  const shape =
+    tool === 'Write'
+      ? 'Tool "Write" may only create or overwrite docs/plans/<slug>.md (lowercase letters, digits and single hyphens).'
+      : 'Tool "Edit" may only change an existing docs/plans/<slug>.md (lowercase letters, digits and single hyphens).'
   for (const key of Object.keys(args)) {
-    if (key !== 'file_path' && key !== 'content') return `Tool "Write" input "${key}" is not allowed in chat.`
+    if (!PLAN_TOOL_KEYS[tool].includes(key)) return `Tool "${tool}" input "${key}" is not allowed in chat.`
   }
   const filePath = args['file_path']
-  const content = args['content']
+  const content = tool === 'Write' ? args['content'] : args['new_string']
   if (typeof filePath !== 'string' || typeof content !== 'string') return 'Malformed tool request.'
+  if (tool === 'Edit') {
+    if (typeof args['old_string'] !== 'string') return 'Malformed tool request.'
+    if (args['replace_all'] !== undefined && typeof args['replace_all'] !== 'boolean') return 'Malformed tool request.'
+  }
   if (filePath.length > MAX_PATH_LENGTH) return shape
   if (Buffer.byteLength(content, 'utf8') > PLAN_CONTENT_CAP) {
-    return `Tool "Write" content is too large: at most ${PLAN_CONTENT_CAP} bytes.`
+    return `Tool "${tool}" content is too large: at most ${PLAN_CONTENT_CAP} bytes.`
   }
   const slug = planSlug(filePath, ctx.cwd)
   if (slug === null) return shape
@@ -610,21 +626,23 @@ function checkPlanWrite(input: Record<string, unknown>, ctx: ProbeCtx): string |
       const real = walkDown(ctx, realCwd, t)
       return real === null ? shape : isProtectedReal(ctx, real) ? PROTECTED_MESSAGE : null
     }
-    const linkMessage = 'Tool "Write": docs and docs/plans must be real folders inside the project, not links.'
+    const linkMessage = `Tool "${tool}": docs and docs/plans must be real folders inside the project, not links.`
+    const missingPlan = 'Tool "Edit" may only change a plan that exists; use Write to create it.'
     const docsState = dirState(docs)
     if (docsState === false) return linkMessage
-    if (docsState === 'missing') return protectedOrNull(target)
+    if (docsState === 'missing') return tool === 'Edit' ? missingPlan : protectedOrNull(target)
     const plansState = dirState(plans)
     if (plansState === false) return linkMessage
-    if (plansState === 'missing') return protectedOrNull(target)
+    if (plansState === 'missing') return tool === 'Edit' ? missingPlan : protectedOrNull(target)
     let stats: ReturnType<typeof lstatSync> | null = null
     try {
       stats = lstatSync(target)
     } catch (error) {
       if (!isMissingError(error)) throw error
     }
+    if (stats === null && tool === 'Edit') return missingPlan
     if (stats !== null && (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1)) {
-      return 'Tool "Write" may only overwrite a regular file that is not a link and has no other hard links.'
+      return `Tool "${tool}" may only change a regular file that is not a link and has no other hard links.`
     }
     return protectedOrNull(target)
   } catch (error) {
@@ -795,7 +813,7 @@ export function guardPreToolUse(input: unknown, cwd: string, policy?: ToolPolicy
     if (!isToolAllowed(name, resolved)) {
       return deny(`Tool "${name}" is not allowed in chat: only read-only tools, agents and skills are.`)
     }
-    const needsCwd = PATH_TOOLS.has(name) || GIT_TOOL_SET.has(name) || name === 'Write'
+    const needsCwd = PATH_TOOLS.has(name) || GIT_TOOL_SET.has(name) || name === 'Write' || name === 'Edit'
     if (needsCwd && (typeof cwd !== 'string' || cwd.length === 0)) return deny('Malformed tool request.')
     if (PATH_TOOLS.has(name)) {
       const pathCtx = newCtx(cwd, resolved.protectedPatterns)
@@ -807,8 +825,8 @@ export function guardPreToolUse(input: unknown, cwd: string, policy?: ToolPolicy
       const reason = checkGitTool(name, rec, newCtx(cwd, resolved.protectedPatterns))
       if (reason !== null) return deny(reason)
     }
-    if (name === 'Write') {
-      const reason = checkPlanWrite(rec, newCtx(cwd, resolved.protectedPatterns))
+    if (name === 'Write' || name === 'Edit') {
+      const reason = checkPlanWrite(rec, newCtx(cwd, resolved.protectedPatterns), name)
       if (reason !== null) return deny(reason)
     }
     if (name === 'ToolSearch') {

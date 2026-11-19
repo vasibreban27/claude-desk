@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { access, readFile } from 'node:fs/promises'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 import type { PipelineStore, RunStatus, TaskPatch } from '../db/pipelineStore'
 import type { SettingsStore } from '../db/settingsStore'
 import {
@@ -118,6 +119,8 @@ export interface OrchestratorDeps {
   readPlan?: (planPath: string) => Promise<string>
   /** Records the token usage of each worker and reviewer session (the Usage tab). Best effort. */
   recordUsage?: (input: PipelineUsageInput) => void
+  /** Writes the plan into a task worktree at docs/plans/<file> (default: the file system, never overwriting). */
+  copyPlan?: (worktree: string, file: string, text: string) => Promise<void>
   /** True when the run's integration worktree is still on disk (resume needs it). */
   pathExists?: (p: string) => Promise<boolean>
   /** Live, short progress lines for the Activity tab. Never throws into a run. */
@@ -170,6 +173,17 @@ const defaultPathExists = async (p: string): Promise<boolean> => {
   }
 }
 
+/** Creates docs/plans/<file> in the worktree unless it exists (a committed plan is left as it is). */
+const defaultCopyPlan = async (worktree: string, file: string, text: string): Promise<void> => {
+  const dir = path.join(worktree, 'docs', 'plans')
+  await mkdir(dir, { recursive: true })
+  try {
+    await writeFile(path.join(dir, file), text, { encoding: 'utf8', flag: 'wx' })
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
+  }
+}
+
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex')
 
 const defaultReadPlan = async (planPath: string): Promise<string> => {
@@ -196,6 +210,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const uncommitted = deps.uncommitted ?? (deps.resolveRef ? async () => [] : defaultUncommitted)
   const readPlan = deps.readPlan ?? defaultReadPlan
   const pathExists = deps.pathExists ?? defaultPathExists
+  // Like `uncommitted`: tests that fake git (resolveRef) also get no file system writes.
+  const copyPlan = deps.copyPlan ?? (deps.resolveRef ? async () => undefined : defaultCopyPlan)
   const newRunId = deps.newRunId ?? randomUUID
   const active = new Map<string, ActiveRun>()
   const runGate = deps.gate ?? ((args: ChecksGateArgs) => runChecksGate(args))
@@ -223,9 +239,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       projectId: string
       /** Resume: tasks already merged into the run branch; they are not run again. */
       alreadyDone?: ReadonlySet<string>
+      /** The plan, copied into each task worktree so the worker can read its shared sections (Goal, Data model, ...). */
+      planCopy?: { file: string; text: string }
     }
   ): Promise<RunSummary> {
     const { manager, handle } = ctx
+    /** docs/plans/<file>, relative and with forward slashes, as git status reports it. */
+    const planRel = ctx.planCopy ? `docs/plans/${ctx.planCopy.file}` : null
     const alreadyDone = ctx.alreadyDone ?? new Set<string>()
     const say = (taskId: string | null, role: PipelineLogRole, text: string, tone: PipelineLogTone = 'info', agent: string | null = null): void => {
       try {
@@ -331,6 +351,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return
         }
         update(task.id, { branch: wt.branch, worktreePath: wt.path })
+        // The plan is usually not committed yet, so the new worktree does not have it: copy it in (never committed).
+        if (ctx.planCopy) {
+          try {
+            await copyPlan(wt.path, ctx.planCopy.file, ctx.planCopy.text)
+          } catch (e) {
+            log(`pipeline: could not copy the plan into ${task.id}: ${short(e)}`)
+          }
+        }
         const startSha = await resolveRef(wt.path, wt.branch)
         const signal = handle.controller.signal
 
@@ -341,6 +369,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           settings,
           pluginPath: deps.pluginPath,
           signal,
+          ...(ctx.planCopy ? { planFile: ctx.planCopy.file } : {}),
           onLog: (l) => say(task.id, 'worker', l.text, l.tone, task.worker),
           onUsage: usageSink('worker', task.worker)
         })
@@ -364,7 +393,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           fixRounds = 0
           for (;;) {
             // Checks and reviewers must see exactly the commit that gets merged: leftover work goes back to the worker.
-            const left = await uncommitted(wt.path)
+            // The plan copy is a reference for the worker, not work to commit.
+            const left = (await uncommitted(wt.path)).filter((p) => p.replace(/\\/g, '/') !== planRel)
             if (abortReason !== null) return
             let fix: { kind: 'checks' | 'review'; text: string } | null = null
             let failReason = ''
@@ -652,7 +682,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
         const handle: ActiveRun = { cancelled: false, controller: new AbortController() }
         active.set(runId, handle)
-        const finished = execute(runId, parsed.plan, { settings: loaded.settings, manager, handle, projectId: input.projectId })
+        const finished = execute(runId, parsed.plan, {
+          settings: loaded.settings,
+          manager,
+          handle,
+          projectId: input.projectId,
+          planCopy: { file: path.basename(input.planPath), text }
+        })
           .catch((e): RunSummary => ({ runId, status: 'failed', reason: short(e), tasks: [] }))
           .finally(() => active.delete(runId))
         return { ok: true, runId, finished }
@@ -730,7 +766,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           manager,
           handle,
           projectId: input.projectId,
-          alreadyDone
+          alreadyDone,
+          planCopy: { file: path.basename(run.value.planPath), text }
         })
           .catch((e): RunSummary => ({ runId, status: 'failed', reason: short(e), tasks: [] }))
           .finally(() => active.delete(runId))

@@ -22,7 +22,7 @@ export interface PipelineLogEntry {
   tone: PipelineLogTone
 }
 
-export const PIPELINE_LOG_TEXT_MAX = 200
+export const PIPELINE_LOG_TEXT_MAX = 500
 export const PIPELINE_LOG_MAX = 500
 
 export const pipelineLogRequestSchema = z.object({ projectId: z.uuid() })
