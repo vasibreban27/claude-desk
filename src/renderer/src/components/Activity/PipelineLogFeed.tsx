@@ -6,9 +6,10 @@ function time(iso: string): string {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour12: false })
 }
 
-function who(e: PipelineLogEntry): string {
-  if (e.role === 'reviewer') return e.agent ?? 'reviewer'
-  return e.role
+/** The subagent that wrote the line (node-developer, reviewer, ...); fix rounds are marked. */
+export function who(e: Pick<PipelineLogEntry, 'role' | 'agent'>): string {
+  const name = e.agent ?? e.role
+  return e.role === 'fix' ? `${name} (fix)` : name
 }
 
 /** Short live lines of the latest pipeline run, filterable by task, newest at the bottom. */

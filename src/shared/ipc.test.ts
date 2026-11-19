@@ -79,6 +79,8 @@ describe('IPC channels', () => {
         'pipeline:cancel',
         'pipeline:discard',
         'pipeline:merge',
+        'pipeline:pr',
+        'app:open-url',
         'pipeline:log',
         'pipeline:log-event',
         'pipeline:event'

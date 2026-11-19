@@ -68,6 +68,8 @@ beforeEach(() => {
     pipelineCancel: vi.fn(),
     pipelineDiscard: vi.fn(),
     pipelineMerge: vi.fn(),
+    pipelinePr: vi.fn(),
+    openUrl: vi.fn(),
     pipelineLog: vi.fn().mockResolvedValue([]),
     onPipelineLog: vi.fn().mockReturnValue(() => undefined),
     onPipelineEvent: vi.fn().mockReturnValue(() => undefined),

@@ -43,6 +43,8 @@ export const IPC = {
   pipelineCancel: 'pipeline:cancel',
   pipelineDiscard: 'pipeline:discard',
   pipelineMerge: 'pipeline:merge',
+  pipelinePr: 'pipeline:pr',
+  openUrl: 'app:open-url',
   pipelineEvent: 'pipeline:event',
   pipelineLog: 'pipeline:log',
   pipelineLogEvent: 'pipeline:log-event'
@@ -144,6 +146,30 @@ export const pipelineMergeRequestSchema = z.object({
   runId: z.string().min(1).max(100)
 })
 export type PipelineMergeRequest = z.infer<typeof pipelineMergeRequestSchema>
+
+/** Pushes a finished run's branch to origin and opens a PR (gh) / MR (glab) into the base branch. Nothing merges. */
+export const pipelinePrRequestSchema = pipelineMergeRequestSchema
+export type PipelinePrRequest = PipelineMergeRequest
+export type PipelinePrResult =
+  | { ok: true; url: string; branch: string; host: 'github' | 'gitlab' }
+  | {
+      ok: false
+      error:
+        | 'not-found'
+        | 'not-finished'
+        | 'no-remote'
+        | 'unsupported-host'
+        | 'no-cli'
+        | 'not-logged-in'
+        | 'base-not-on-remote'
+        | 'push-failed'
+        | 'pr-failed'
+      message?: string
+    }
+
+/** Opens an https URL in the default browser (for example a pull request just created). */
+export const openUrlRequestSchema = z.object({ url: z.url({ protocol: /^https$/ }).max(2000) })
+export type OpenUrlRequest = z.infer<typeof openUrlRequestSchema>
 export type PipelineMergeResult =
   | { ok: true; baseBranch: string; head: string; planCommitted: boolean; cleanedUp: boolean }
   | {
@@ -345,6 +371,7 @@ export type ChatEvent =
   | { projectId: string; turnId: string; type: 'done' }
   | { projectId: string; turnId: string; type: 'error'; message: string }
   | { projectId: string; turnId: string; type: 'plan-ready'; planFile: string; problem: string | null }
+  | { projectId: string; turnId: string; type: 'pipeline-started'; planFile: string; runId: string }
   | { projectId: string; turnId: string; type: 'proposal'; name: string; brief: string }
 
 /** A change signal; the renderer re-fetches pipeline:status. */
@@ -410,6 +437,8 @@ export interface DeskApi {
   pipelineCancel(req: PipelineCancelRequest): Promise<PipelineCancelResult>
   pipelineDiscard(req: PipelineDiscardRequest): Promise<PipelineDiscardResult>
   pipelineMerge(req: PipelineMergeRequest): Promise<PipelineMergeResult>
+  pipelinePr(req: PipelinePrRequest): Promise<PipelinePrResult>
+  openUrl(req: OpenUrlRequest): Promise<boolean>
   /** Subscribe to pipeline change signals; returns an unsubscribe function. */
   onPipelineEvent(listener: (event: PipelineEvent) => void): () => void
   /** The latest run's live log lines for a project (in memory, capped). */

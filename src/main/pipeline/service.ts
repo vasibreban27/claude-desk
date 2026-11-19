@@ -6,6 +6,7 @@ import type {
   PipelineCancelResult,
   PipelineDiscardResult,
   PipelineMergeResult,
+  PipelinePrResult,
   PipelinePlansResult,
   PipelineRunView,
   PipelineStartResult,
@@ -18,6 +19,7 @@ import { readGitStatus, type GitStatusResult } from '../git/status'
 import type { ProjectStore } from '../projects/store'
 import type { Orchestrator } from './orchestrator'
 import { MAX_PLAN_BYTES, parsePlan, type PlanError } from './planParser'
+import { openPullRequest, type OpenPrArgs, type OpenPrResult } from './openPr'
 import { mergeRunIntoBase, type MergeRunArgs, type MergeRunResult } from './mergeRun'
 import { createWorktreeManager, type WorktreeManager, type WorktreeManagerOptions } from './worktrees'
 
@@ -39,6 +41,8 @@ export interface PipelineService {
   discard(projectId: string, runId: string): Promise<PipelineDiscardResult>
   /** Fast-forwards the base branch to a finished run, commits its plan file, then removes the run's worktrees. */
   merge(projectId: string, runId: string): Promise<PipelineMergeResult>
+  /** Pushes a finished run's branch and opens a PR / MR with the user's gh / glab login. */
+  openPr(projectId: string, runId: string): Promise<PipelinePrResult>
 }
 
 export interface PipelineServiceDeps {
@@ -52,6 +56,7 @@ export interface PipelineServiceDeps {
   newRunId?: () => string
   log?: (message: string) => void
   mergeRun?: (args: MergeRunArgs) => Promise<MergeRunResult>
+  openPullRequest?: (args: OpenPrArgs) => Promise<OpenPrResult>
 }
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -322,6 +327,45 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
       } catch (e) {
         log(`pipeline: discard failed: ${errText(e)}`)
         return { ok: false, error: 'cleanup-failed' }
+      }
+    },
+
+    async openPr(projectId, runId) {
+      try {
+        const owned = await ownedRun(projectId, runId)
+        if (owned === null) return { ok: false, error: 'not-found' }
+        if (activeRuns.get(projectId) === runId || owned.run.status !== 'done') return { ok: false, error: 'not-finished' }
+        const planFile = path.basename(owned.run.planPath)
+        if (!PLAN_FILE_PATTERN.test(planFile)) return { ok: false, error: 'pr-failed', message: 'unexpected plan file name' }
+        let title = planFile.replace(/\.md$/, '')
+        try {
+          const parsed = parsePlan((await readFile(owned.run.planPath)).toString('utf8'))
+          if (parsed.ok && parsed.plan.title.trim() !== '') title = parsed.plan.title.trim().slice(0, 120)
+        } catch {
+          // keep the file name
+        }
+        const tasks = deps.store.listTasks(runId)
+        const rows = tasks.ok ? tasks.value : []
+        const body = [
+          `Built by the claude-desk pipeline from docs/plans/${planFile}.`,
+          '',
+          ...rows.map((t) => `- ${t.taskId}: ${t.title} (${t.status}${t.commitSha ? `, ${t.commitSha.slice(0, 7)}` : ''})`),
+          '',
+          'Each task passed the configured checks and the reviewers before it was merged into the run branch.'
+        ].join('\n')
+        const r = await (deps.openPullRequest ?? openPullRequest)({
+          projectPath: owned.project.path,
+          integrationPath: owned.run.integrationPath || null,
+          baseBranch: owned.run.baseBranch,
+          runBranch: owned.run.integrationBranch,
+          planFile,
+          title,
+          body
+        })
+        return r.ok ? r : { ok: false, error: r.error, message: r.message }
+      } catch (e) {
+        log(`pipeline: open PR failed: ${errText(e)}`)
+        return { ok: false, error: 'pr-failed' }
       }
     },
 

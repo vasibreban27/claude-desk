@@ -276,7 +276,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           settings,
           pluginPath: deps.pluginPath,
           signal,
-          onLog: (l) => say(task.id, 'worker', l.text, l.tone)
+          onLog: (l) => say(task.id, 'worker', l.text, l.tone, task.worker)
         })
         if (abortReason !== null) return
         absorb(outcome)
@@ -408,7 +408,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               pluginPath: deps.pluginPath,
               signal,
               fix: { kind: fix.kind, text: fix.text, sessionId: outcome.sessionId ?? null },
-              onLog: (l) => say(task.id, 'fix', l.text, l.tone)
+              onLog: (l) => say(task.id, 'fix', l.text, l.tone, task.worker)
             })
             if (abortReason !== null) return
             absorb(outcome)

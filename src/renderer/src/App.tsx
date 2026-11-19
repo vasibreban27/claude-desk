@@ -30,6 +30,16 @@ export function App() {
   const projectId = assistant ? ASSISTANT_PROJECT_ID : projects.selectedId
   const mode: ChatMode = !assistant && projects.selectedId !== null ? (modes[projects.selectedId] ?? 'chat') : 'chat'
   const chat = useChat(projectId, mode)
+  // "build it" in the Plan chat started a run: show it.
+  const startedRun = chat.pipelineStarted?.runId ?? null
+  const [shownRun, setShownRun] = useState<string | null>(null)
+  if (startedRun !== null && startedRun !== shownRun) {
+    // Adjusting state during render (React's pattern for reacting to a changed value): remount on the Pipeline tab.
+    setShownRun(startedRun)
+    showPipelineTab()
+    setWorkspaceKey((k) => k + 1)
+  }
+
   const projectNames = useMemo(
     () => Object.fromEntries(projects.projects.map((p) => [p.id, p.name])),
     [projects.projects]

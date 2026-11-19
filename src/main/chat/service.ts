@@ -16,7 +16,8 @@ import {
 } from '../../shared/settings'
 import type { ActivityDraft, AgentUsage, RunUsage } from './activity'
 import type { ChatRunner } from './runner'
-import { ASSISTANT_PROJECT_ID, type ChatMode } from '../../shared/ipc'
+import { ASSISTANT_PROJECT_ID, type ChatMode, type PipelineStartResult } from '../../shared/ipc'
+import { BUILD_IN_APP_NOTE } from './deskTools'
 import { PLAN_COMMAND, findPlansWrittenSince, framePlanFormat, loadPlanFormat, type PlanFound } from './plans'
 
 interface RunState {
@@ -49,6 +50,8 @@ export interface ChatServiceDeps {
   /** Plans written during a planning turn (default: mtime scan of docs/plans). */
   findPlans?: (projectPath: string, sinceMs: number) => Promise<PlanFound[]>
   loadPlanFormat?: (pluginPath: string) => Promise<string | null>
+  /** Plan mode: lets the planner start the app's pipeline when the user asks to build. */
+  startPipeline?: (projectId: string, planFile: string) => Promise<PipelineStartResult>
 }
 
 const GENERIC_ERROR = 'The Claude session failed. Check that Claude Code is logged in and try again.'
@@ -114,7 +117,10 @@ export class ChatService {
         resume,
         settings,
         ...(projectId === ASSISTANT_PROJECT_ID ? { assistant: true } : {}),
-        ...(format ? { appendPrompt: framePlanFormat(format) } : {})
+        ...(planning
+          ? { appendPrompt: [format ? framePlanFormat(format) : '', BUILD_IN_APP_NOTE].filter(Boolean).join('\n\n') }
+          : {}),
+        ...(planning && this.deps.startPipeline ? { startPipeline: (planFile: string) => this.startFromChat(projectId, turnId, planFile) } : {})
       })
       for await (const item of stream) {
         if (item.kind === 'session') {
@@ -142,6 +148,25 @@ export class ChatService {
       const message = err instanceof ConfigError ? err.message : GENERIC_ERROR
       this.deps.emit({ projectId, turnId, type: 'error', message })
     }
+  }
+
+  /** The planner asked to build: start the pipeline, tell the UI, and give the model a one-line result. */
+  private async startFromChat(projectId: string, turnId: string, planFile: string): Promise<string> {
+    const start = this.deps.startPipeline
+    if (!start) return 'Starting the pipeline from chat is not available.'
+    const r = await start(projectId, planFile).catch((): PipelineStartResult => ({ ok: false, error: 'start-failed' }))
+    if (r.ok) {
+      this.deps.emit({ projectId, turnId, type: 'pipeline-started', planFile, runId: r.runId })
+      return `Pipeline started for docs/plans/${planFile} (run ${r.runId.slice(0, 8)}). Progress is in the Pipeline tab.`
+    }
+    const why: Record<string, string> = {
+      busy: 'a pipeline run is already active for this project',
+      'invalid-plan': 'the plan is not valid',
+      'not-found': 'the plan file was not found',
+      'detached-head': 'the project is on a detached HEAD',
+      'no-toolkit': 'the toolkit is not available'
+    }
+    return `The pipeline did not start: ${r.message ?? why[r.error] ?? r.error}.`
   }
 
   /** Emits `plan-ready` for each docs/plans/*.md written during the turn, with its parse result. Never throws. */

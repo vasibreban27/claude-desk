@@ -22,6 +22,7 @@ function setup(props: Partial<ChatPanelProps> = {}) {
     clearProposal: vi.fn(),
     planReady: null,
     clearPlanReady: vi.fn(),
+    pipelineStarted: null,
     messages: [],
     loading: false,
     busy: false,

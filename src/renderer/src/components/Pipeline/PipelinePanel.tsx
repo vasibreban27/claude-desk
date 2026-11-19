@@ -101,7 +101,7 @@ function TaskRow({ task, latest }: { task: PipelineTaskView; latest?: PipelineLo
       </div>
       {task.status === 'running' && latest && (
         <div className="pipeline__latest" aria-label={`${task.taskId} latest`}>
-          {latest.role === 'reviewer' ? (latest.agent ?? 'reviewer') : latest.role}: {latest.text}
+          {latest.role === 'fix' ? `${latest.agent ?? 'worker'} (fix)` : (latest.agent ?? latest.role)}: {latest.text}
         </div>
       )}
       <div className="pipeline__muted">

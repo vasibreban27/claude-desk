@@ -135,4 +135,14 @@ describe('assistant to planner flow', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Pipeline' }))
     expect(await screen.findByLabelText('T1 latest')).toHaveTextContent('worker: Write app/schemas.py')
   })
+
+  it('switches to the Pipeline tab when the planner starts a run from chat', async () => {
+    api['listProjects']?.mockResolvedValue([P])
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /^todo-fastapi/ }))
+    await act(async () => undefined)
+    expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true')
+    act(() => emit({ projectId: P.id, turnId: 't3', type: 'pipeline-started', planFile: 'todo.md', runId: 'r9' }))
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Pipeline' })).toHaveAttribute('aria-selected', 'true'))
+  })
 })

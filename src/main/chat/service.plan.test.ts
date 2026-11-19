@@ -58,4 +58,64 @@ describe('ChatService plan mode', () => {
     expect(c.calls[0]?.appendPrompt).toBeUndefined()
     expect(c.findPlans).not.toHaveBeenCalled()
   })
+
+  it('lets the planner start the pipeline when the user says build, and tells the UI', async () => {
+    const events: ChatEvent[] = []
+    const replies: string[] = []
+    const startPipeline = vi.fn(async () => ({ ok: true as const, runId: 'run-12345678-x' }))
+    let done: () => void = () => undefined
+    const service = new ChatService({
+      resolveProjectPath: () => '/work/one',
+      runner: async function* (args) {
+        expect(args.appendPrompt).toContain('never run /flow:build')
+        if (args.startPipeline) replies.push(await args.startPipeline('greet-cli.md'))
+        yield { kind: 'text', text: 'started' }
+      },
+      emit: (e) => {
+        events.push(e)
+        if (e.type === 'done') done()
+      },
+      loadConfig: () => ({ ok: true, config: { toolkitPath: '/toolkit' } }),
+      findPlans: async () => [],
+      loadPlanFormat: async () => null,
+      startPipeline
+    })
+    await new Promise<void>((resolve) => {
+      done = resolve
+      service.send('p1', 'build it', 'plan')
+    })
+    expect(startPipeline).toHaveBeenCalledWith('p1', 'greet-cli.md')
+    expect(replies[0]).toMatch(/Pipeline started for docs\/plans\/greet-cli.md/)
+    expect(events).toContainEqual(expect.objectContaining({ type: 'pipeline-started', planFile: 'greet-cli.md', runId: 'run-12345678-x' }))
+  })
+
+  it('reports why the pipeline did not start and offers no start tool in chat mode', async () => {
+    const calls: RunnerArgs[] = []
+    const replies: string[] = []
+    let done: () => void = () => undefined
+    const service = new ChatService({
+      resolveProjectPath: () => '/work/one',
+      runner: async function* (args) {
+        calls.push(args)
+        if (args.startPipeline) replies.push(await args.startPipeline('x.md'))
+        yield { kind: 'text', text: 'ok' }
+      },
+      emit: (e) => {
+        if (e.type === 'done') done()
+      },
+      loadConfig: () => ({ ok: true, config: { toolkitPath: '/toolkit' } }),
+      findPlans: async () => [],
+      loadPlanFormat: async () => null,
+      startPipeline: async () => ({ ok: false as const, error: 'busy' as const })
+    })
+    const turn = (mode: 'chat' | 'plan') =>
+      new Promise<void>((resolve) => {
+        done = resolve
+        service.send('p1', 'build it', mode)
+      })
+    await turn('plan')
+    expect(replies[0]).toBe('The pipeline did not start: a pipeline run is already active for this project.')
+    await turn('chat')
+    expect(calls[1]?.startPipeline).toBeUndefined()
+  })
 })
