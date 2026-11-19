@@ -15,13 +15,17 @@ import { createProtectedMatcher } from '../chat/protectedPaths'
 
 export const MAX_PLAN_BYTES = 512 * 1024
 export const MAX_PLAN_TASKS = 200
-/** The workers named in the toolkit build skill. test-writer is deliberately absent (verify calls it). */
+/**
+ * The workers named in the toolkit build skill; general-developer covers stacks without a specialist (flow 0.10+).
+ * test-writer is deliberately absent (verify calls it).
+ */
 export const PLAN_WORKERS: readonly string[] = [
   'java-developer',
   'python-developer',
   'node-developer',
   'frontend-developer',
-  'database-engineer'
+  'database-engineer',
+  'general-developer'
 ]
 
 export interface PlanTask {

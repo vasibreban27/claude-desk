@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import { ASSISTANT_PROJECT_ID, defaultSettings, type ChatEvent, type PipelineLogEntry, type PipelineRunView, type Project } from '@shared/ipc'
+import { defaultSettings, type ChatEvent, type PipelineLogEntry, type PipelineRunView, type Project } from '@shared/ipc'
 import { App } from './App'
 
 afterEach(cleanup)
@@ -54,25 +54,60 @@ beforeEach(() => {
   }
 })
 
-describe('assistant to planner flow', () => {
-  it('keeps the proposal across switching, creates on click and continues in Plan mode with the brief', async () => {
+describe('new project to planner flow', () => {
+  function sendInChat(text: string) {
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: text } })
+    fireEvent.submit(input.closest('form') as HTMLFormElement)
+  }
+
+  it('starts a project from the first chat message and hands that message to the planner', async () => {
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: 'Assistant' }))
-    await act(async () => undefined)
-    act(() => emit({ projectId: ASSISTANT_PROJECT_ID, turnId: 't1', type: 'proposal', name: 'todo-fastapi', brief: 'todo API in FastAPI' }))
-    expect(await screen.findByRole('group', { name: 'Create project' })).toBeInTheDocument()
-
-    // Leaving and coming back must not lose the card.
-    fireEvent.click(screen.getByRole('button', { name: 'Assistant' }))
-    expect(screen.getByRole('group', { name: 'Create project' })).toBeInTheDocument()
-
-    await screen.findByText('Folder: /r/todo-fastapi')
-    fireEvent.click(screen.getByRole('button', { name: 'Create project' }))
+    expect(screen.queryByRole('button', { name: 'Assistant' })).toBeNull()
+    expect(screen.getByText(/Start a new project: describe what to build/)).toBeInTheDocument()
+    sendInChat('I want a todo API in FastAPI')
     await waitFor(() =>
-      expect(api['chatSend']).toHaveBeenCalledWith({ projectId: P.id, text: 'todo API in FastAPI', mode: 'plan' })
+      expect(api['chatSend']).toHaveBeenCalledWith({ projectId: P.id, text: 'I want a todo API in FastAPI', mode: 'plan' })
     )
-    expect(api['createProject']).toHaveBeenCalledWith({ name: 'todo-fastapi', enableCommands: true })
-    expect(await screen.findByRole('radio', { name: 'Plan (flow:plan, Opus)' })).toHaveAttribute('aria-checked', 'true')
+    expect(api['createProject']).toHaveBeenCalledWith({ name: 'todo-api-fastapi', enableCommands: true })
+    expect(api['chatSend']).toHaveBeenCalledOnce()
+    expect(screen.getByRole('radio', { name: 'Plan (flow:plan, Opus)' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('article', { name: 'You' })).toHaveTextContent('I want a todo API in FastAPI')
+  })
+
+  it('numbers the name when the folder exists and asks for a projects folder once', async () => {
+    api['createProject']
+      ?.mockResolvedValueOnce({ ok: false, error: 'no-root' })
+      .mockResolvedValueOnce({ ok: false, error: 'exists' })
+      .mockResolvedValueOnce({ ok: true, project: P })
+    api['projectsRootPick'] = vi.fn().mockResolvedValue({ root: '/r' })
+    render(<App />)
+    sendInChat('todo API')
+    await waitFor(() => expect(api['chatSend']).toHaveBeenCalledOnce())
+    expect(api['projectsRootPick']).toHaveBeenCalledOnce()
+    expect(api['createProject']?.mock.calls.map((c) => (c[0] as { name: string }).name)).toEqual(['todo-api', 'todo-api', 'todo-api-2'])
+  })
+
+  it('shows an error and creates nothing when no projects folder is chosen', async () => {
+    api['createProject']?.mockResolvedValue({ ok: false, error: 'no-root' })
+    api['projectsRootPick'] = vi.fn().mockResolvedValue({ root: null })
+    render(<App />)
+    sendInChat('todo API')
+    expect(await screen.findByRole('alert')).toHaveTextContent('Choose a projects folder')
+    expect(api['chatSend']).not.toHaveBeenCalled()
+  })
+
+  it('Add project > New project switches the chat to a new project; selecting a project switches back', async () => {
+    api['listProjects']?.mockResolvedValue([P])
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /^todo-fastapi/ }))
+    expect(screen.getByRole('radio', { name: 'Chat (read-only)' })).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(screen.getByRole('button', { name: 'Add project' }))
+    fireEvent.click(screen.getByRole('button', { name: /^New project/ }))
+    expect(screen.queryByRole('radiogroup', { name: 'Chat mode' })).toBeNull()
+    expect(screen.getByText(/Start a new project/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^todo-fastapi/ }))
+    await waitFor(() => expect(screen.getByRole('radiogroup', { name: 'Chat mode' })).toBeInTheDocument())
   })
 
   it('shows the plan-ready card and starts the pipeline on click', async () => {

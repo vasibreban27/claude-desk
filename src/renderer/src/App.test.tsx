@@ -117,6 +117,7 @@ describe('projects panel', () => {
     render(<App />)
     await screen.findByText(/No projects yet/)
     fireEvent.click(screen.getByRole('button', { name: 'Add project' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Existing folder/ }))
     const item = await screen.findByRole('button', { name: /^alpha/ })
     expect(item).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByLabelText('Message')).toBeEnabled()
@@ -127,9 +128,10 @@ describe('projects panel', () => {
     render(<App />)
     await screen.findByText('alpha')
     fireEvent.click(screen.getByRole('button', { name: 'Add project' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Existing folder/ }))
     await waitFor(() => expect(api.pickAndAddProject).toHaveBeenCalled())
     expect(screen.queryByRole('alert')).toBeNull()
-    expect(screen.getByLabelText('Message')).toBeDisabled()
+    expect(screen.getByLabelText('Message')).toHaveAttribute('placeholder', expect.stringMatching(/Describe a new app/))
   })
 
   it.each([
@@ -141,6 +143,7 @@ describe('projects panel', () => {
     render(<App />)
     await screen.findByText('alpha')
     fireEvent.click(screen.getByRole('button', { name: 'Add project' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Existing folder/ }))
     expect(await screen.findByRole('alert')).toHaveTextContent(text)
   })
 
@@ -156,12 +159,13 @@ describe('projects panel', () => {
 })
 
 describe('chat panel', () => {
-  it('disables input with a hint when no project is selected', async () => {
+  it('starts a new project from the chat when no project is selected', async () => {
     render(<App />)
     await screen.findByText('alpha')
     const input = screen.getByLabelText('Message')
-    expect(input).toBeDisabled()
-    expect(input).toHaveAttribute('placeholder', expect.stringMatching(/Add or select a project/))
+    expect(input).toBeEnabled()
+    expect(input).toHaveAttribute('placeholder', expect.stringMatching(/Describe a new app/))
+    expect(screen.getByText(/Start a new project/)).toBeInTheDocument()
   })
 
   async function selectAlpha() {

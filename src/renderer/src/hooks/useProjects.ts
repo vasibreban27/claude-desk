@@ -27,7 +27,7 @@ export interface UseProjects {
   adding: boolean
   add: () => Promise<void>
   select: (id: string) => Promise<void>
-  /** Adds a project created elsewhere (the assistant) to the list and selects it. */
+  /** Adds a project created in the app (New project) to the list and selects it. */
   adopt: (project: Project) => void
   /** Unregisters a project; with deleteFolder also moves its folder to the Recycle Bin. Resolves an error text or null. */
   remove: (id: string, deleteFolder: boolean) => Promise<string | null>

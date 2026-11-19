@@ -14,7 +14,6 @@ import { DEFAULT_PROTECTED_PATHS, defaultSettings, type ProjectSettings } from '
 import { GIT_ALLOWED_TOOLS, GIT_SERVER_NAME, createGitMcpServer } from './gitTools'
 import { createProtectedMatcher } from './protectedPaths'
 import { frameProjectContext, loadProjectContext } from './projectContext'
-import { assistantOptions } from './assistant'
 import { DESK_SERVER, START_PIPELINE_TOOL, createDeskServer, type StartPipeline } from './deskTools'
 import { ALLOWED_TOOLS, guardPreToolUse, isDenied, type ToolPolicy } from './tools'
 
@@ -24,7 +23,6 @@ export type RunnerItem =
   | { kind: 'session'; sessionId: string }
   | { kind: 'activity'; draft: ActivityDraft }
   | { kind: 'usage'; usage: RunUsage; agents: AgentUsage[] }
-  | { kind: 'proposal'; name: string; brief: string }
 
 export interface RunnerArgs {
   prompt: string
@@ -34,8 +32,6 @@ export interface RunnerArgs {
   /** The project's settings for this turn, read once by the service; absent means the safe defaults. */
   settings?: ProjectSettings
   signal?: AbortSignal
-  /** Workspace assistant: no plugins, no built-in tools, only the proposal tool. */
-  assistant?: boolean
   /** Extra system-prompt text for this turn (plan mode: the toolkit plan format). */
   appendPrompt?: string
   /** Plan mode: offers the in-process start_pipeline tool, which starts the app's pipeline. */
@@ -230,13 +226,12 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
           ? { append: [context ? frameProjectContext(context) : '', args.appendPrompt ?? ''].filter(Boolean).join('\n\n') }
           : {})
       },
-      plugins: args.assistant ? [] : [{ type: 'local', path: args.pluginPath }],
+      plugins: [{ type: 'local', path: args.pluginPath }],
       includePartialMessages: true,
       allowedTools,
       ...(settings.model !== 'auto' ? { model: settings.model } : {}),
       ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
       hooks: buildHooks((draft) => queue.push({ kind: 'activity', draft }), args.cwd, policy),
-      ...(args.assistant ? assistantOptions((p) => queue.push({ kind: 'proposal', ...p })) : {}),
       abortController,
       ...(args.resume ? { resume: args.resume } : {})
     }

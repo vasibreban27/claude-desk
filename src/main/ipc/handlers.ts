@@ -245,7 +245,7 @@ export function createHandlers(deps: HandlerDeps): Handlers {
           { store: deps.store, ...(deps.gitRun ? { git: deps.gitRun } : {}) },
           { claudeMd: req.data.claudeMd === true }
         )
-        // A project the assistant creates may run allow-listed commands (npm install, venv, ...) in its workers.
+        // A project created in the app may run allow-listed commands (npm install, venv, ...) in its workers.
         if (created.ok && req.data.enableCommands === true) {
           const saved = settingsStore.set(created.project.id, { ...defaultSettings(), allowCommands: true })
           if (!saved.ok) console.error('projects:create: could not enable commands:', saved.error)

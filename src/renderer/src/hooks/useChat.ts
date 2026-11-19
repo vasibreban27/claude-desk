@@ -8,11 +8,6 @@ export const SEND_ERROR_MESSAGES: Record<ChatSendError, string> = {
   invalid: 'That message is not valid.'
 }
 
-export interface Proposal {
-  name: string
-  brief: string
-}
-
 export interface PlanReady {
   planFile: string
   /** First parse error, or null when the pipeline can run it. */
@@ -25,9 +20,6 @@ export interface UseChat {
   busy: boolean
   error: string | null
   send: (text: string) => Promise<void>
-  /** A project the assistant proposed; nothing exists until the user confirms. */
-  proposal: Proposal | null
-  clearProposal: () => void
   /** The latest plan the planner wrote in this chat. */
   planReady: PlanReady | null
   clearPlanReady: () => void
@@ -41,13 +33,11 @@ interface ChatState {
   loading: boolean
   busy: boolean
   error: string | null
-  proposal: Proposal | null
   planReady: PlanReady | null
   pipelineStarted: { runId: string; planFile: string } | null
 }
 
 /** Cards survive switching projects (the chat state is reset then); cleared when the user acts on them. */
-const proposals = new Map<string, Proposal>()
 const plans = new Map<string, PlanReady>()
 
 const empty = (projectId: string | null): ChatState => ({
@@ -56,14 +46,12 @@ const empty = (projectId: string | null): ChatState => ({
   loading: projectId !== null,
   busy: false,
   error: null,
-  proposal: projectId !== null ? (proposals.get(projectId) ?? null) : null,
   planReady: projectId !== null ? (plans.get(projectId) ?? null) : null,
   pipelineStarted: null
 })
 
 /** Records cards for any project, so one that arrives while another chat is open is not lost. */
 function remember(event: ChatEvent): void {
-  if (event.type === 'proposal') proposals.set(event.projectId, { name: event.name, brief: event.brief })
   if (event.type === 'plan-ready') plans.set(event.projectId, { planFile: event.planFile, problem: event.problem })
   if (event.type === 'pipeline-started') plans.delete(event.projectId)
 }
@@ -80,7 +68,6 @@ function applyEvent(state: ChatState, event: ChatEvent): ChatState {
     const created: ChatMessage = { id, role: 'assistant', text: event.text, at: new Date().toISOString() }
     return { ...state, messages: [...state.messages, created] }
   }
-  if (event.type === 'proposal') return { ...state, proposal: { name: event.name, brief: event.brief } }
   if (event.type === 'plan-ready') return { ...state, planReady: { planFile: event.planFile, problem: event.problem } }
   if (event.type === 'pipeline-started') {
     return { ...state, planReady: null, pipelineStarted: { runId: event.runId, planFile: event.planFile } }
@@ -163,10 +150,6 @@ export function useChat(projectId: string | null, mode: ChatMode = 'chat'): UseC
     [projectId, mode]
   )
 
-  const clearProposal = useCallback(() => {
-    if (projectId !== null) proposals.delete(projectId)
-    setState((s) => ({ ...s, proposal: null }))
-  }, [projectId])
   const clearPlanReady = useCallback(() => {
     if (projectId !== null) plans.delete(projectId)
     setState((s) => ({ ...s, planReady: null }))
@@ -178,8 +161,6 @@ export function useChat(projectId: string | null, mode: ChatMode = 'chat'): UseC
     busy: state.busy,
     error: state.error,
     send,
-    proposal: state.proposal,
-    clearProposal,
     planReady: state.planReady,
     clearPlanReady,
     pipelineStarted: state.pipelineStarted

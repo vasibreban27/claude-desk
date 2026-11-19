@@ -16,7 +16,7 @@ import {
 } from '../../shared/settings'
 import type { ActivityDraft, AgentUsage, RunUsage } from './activity'
 import type { ChatRunner } from './runner'
-import { ASSISTANT_PROJECT_ID, type ChatMode, type PipelineStartResult } from '../../shared/ipc'
+import type { ChatMode, PipelineStartResult } from '../../shared/ipc'
 import { BUILD_IN_APP_NOTE } from './deskTools'
 import { PLAN_COMMAND, findPlansWrittenSince, framePlanFormat, loadPlanFormat, type PlanFound } from './plans'
 
@@ -97,7 +97,7 @@ export class ChatService {
     mode: ChatMode = 'chat'
   ): Promise<void> {
     let run: RunState | null = null
-    const planning = mode === 'plan' && projectId !== ASSISTANT_PROJECT_ID
+    const planning = mode === 'plan'
     // Read once, kept for the whole run: a settings change during a run applies to the next turn.
     // Plan mode: the toolkit planner (flow:plan) on Opus, allowed to write docs/plans/ only.
     const base = this.readSettings(projectId)
@@ -116,7 +116,6 @@ export class ChatService {
         pluginPath: cfg.config.toolkitPath,
         resume,
         settings,
-        ...(projectId === ASSISTANT_PROJECT_ID ? { assistant: true } : {}),
         ...(planning
           ? { appendPrompt: [format ? framePlanFormat(format) : '', BUILD_IN_APP_NOTE].filter(Boolean).join('\n\n') }
           : {}),
@@ -128,8 +127,6 @@ export class ChatService {
           this.sessionSettings.set(projectId, settings)
         } else if (item.kind === 'activity') {
           this.recordActivity(run, item.draft)
-        } else if (item.kind === 'proposal') {
-          this.deps.emit({ projectId, turnId, type: 'proposal', name: item.name, brief: item.brief })
         } else if (item.kind === 'usage') {
           run.usage = item
         } else {
@@ -256,7 +253,7 @@ export class ChatService {
       costUsd: run.usage?.usage.costUsd ?? null,
       durationMs: run.usage?.usage.durationMs ?? null
     })
-    if (run.usage && this.deps.runStore && run.projectId !== ASSISTANT_PROJECT_ID) {
+    if (run.usage && this.deps.runStore) {
       try {
         this.deps.runStore.recordRun({
           runId: run.runId,

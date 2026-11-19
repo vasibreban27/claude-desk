@@ -54,8 +54,15 @@ describe('parsePlan', () => {
     expect(multi?.dependsOn.every((d) => /^T\d+$/.test(d))).toBe(true)
   })
 
-  it('default worker list accepts the five toolkit workers and rejects test-writer', () => {
-    for (const worker of ['java-developer', 'python-developer', 'node-developer', 'frontend-developer', 'database-engineer']) {
+  it('default worker list accepts the toolkit workers, including general-developer, and rejects test-writer', () => {
+    for (const worker of [
+      'java-developer',
+      'python-developer',
+      'node-developer',
+      'frontend-developer',
+      'database-engineer',
+      'general-developer'
+    ]) {
       expect(parsePlan(plan([[task({ id: 'T1', worker })]]), 'linux').ok).toBe(true)
     }
     const errs = errorsOf(plan([[task({ id: 'T1', worker: 'test-writer' })]]))
