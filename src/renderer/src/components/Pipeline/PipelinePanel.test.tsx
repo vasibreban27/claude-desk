@@ -201,6 +201,22 @@ describe('PipelinePanel', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('no longer active')
   })
 
+  it('offers Resume on a stopped run with unfinished tasks and says what it keeps', () => {
+    const resume = vi.fn(async () => {})
+    const { rerender } = render(<PipelinePanel {...props({ run: run(), resume })} />)
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+    rerender(<PipelinePanel {...props({ run: run({ status: 'failed', active: false }), resume })} />)
+    expect(screen.getByText(/keeps the 1 task already merged into/)).toHaveTextContent('runs only the other 1')
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
+    expect(resume).toHaveBeenCalledOnce()
+    rerender(<PipelinePanel {...props({ run: run({ status: 'failed', active: false }), resume, starting: true })} />)
+    expect(screen.getByRole('button', { name: 'Resuming...' })).toBeDisabled()
+    rerender(<PipelinePanel {...props({ run: finished(), resume })} />)
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+    rerender(<PipelinePanel {...props({ run: run({ status: 'cancelled', active: false }) })} />)
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+  })
+
   it('shows Discard only when the run is not active', () => {
     const { rerender } = render(<PipelinePanel {...props({ run: run() })} />)
     expect(screen.queryByRole('button', { name: 'Discard' })).toBeNull()

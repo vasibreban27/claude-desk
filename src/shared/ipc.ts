@@ -38,6 +38,7 @@ export const IPC = {
   pipelineStart: 'pipeline:start',
   pipelineStatus: 'pipeline:status',
   pipelineCancel: 'pipeline:cancel',
+  pipelineResume: 'pipeline:resume',
   pipelineDiscard: 'pipeline:discard',
   pipelineMerge: 'pipeline:merge',
   pipelinePr: 'pipeline:pr',
@@ -131,6 +132,13 @@ export const pipelineCancelRequestSchema = z.object({
 })
 export type PipelineCancelRequest = z.infer<typeof pipelineCancelRequestSchema>
 
+/** Continues a failed or cancelled run: merged tasks are kept, the others run again. */
+export const pipelineResumeRequestSchema = z.object({
+  projectId: z.uuid(),
+  runId: z.string().min(1)
+})
+export type PipelineResumeRequest = z.infer<typeof pipelineResumeRequestSchema>
+
 export const pipelineDiscardRequestSchema = z.object({
   projectId: z.uuid(),
   runId: z.string().min(1)
@@ -206,6 +214,11 @@ export type PipelineStartError =
 export type PipelineStartResult =
   | { ok: true; runId: string }
   | { ok: false; error: PipelineStartError; message?: string }
+
+export type PipelineResumeError = 'not-found' | 'busy' | 'no-toolkit' | 'storage-unavailable' | 'resume-failed'
+export type PipelineResumeResult =
+  | { ok: true; runId: string }
+  | { ok: false; error: PipelineResumeError; message?: string }
 
 export type PipelineRunStatus = 'running' | 'done' | 'failed' | 'cancelled'
 export type PipelineTaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'blocked' | 'cancelled'
@@ -431,6 +444,7 @@ export interface DeskApi {
   pipelineStart(req: PipelineStartRequest): Promise<PipelineStartResult>
   pipelineStatus(req: PipelineStatusRequest): Promise<PipelineStatusResult>
   pipelineCancel(req: PipelineCancelRequest): Promise<PipelineCancelResult>
+  pipelineResume(req: PipelineResumeRequest): Promise<PipelineResumeResult>
   pipelineDiscard(req: PipelineDiscardRequest): Promise<PipelineDiscardResult>
   pipelineMerge(req: PipelineMergeRequest): Promise<PipelineMergeResult>
   pipelinePr(req: PipelinePrRequest): Promise<PipelinePrResult>

@@ -55,21 +55,29 @@ function buildPipeline(
   const store = withChangeEvents(rawStore, broadcastPipelineEvent)
   const runner = createWorkerRunner()
   let orchestrator: Orchestrator | undefined
+  const ensure = (): Orchestrator | null => {
+    if (!orchestrator) {
+      const toolkit = readToolkitInfo()
+      if (toolkit.status !== 'valid' || toolkit.path === null) return null
+      orchestrator = createOrchestrator({
+        store,
+        settings,
+        runner,
+        pluginPath: toolkit.path,
+        log: (m) => console.error(m),
+        onLog: (projectId, line) => pipelineLog.add(projectId, line)
+      })
+    }
+    return orchestrator
+  }
   const lazy: Orchestrator = {
     async startRun(input) {
-      if (!orchestrator) {
-        const toolkit = readToolkitInfo()
-        if (toolkit.status !== 'valid' || toolkit.path === null) return { ok: false, error: 'toolkit is not available' }
-        orchestrator = createOrchestrator({
-          store,
-          settings,
-          runner,
-          pluginPath: toolkit.path,
-          log: (m) => console.error(m),
-          onLog: (projectId, line) => pipelineLog.add(projectId, line)
-        })
-      }
-      return orchestrator.startRun(input)
+      const o = ensure()
+      return o ? o.startRun(input) : { ok: false, error: 'toolkit is not available' }
+    },
+    async resumeRun(input) {
+      const o = ensure()
+      return o ? o.resumeRun(input) : { ok: false, error: 'toolkit is not available' }
     },
     cancel: (runId) => orchestrator?.cancel(runId) ?? false
   }
@@ -174,6 +182,7 @@ export function registerIpc(
   ipcMain.handle(IPC.pipelineStart, (event, payload: unknown) => make(event).pipelineStart(payload))
   ipcMain.handle(IPC.pipelineStatus, (event, payload: unknown) => make(event).pipelineStatus(payload))
   ipcMain.handle(IPC.pipelineCancel, (event, payload: unknown) => make(event).pipelineCancel(payload))
+  ipcMain.handle(IPC.pipelineResume, (event, payload: unknown) => make(event).pipelineResume(payload))
   ipcMain.handle(IPC.pipelineDiscard, (event, payload: unknown) => make(event).pipelineDiscard(payload))
   ipcMain.handle(IPC.pipelineMerge, (event, payload: unknown) => make(event).pipelineMerge(payload))
   ipcMain.handle(IPC.pipelineLog, (event, payload: unknown) => make(event).pipelineLog(payload))
@@ -197,7 +206,7 @@ export function registerIpc(
 
   return () => {
     for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.settingsGet, IPC.settingsSet, IPC.appInfo, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick, IPC.projectsRemove,
-      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.openUrl]) {
+      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineResume, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.openUrl]) {
       ipcMain.removeHandler(channel)
     }
     targets.clear()

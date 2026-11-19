@@ -17,7 +17,7 @@ export interface ToolPolicy {
   allowGitRead: boolean
   /** Allows `Write` for exactly `docs/plans/<slug>.md`. */
   allowPlanWrites: boolean
-  /** Plan mode: allows the app's in-process start_pipeline tool. */
+  /** Plan mode: allows the app's in-process start_pipeline tool (and `ToolSearch`, which loads it). */
   allowPipelineStart?: boolean
 }
 
@@ -91,8 +91,11 @@ function deny(reason: string): GuardOutput {
 export function isToolAllowed(name: string, policy?: ToolPolicy): boolean {
   if (ALLOWED_SET.has(name)) return true
   if (policy === undefined) return false
-  if (policy.allowGitRead && (GIT_TOOL_SET.has(name) || name === 'ToolSearch')) return true
+  if (policy.allowGitRead && GIT_TOOL_SET.has(name)) return true
   if (policy.allowPipelineStart === true && name === START_PIPELINE_TOOL) return true
+  // The SDK defers in-process MCP tools: ToolSearch loads their schemas. It only makes tools visible; using any of
+  // them still goes through this guard.
+  if (name === 'ToolSearch') return policy.allowGitRead || policy.allowPipelineStart === true
   return policy.allowPlanWrites && name === 'Write'
 }
 

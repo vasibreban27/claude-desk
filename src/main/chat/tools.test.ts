@@ -804,7 +804,13 @@ describe('guardPreToolUse git tools (T8)', () => {
     expect(gp(policy({ allowGitRead: true }), tool, {})).toEqual({})
   })
 
-  it('allows ToolSearch only with allowGitRead', () => {
+  it('allows ToolSearch in plan mode, where it loads the deferred start_pipeline tool', () => {
+    expect(gp(policy({ allowPipelineStart: true }), 'ToolSearch', { query: 'select:mcp__desk__start_pipeline' })).toEqual({})
+    expect(isDenied(gp(policy({ allowPipelineStart: true }), 'ToolSearch', 'start'))).toBe(true)
+    expect(isDenied(gp(policy({ allowPlanWrites: true }), 'ToolSearch', { query: 'start' }))).toBe(true)
+  })
+
+  it('allows ToolSearch only with allowGitRead or pipeline start', () => {
     expect(isDenied(gp(policy(), 'ToolSearch', { query: 'git' }))).toBe(true)
     expect(gp(policy({ allowGitRead: true }), 'ToolSearch', { query: 'git', max_results: 3 })).toEqual({})
     expect(isDenied(gp(policy({ allowGitRead: true }), 'ToolSearch', 'git'))).toBe(true)

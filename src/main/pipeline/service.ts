@@ -8,6 +8,7 @@ import type {
   PipelineMergeResult,
   PipelinePrResult,
   PipelinePlansResult,
+  PipelineResumeResult,
   PipelineRunView,
   PipelineStartResult,
   PipelineStatusResult,
@@ -38,6 +39,8 @@ export interface PipelineService {
   start(projectId: string, planFile: string): Promise<PipelineStartResult>
   status(projectId: string): Promise<PipelineStatusResult>
   cancel(projectId: string, runId: string): Promise<PipelineCancelResult>
+  /** Continues a failed or cancelled run: tasks already merged are kept, the others run again. */
+  resume(projectId: string, runId: string): Promise<PipelineResumeResult>
   discard(projectId: string, runId: string): Promise<PipelineDiscardResult>
   /** Fast-forwards the base branch to a finished run, commits its plan file, then removes the run's worktrees. */
   merge(projectId: string, runId: string): Promise<PipelineMergeResult>
@@ -303,6 +306,41 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
       } catch (e) {
         log(`pipeline: cancel failed: ${errText(e)}`)
         return { ok: false, error: 'not-found' }
+      }
+    },
+
+    async resume(projectId, runId) {
+      let reserved = false
+      try {
+        const owned = await ownedRun(projectId, runId)
+        if (owned === null) return { ok: false, error: 'not-found' }
+        if (deps.getToolkit().status !== 'valid') return { ok: false, error: 'no-toolkit' }
+        // No await between this check and the reservation: a start and a resume cannot both pass.
+        if (activeRuns.has(projectId)) return { ok: false, error: 'busy' }
+        activeRuns.set(projectId, runId)
+        reserved = true
+
+        const resumed = await deps.orchestrator.resumeRun({ projectId, projectPath: owned.project.path, runId })
+        if (!resumed.ok) {
+          const storage = resumed.error.startsWith('database error') || resumed.error.startsWith('settings could not')
+          return storage
+            ? { ok: false, error: 'storage-unavailable' }
+            : { ok: false, error: 'resume-failed', message: resumed.error.slice(0, MESSAGE_CAP) }
+        }
+        reserved = false
+        const release = (): void => {
+          if (activeRuns.get(projectId) === runId) activeRuns.delete(projectId)
+        }
+        resumed.finished.then(release, (e: unknown) => {
+          log(`pipeline: resumed run ${runId} ended with an error: ${errText(e)}`)
+          release()
+        })
+        return { ok: true, runId }
+      } catch (e) {
+        log(`pipeline: resume failed: ${errText(e)}`)
+        return { ok: false, error: 'resume-failed', message: errText(e).slice(0, MESSAGE_CAP) }
+      } finally {
+        if (reserved && activeRuns.get(projectId) === runId) activeRuns.delete(projectId)
       }
     },
 

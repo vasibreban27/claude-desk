@@ -4,8 +4,10 @@ import type { UsePipeline } from '../../hooks/usePipeline'
 import { MergedBanner, RunFinished, type MergedInfo } from './RunFinished'
 import './pipeline.css'
 
-export type PipelinePanelProps = Omit<UsePipeline, 'projectId' | 'reloadPlans'> & {
+export type PipelinePanelProps = Omit<UsePipeline, 'projectId' | 'reloadPlans' | 'resume'> & {
   reloadPlans?: () => void
+  /** Continues a failed or cancelled run; without it no Resume button is shown. */
+  resume?: () => Promise<void>
   /** Needed for Merge into main; without it the finished run shows no merge button. */
   projectId?: string | null
   /** Latest live log line per task (shown on running tasks). */
@@ -191,6 +193,8 @@ function RunView({
   discardError,
   onCancel,
   onDiscard,
+  onResume,
+  resuming = false,
   finished,
   latestByTask
 }: {
@@ -203,10 +207,16 @@ function RunView({
   discardError: string | null
   onCancel: () => void
   onDiscard: () => Promise<void>
+  /** Continues a failed or cancelled run; the button is hidden without it. */
+  onResume?: () => void
+  resuming?: boolean
 }) {
   const [confirming, setConfirming] = useState(false)
   const summary = summarize(run.tasks)
   const canDiscard = !run.active && run.status !== 'running'
+  const doneCount = run.tasks.filter((t) => t.status === 'done').length
+  const canResume =
+    onResume !== undefined && !run.active && (run.status === 'failed' || run.status === 'cancelled') && doneCount < run.tasks.length
   const waves = [...new Set(run.tasks.map((t) => t.wave))].sort((a, b) => a - b)
   return (
     <section aria-label="Latest run" className="pipeline__run">
@@ -222,12 +232,29 @@ function RunView({
             {cancelling ? 'Cancelling...' : 'Cancel run'}
           </button>
         )}
+        {canResume && !confirming && (
+          <button
+            type="button"
+            className="pipeline__btn"
+            disabled={resuming}
+            title={`Keeps the ${doneCount} merged ${doneCount === 1 ? 'task' : 'tasks'} and runs only the rest`}
+            onClick={onResume}
+          >
+            {resuming ? 'Resuming...' : 'Resume'}
+          </button>
+        )}
         {canDiscard && !confirming && (
           <button type="button" className="pipeline__btn" onClick={() => setConfirming(true)}>
             Discard
           </button>
         )}
       </div>
+      {canResume && doneCount > 0 && (
+        <p className="pipeline__muted">
+          Resume keeps the {doneCount} {doneCount === 1 ? 'task' : 'tasks'} already merged into{' '}
+          <code>{run.integrationBranch}</code> and runs only the other {run.tasks.length - doneCount}.
+        </p>
+      )}
       {canDiscard && confirming && (
         <DiscardConfirm
           run={run}
@@ -321,6 +348,7 @@ export function PipelinePanel(p: PipelinePanelProps) {
           discardError={p.discardError}
           onCancel={() => void p.cancel()}
           onDiscard={onDiscard}
+          {...(p.resume ? { onResume: () => void p.resume?.(), resuming: p.starting } : {})}
         />
       )}
       <h3 ref={plansHeading} tabIndex={-1}>

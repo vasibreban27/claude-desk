@@ -4,6 +4,7 @@ import {
   chatHistoryRequestSchema,
   chatSendRequestSchema,
   pipelineCancelRequestSchema,
+  pipelineResumeRequestSchema,
   pipelineDiscardRequestSchema,
   pipelineMergeRequestSchema,
   pipelinePrRequestSchema,
@@ -33,6 +34,7 @@ import {
   type ChatHistoryResult,
   type ChatSendResult,
   type PipelineCancelResult,
+  type PipelineResumeResult,
   type PipelineDiscardResult,
   type PipelinePlansResult,
   type PipelineStartResult,
@@ -100,6 +102,7 @@ export interface Handlers {
   pipelineStart(payload: unknown): Promise<PipelineStartResult>
   pipelineStatus(payload: unknown): Promise<PipelineStatusResult>
   pipelineCancel(payload: unknown): Promise<PipelineCancelResult>
+  pipelineResume(payload: unknown): Promise<PipelineResumeResult>
   pipelineDiscard(payload: unknown): Promise<PipelineDiscardResult>
   pipelineMerge(payload: unknown): Promise<PipelineMergeResult>
   pipelinePr(payload: unknown): Promise<PipelinePrResult>
@@ -360,6 +363,18 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       } catch (err) {
         console.error('pipeline:cancel failed:', errName(err))
         return { ok: false, error: 'not-found' }
+      }
+    },
+
+    async pipelineResume(payload) {
+      const req = pipelineResumeRequestSchema.strict().safeParse(payload)
+      if (!req.success) return { ok: false, error: 'not-found' }
+      if (!pipeline) return { ok: false, error: 'storage-unavailable' }
+      try {
+        return await pipeline.resume(req.data.projectId, req.data.runId)
+      } catch (err) {
+        console.error('pipeline:resume failed:', errName(err))
+        return { ok: false, error: 'resume-failed' }
       }
     },
 

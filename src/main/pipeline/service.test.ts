@@ -41,6 +41,7 @@ describe('pipeline service', () => {
   let store: PipelineStore
   let startRun: ReturnType<typeof vi.fn<Orchestrator['startRun']>>
   let cancel: ReturnType<typeof vi.fn<Orchestrator['cancel']>>
+  let resumeRun: ReturnType<typeof vi.fn<Orchestrator['resumeRun']>>
   let removeRun: ReturnType<typeof vi.fn<WorktreeManager['removeRun']>>
   let branch: GitStatusResult
   let toolkit: AppInfo['toolkit']
@@ -50,7 +51,7 @@ describe('pipeline service', () => {
     return createPipelineService({
       projects: { get: async (id) => (id === PID ? { id, path: project, name: 'p', branch: 'main', dirty: false, addedAt: '' } : undefined) },
       store: overrides.store ?? store,
-      orchestrator: { startRun, cancel },
+      orchestrator: { startRun, resumeRun, cancel },
       getToolkit: () => toolkit,
       readBranch: async () => branch,
       createManager: () => ({ removeRun }) as unknown as WorktreeManager
@@ -85,6 +86,7 @@ describe('pipeline service', () => {
     store = createPipelineStore(db, () => (t += 1000))
     startRun = vi.fn<Orchestrator['startRun']>()
     cancel = vi.fn<Orchestrator['cancel']>(() => true)
+    resumeRun = vi.fn<Orchestrator['resumeRun']>()
     removeRun = vi.fn<WorktreeManager['removeRun']>(async () => ({ ok: true }))
     branch = { ok: true, branch: 'main', dirty: false }
     toolkit = VALID
@@ -235,6 +237,50 @@ describe('pipeline service', () => {
     it('reports a git failure as start-failed', async () => {
       branch = { ok: false, error: 'not-a-git-repo' }
       expect(await service.start(PID, 'a.md')).toMatchObject({ ok: false, error: 'start-failed' })
+    })
+  })
+
+  describe('resume', () => {
+    beforeEach(() => writeFileSync(path.join(plans, 'a.md'), FLOW))
+
+    it('refuses unknown runs and a missing toolkit without calling the orchestrator', async () => {
+      expect(await service.resume(PID, 'nope')).toEqual({ ok: false, error: 'not-found' })
+      seedRun('r1')
+      expect(await service.resume('22222222-2222-4222-8222-222222222222', 'r1')).toEqual({ ok: false, error: 'not-found' })
+      toolkit = { status: 'invalid', path: null, version: null }
+      expect(await service.resume(PID, 'r1')).toEqual({ ok: false, error: 'no-toolkit' })
+      expect(resumeRun).not.toHaveBeenCalled()
+    })
+
+    it('resumes, keeps the project busy until the run ends, and blocks a start meanwhile', async () => {
+      seedRun('r1')
+      const s = started('r1')
+      resumeRun.mockResolvedValueOnce(s.result)
+      expect(await service.resume(PID, 'r1')).toEqual({ ok: true, runId: 'r1' })
+      expect(resumeRun).toHaveBeenCalledWith({ projectId: PID, projectPath: project, runId: 'r1' })
+      expect(await service.start(PID, 'a.md')).toEqual({ ok: false, error: 'busy' })
+      expect(await service.resume(PID, 'r1')).toEqual({ ok: false, error: 'busy' })
+      s.finish()
+      await vi.waitFor(async () => {
+        startRun.mockResolvedValueOnce(started('run-2').result)
+        expect(await service.start(PID, 'a.md')).toEqual({ ok: true, runId: 'run-2' })
+      })
+    })
+
+    it('maps orchestrator refusals and frees the project', async () => {
+      seedRun('r1')
+      resumeRun.mockResolvedValueOnce({ ok: false, error: 'the plan changed since this run started: start a new run instead' })
+      expect(await service.resume(PID, 'r1')).toEqual({
+        ok: false,
+        error: 'resume-failed',
+        message: 'the plan changed since this run started: start a new run instead'
+      })
+      resumeRun.mockResolvedValueOnce({ ok: false, error: 'database error: storage-error' })
+      expect(await service.resume(PID, 'r1')).toEqual({ ok: false, error: 'storage-unavailable' })
+      resumeRun.mockRejectedValueOnce(new Error('boom'))
+      expect(await service.resume(PID, 'r1')).toMatchObject({ ok: false, error: 'resume-failed' })
+      startRun.mockResolvedValueOnce(started('run-3').result)
+      expect(await service.start(PID, 'a.md')).toEqual({ ok: true, runId: 'run-3' })
     })
   })
 
