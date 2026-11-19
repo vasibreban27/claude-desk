@@ -9,6 +9,15 @@ export const ADD_ERROR_MESSAGES: Record<Exclude<PickAndAddError, 'cancelled'>, s
 
 export const BRIDGE_UNAVAILABLE = 'The desktop bridge is unavailable.'
 
+const RESTART_NEEDED = 'The app is running older background code than its window: restart claude-desk and try again.'
+const REMOVE_ERRORS: Record<string, string> = {
+  'not-found': 'The project is no longer registered: restart claude-desk to refresh the list.',
+  busy: 'A pipeline run is active: cancel it first.',
+  unreadable: 'Could not remove the project: the project list could not be saved.',
+  'trash-failed': 'Could not move the folder to the Recycle Bin.',
+  'unsafe-path': 'This folder cannot be deleted from the app.'
+}
+
 export interface UseProjects {
   projects: Project[]
   selectedId: string | null
@@ -97,16 +106,19 @@ export function useProjects(): UseProjects {
     const api = window.api
     if (!api) return BRIDGE_UNAVAILABLE
     try {
+      if (typeof api.removeProject !== 'function') return RESTART_NEEDED
       const r = await api.removeProject({ id, deleteFolder })
       if (!r.ok) {
         if (r.message) return r.message
-        return r.error === 'busy' ? 'A pipeline run is active: cancel it first.' : 'Could not remove the project.'
+        return REMOVE_ERRORS[r.error] ?? 'Could not remove the project.'
       }
       setProjects((prev) => prev.filter((p) => p.id !== id))
       setSelectedId((s) => (s === id ? null : s))
       return null
-    } catch {
-      return 'Could not remove the project.'
+    } catch (e) {
+      // An older main process has no handler for a channel the renderer already knows (dev without restart).
+      if (e instanceof Error && /no handler registered/i.test(e.message)) return RESTART_NEEDED
+      return `Could not remove the project${e instanceof Error && e.message ? `: ${e.message.slice(0, 200)}` : '.'}`
     }
   }, [])
 
