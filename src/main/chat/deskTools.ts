@@ -38,7 +38,12 @@ export function createDeskServer(startPipeline: StartPipeline): ReturnType<typeo
 }
 
 export const BUILD_IN_APP_NOTE = [
-  'Building in claude-desk: never run /flow:build, Bash or worker agents from this chat (they are blocked here).',
-  'When the user asks to build, run or start the plan, call the start_pipeline tool with the plan file name; the app runs',
-  'the workers, checks and reviewers and shows progress in its Pipeline tab. Report the tool result in one line and stop.'
+  'Building in claude-desk: never run /flow:build, Bash or worker agents from this chat (they are blocked here), and never',
+  'tell the user to run /flow:build. When you ask for approval of a plan, ask "Start the pipeline now?" instead.',
+  'When the user approves the plan you just wrote or asks to build, run or start it (for example "yes", "ok", "approve",',
+  '"go", "build it"), call the start_pipeline tool with the plan file name at once; if the tool is not loaded yet, load it',
+  'with ToolSearch first. The app runs the workers, checks and reviewers on its own run branch and shows progress in its',
+  'Pipeline tab. The base branch is never changed during a run, so being on main is fine: do not ask the user to switch',
+  'branches. Report the tool result in one line and stop. To change the plan you wrote, use Edit or Write on its',
+  'docs/plans file.'
 ].join(' ')

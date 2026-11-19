@@ -162,9 +162,9 @@ describe('sdkRunner per-turn settings', () => {
     expect(opts().allowedTools).toEqual([...ALLOWED_TOOLS])
   })
 
-  it('allowPlanWrites adds exactly Write and no MCP server', async () => {
+  it('allowPlanWrites adds exactly Write and Edit (plan files only) and no MCP server', async () => {
     await collect(run({ settings: withSettings({ allowPlanWrites: true }) }))
-    expect(opts().allowedTools).toEqual([...ALLOWED_TOOLS, 'Write'])
+    expect(opts().allowedTools).toEqual([...ALLOWED_TOOLS, 'Write', 'Edit'])
     expect('mcpServers' in opts()).toBe(false)
     expect(gitState.deps).toBeNull()
   })
@@ -179,7 +179,7 @@ describe('sdkRunner per-turn settings', () => {
 
   it('both toggles add both capabilities and nothing else', async () => {
     await collect(run({ settings: withSettings({ allowGitRead: true, allowPlanWrites: true }) }))
-    expect(opts().allowedTools).toEqual([...ALLOWED_TOOLS, 'Write', ...GIT_ALLOWED_TOOLS])
+    expect(opts().allowedTools).toEqual([...ALLOWED_TOOLS, 'Write', 'Edit', ...GIT_ALLOWED_TOOLS])
   })
 })
 

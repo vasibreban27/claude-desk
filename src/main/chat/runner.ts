@@ -212,7 +212,7 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
     ...(userTools.length > 0 ? { extraTools: userTools } : {})
   }
   const allowedTools: string[] = [...ALLOWED_TOOLS]
-  if (settings.allowPlanWrites) allowedTools.push('Write')
+  if (settings.allowPlanWrites) allowedTools.push('Write', 'Edit')
   if (settings.allowGitRead) allowedTools.push(...GIT_ALLOWED_TOOLS)
   if (args.startPipeline) allowedTools.push(START_PIPELINE_TOOL)
   allowedTools.push(...userTools)

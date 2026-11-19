@@ -877,6 +877,22 @@ describe('guardPreToolUse plan writes (T8)', () => {
     expect(w('docs/plans/my-plan-2.md')).toEqual({})
   })
 
+  it('lets the planner Edit an existing plan, and nothing else', () => {
+    const e = (file_path: unknown, extra: Record<string, unknown> = {}, p: ToolPolicy = on) =>
+      gp(p, 'Edit', { file_path, old_string: 'a', new_string: 'b', ...extra }, wcwd)
+    expect(isDenied(e(abs('my-plan')))).toBe(true)
+    mkdirSync(path.join(wcwd, 'docs', 'plans'), { recursive: true })
+    writeFileSync(abs('my-plan'), 'a')
+    expect(e(abs('my-plan'))).toEqual({})
+    expect(e('docs/plans/my-plan.md', { replace_all: true })).toEqual({})
+    expect(isDenied(e(abs('other')))).toBe(true)
+    expect(isDenied(e(path.join(wcwd, 'src', 'a.ts')))).toBe(true)
+    expect(isDenied(e(abs('my-plan'), {}, policy()))).toBe(true)
+    expect(isDenied(e(abs('my-plan'), { content: 'x' }))).toBe(true)
+    expect(isDenied(e(abs('my-plan'), { replace_all: 'yes' }))).toBe(true)
+    expect(isDenied(e(abs('my-plan'), { new_string: 'x'.repeat(300 * 1024) }))).toBe(true)
+  })
+
   it('denies every non-exact shape with zero filesystem calls', () => {
     const bad: unknown[] = [
       'docs/plans/../x.md',

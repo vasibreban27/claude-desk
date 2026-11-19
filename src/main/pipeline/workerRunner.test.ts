@@ -115,6 +115,12 @@ describe('buildWorkerOptions', () => {
     for (const s of ['Serial orchestrator', 'it runs', 'it stops', 'src/a.ts', 'src/dir/', 'Contract:', 'report_blocked']) {
       expect(p).toContain(s)
     }
+    expect(p).not.toContain('Plan:')
+  })
+
+  it('names the plan copy in the worktree, and ignores an unsafe file name', () => {
+    expect(buildWorkerPrompt(task, 'ticket-api.md')).toContain('Plan: docs/plans/ticket-api.md in your worktree')
+    expect(buildWorkerPrompt(task, '../../etc/x.md')).not.toContain('Plan:')
   })
 })
 

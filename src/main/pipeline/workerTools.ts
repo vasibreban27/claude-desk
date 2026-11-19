@@ -5,7 +5,7 @@
  * Windows from section 5 (system `node` plus npm's JS entry, never `cmd.exe`, never `process.execPath`).
  */
 import { execFile as nodeExecFile } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, readdirSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
@@ -64,6 +64,62 @@ export interface ResolveDeps {
   platform?: NodeJS.Platform
   env?: NodeJS.ProcessEnv
   fileExists?: (p: string) => boolean
+  /** File names in a folder (Maven's boot jar); defaults to readdirSync. */
+  listDir?: (dir: string) => string[]
+  /** The folder the command runs in (Maven needs it as its project directory). */
+  cwd?: string
+}
+
+/** The first `name` found in an absolute PATH folder. */
+export function findOnPath(name: string, deps: ResolveDeps = {}): string | null {
+  const platform = deps.platform ?? process.platform
+  const env = deps.env ?? process.env
+  const exists = deps.fileExists ?? existsSync
+  const p = platform === 'win32' ? path.win32 : path.posix
+  const raw = env['PATH'] ?? env['Path'] ?? ''
+  for (const dir of raw.split(platform === 'win32' ? ';' : ':')) {
+    const cleaned = dir.trim().replace(/^"|"$/g, '')
+    if (cleaned.length === 0 || !p.isAbsolute(cleaned)) continue
+    const candidate = p.join(cleaned, name)
+    if (exists(candidate)) return candidate
+  }
+  return null
+}
+
+/**
+ * Maven on Windows ships only `mvn.cmd`, which cannot run without a shell. It is a launcher for
+ * `java -classpath <home>/boot/plexus-classworlds-*.jar ... Launcher`, so that is run directly (no shell).
+ */
+function resolveMaven(args: string[], deps: ResolveDeps): ResolvedCommand {
+  const exists = deps.fileExists ?? existsSync
+  const env = deps.env ?? process.env
+  const listDir = deps.listDir ?? ((d: string) => readdirSync(d))
+  const cmd = findOnPath('mvn.cmd', deps)
+  if (cmd === null) return { error: 'cannot run mvn: Maven was not found on PATH' }
+  const home = path.win32.dirname(path.win32.dirname(cmd))
+  let jar: string | undefined
+  try {
+    jar = listDir(path.win32.join(home, 'boot')).find((f) => /^plexus-classworlds-[\w.-]+\.jar$/.test(f))
+  } catch {
+    jar = undefined
+  }
+  if (jar === undefined) return { error: 'cannot run mvn: the Maven boot jar was not found' }
+  const javaHome = env['JAVA_HOME']
+  const fromHome = javaHome ? path.win32.join(javaHome, 'bin', 'java.exe') : null
+  const java = fromHome !== null && exists(fromHome) ? fromHome : findOnPath('java.exe', deps)
+  if (java === null) return { error: 'cannot run mvn: java was not found (set JAVA_HOME or add java to PATH)' }
+  return {
+    file: java,
+    args: [
+      '-classpath',
+      path.win32.join(home, 'boot', jar),
+      `-Dclassworlds.conf=${path.win32.join(home, 'bin', 'm2.conf')}`,
+      `-Dmaven.home=${home}`,
+      `-Dmaven.multiModuleProjectDirectory=${deps.cwd ?? process.cwd()}`,
+      'org.codehaus.plexus.classworlds.launcher.Launcher',
+      ...args
+    ]
+  }
 }
 
 export type ResolvedCommand = { file: string; args: string[] } | { error: string }
@@ -107,6 +163,7 @@ export function resolveCheckCommand(check: CheckConfig, extraArgs: string[], dep
     if (!exists(entry)) return { error: `cannot run ${stem}: ${stem}-cli.js was not found next to node` }
     return { file: node, args: [entry, ...args] }
   }
+  if (stem === 'mvn') return resolveMaven(args, deps)
   return { file: check.executable, args }
 }
 
@@ -293,7 +350,8 @@ export function createWorkerTools(deps: WorkerToolsDeps): WorkerTools {
       const command = resolveCheckCommand(check, extra, {
         platform: deps.platform,
         env: deps.env,
-        fileExists: deps.fileExists
+        fileExists: deps.fileExists,
+        cwd: deps.worktree
       })
       if ('error' in command) {
         lastResult = 'failed'
@@ -465,7 +523,7 @@ export function createWorkerTools(deps: WorkerToolsDeps): WorkerTools {
     const resolved = resolveCheckCommand(
       { name: 'cmd', executable: decision.command, args: decision.args, timeoutMs: COMMAND_TIMEOUT_MS },
       [],
-      { platform: deps.platform, env: deps.env, fileExists: deps.fileExists }
+      { platform: deps.platform, env: deps.env, fileExists: deps.fileExists, cwd: deps.worktree }
     )
     if ('error' in resolved) return fail(resolved.error)
     try {

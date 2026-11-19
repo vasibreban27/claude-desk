@@ -167,3 +167,80 @@
   white-space: nowrap;
   border: 0;
 }
+
+/* Plan ready: a call to action just above the message box. */
+.plan-card {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-accent);
+  border-left-width: 4px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+}
+.plan-card--problem {
+  border-color: var(--color-warning);
+}
+.plan-card__body {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.plan-card__title {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.plan-card__title code {
+  font-weight: 400;
+  font-size: var(--font-size-xs);
+}
+.plan-card__text,
+.plan-card__error {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+.plan-card__error {
+  color: var(--color-danger-text);
+}
+.plan-card__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex: none;
+}
+.plan-card__start {
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.plan-card__start:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.plan-card__dismiss {
+  background: transparent;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  cursor: pointer;
+}
+.plan-card__start:focus-visible,
+.plan-card__dismiss:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}

@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { CHAT_TEXT_MAX } from '@shared/ipc'
 import type { UseChat } from '../../hooks/useChat'
 import { Markdown } from '../Markdown'
@@ -11,9 +11,11 @@ export interface ChatPanelProps extends UseChat {
   placeholder?: string
   /** Overrides the text shown when there are no messages yet. */
   emptyText?: string
+  /** Shown just above the message box (e.g. the plan-ready card), so it stays in view. */
+  aboveInput?: ReactNode
 }
 
-export function ChatPanel({ hasProject, messages, loading, busy, error, send, placeholder, emptyText }: ChatPanelProps) {
+export function ChatPanel({ hasProject, messages, loading, busy, error, send, placeholder, emptyText, aboveInput }: ChatPanelProps) {
   const [draft, setDraft] = useState('')
   const [pinned, setPinned] = useState(true)
   const listRef = useRef<HTMLDivElement>(null)
@@ -133,6 +135,7 @@ export function ChatPanel({ hasProject, messages, loading, busy, error, send, pl
           {error}
         </div>
       )}
+      {aboveInput}
       <form onSubmit={onSubmit} className="chat__form">
         <label htmlFor="chat-input">Message</label>
         <textarea
