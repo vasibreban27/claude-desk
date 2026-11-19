@@ -14,11 +14,13 @@ import type {
   PipelineStatusResult,
   PlanEntry
 } from '../../shared/ipc'
+import type { DeliveryChoice } from '../../shared/settings'
 import { PLAN_FILE_PATTERN } from '../../shared/ipc'
 import type { PipelineRunRow, PipelineStore, PipelineTaskRow } from '../db/pipelineStore'
+import type { SettingsStore } from '../db/settingsStore'
 import { readGitStatus, type GitStatusResult } from '../git/status'
 import type { ProjectStore } from '../projects/store'
-import type { Orchestrator } from './orchestrator'
+import type { Orchestrator, RunSummary } from './orchestrator'
 import { MAX_PLAN_BYTES, parsePlan, type PlanError } from './planParser'
 import { openPullRequest, type OpenPrArgs, type OpenPrResult } from './openPr'
 import { mergeRunIntoBase, type MergeRunArgs, type MergeRunResult } from './mergeRun'
@@ -52,6 +54,8 @@ export interface PipelineServiceDeps {
   projects: Pick<ProjectStore, 'get'>
   store: PipelineStore
   orchestrator: Orchestrator
+  settings?: Pick<SettingsStore, 'get'>
+  onDelivery?: (projectId: string, runId: string, text: string, tone: 'info' | 'ok' | 'error') => void
   /** Current toolkit state; a run needs `valid`. */
   getToolkit: () => AppInfo['toolkit']
   readBranch?: (projectPath: string) => Promise<GitStatusResult>
@@ -76,6 +80,50 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
   const newRunId = deps.newRunId ?? randomUUID
   /** projectId -> runId of the run in flight (set before the orchestrator starts, so it is known from the first event). */
   const activeRuns = new Map<string, string>()
+  const delivering = new Set<string>()
+  const deliveryStates = new Map<string, NonNullable<PipelineRunView['delivery']>>()
+
+  function reportDelivery(projectId: string, runId: string, state: NonNullable<PipelineRunView['delivery']>, text: string, tone: 'info' | 'ok' | 'error'): void {
+    deliveryStates.set(runId, state)
+    deps.onDelivery?.(projectId, runId, text, tone)
+  }
+
+  function watchFinished(projectId: string, runId: string, finished: Promise<RunSummary>, delivery: DeliveryChoice): void {
+    void finished.then(async (summary) => {
+      if (activeRuns.get(projectId) === runId) activeRuns.delete(projectId)
+      if (summary.status !== 'done' || delivery === 'manual') {
+        deliveryStates.delete(runId)
+        return
+      }
+      delivering.add(projectId)
+      try {
+        if (delivery === 'open-pr') {
+          reportDelivery(projectId, runId, { policy: delivery, status: 'working' }, 'opening pull request automatically', 'info')
+          const result = await api.openPr(projectId, runId)
+          reportDelivery(projectId, runId,
+            result.ok ? { policy: delivery, status: 'done', url: result.url } : { policy: delivery, status: 'failed', message: result.message ?? result.error },
+            result.ok ? `pull request opened: ${result.url}` : `automatic pull request failed: ${result.message ?? result.error}`,
+            result.ok ? 'ok' : 'error')
+        } else if (delivery === 'merge-local') {
+          reportDelivery(projectId, runId, { policy: delivery, status: 'working' }, 'merging into the local project automatically', 'info')
+          const result = await api.merge(projectId, runId)
+          reportDelivery(projectId, runId,
+            result.ok ? { policy: delivery, status: 'done' } : { policy: delivery, status: 'failed', message: result.message ?? result.error },
+            result.ok ? `merged into ${result.baseBranch} at ${result.head}` : `automatic merge failed: ${result.message ?? result.error}`,
+            result.ok ? 'ok' : 'error')
+        }
+      } catch (e) {
+        log(`pipeline: automatic delivery failed: ${errText(e)}`)
+        reportDelivery(projectId, runId, { policy: delivery, status: 'failed', message: 'Automatic delivery failed.' }, 'automatic delivery failed', 'error')
+      } finally {
+        delivering.delete(projectId)
+      }
+    }, (e: unknown) => {
+      log(`pipeline: run ${runId} ended with an error: ${errText(e)}`)
+      if (activeRuns.get(projectId) === runId) activeRuns.delete(projectId)
+      deliveryStates.delete(runId)
+    })
+  }
 
   async function listEntries(plansDir: string): Promise<PlanEntry[] | 'unreadable'> {
     let dirents
@@ -174,6 +222,7 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
     integrationBranch: run.integrationBranch,
     createdAt: new Date(run.createdAt).toISOString(),
     finishedAt: run.finishedAt === null ? null : new Date(run.finishedAt).toISOString(),
+    ...(deliveryStates.has(run.id) ? { delivery: deliveryStates.get(run.id) } : {}),
     tasks: tasks.map((t) => ({
       taskId: t.taskId,
       title: t.title,
@@ -198,7 +247,7 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
     return e === undefined ? 'invalid plan' : `line ${e.line}: ${e.message}`.slice(0, MESSAGE_CAP)
   }
 
-  return {
+  const api: PipelineService = {
     async listPlans(projectId) {
       try {
         const project = await deps.projects.get(projectId)
@@ -240,8 +289,10 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
         if (!parsed.ok) return { ok: false, error: 'invalid-plan', message: firstError(parsed.errors) }
 
         // No await between this check and the reservation: two starts cannot both pass.
-        if (activeRuns.has(projectId)) return { ok: false, error: 'busy' }
+        if (activeRuns.has(projectId) || delivering.has(projectId)) return { ok: false, error: 'busy' }
+        const delivery = deps.settings?.get(projectId).settings.delivery ?? 'manual'
         const runId = newRunId()
+        if (delivery !== 'manual') deliveryStates.set(runId, { policy: delivery, status: 'pending' })
         activeRuns.set(projectId, runId)
         reservedId = runId
         reserved = true
@@ -254,22 +305,23 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
           runId
         })
         if (!started.ok) {
+          deliveryStates.delete(runId)
           const storage = started.error.startsWith('database error') || started.error.startsWith('settings could not')
           return storage
             ? { ok: false, error: 'storage-unavailable' }
             : { ok: false, error: 'start-failed', message: started.error.slice(0, MESSAGE_CAP) }
         }
+        if (started.runId !== runId) {
+          const state = deliveryStates.get(runId)
+          deliveryStates.delete(runId)
+          if (state) deliveryStates.set(started.runId, state)
+        }
         activeRuns.set(projectId, started.runId)
         reserved = false
-        const release = (): void => {
-          if (activeRuns.get(projectId) === started.runId) activeRuns.delete(projectId)
-        }
-        started.finished.then(release, (e: unknown) => {
-          log(`pipeline: run ${started.runId} ended with an error: ${errText(e)}`)
-          release()
-        })
+        watchFinished(projectId, started.runId, started.finished, delivery)
         return { ok: true, runId: started.runId }
       } catch (e) {
+        if (reservedId) deliveryStates.delete(reservedId)
         log(`pipeline: start failed: ${errText(e)}`)
         return { ok: false, error: 'start-failed', message: errText(e).slice(0, MESSAGE_CAP) }
       } finally {
@@ -316,27 +368,25 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
         if (owned === null) return { ok: false, error: 'not-found' }
         if (deps.getToolkit().status !== 'valid') return { ok: false, error: 'no-toolkit' }
         // No await between this check and the reservation: a start and a resume cannot both pass.
-        if (activeRuns.has(projectId)) return { ok: false, error: 'busy' }
+        if (activeRuns.has(projectId) || delivering.has(projectId)) return { ok: false, error: 'busy' }
+        const delivery = deps.settings?.get(projectId).settings.delivery ?? 'manual'
+        if (delivery !== 'manual') deliveryStates.set(runId, { policy: delivery, status: 'pending' })
         activeRuns.set(projectId, runId)
         reserved = true
 
         const resumed = await deps.orchestrator.resumeRun({ projectId, projectPath: owned.project.path, runId })
         if (!resumed.ok) {
+          deliveryStates.delete(runId)
           const storage = resumed.error.startsWith('database error') || resumed.error.startsWith('settings could not')
           return storage
             ? { ok: false, error: 'storage-unavailable' }
             : { ok: false, error: 'resume-failed', message: resumed.error.slice(0, MESSAGE_CAP) }
         }
         reserved = false
-        const release = (): void => {
-          if (activeRuns.get(projectId) === runId) activeRuns.delete(projectId)
-        }
-        resumed.finished.then(release, (e: unknown) => {
-          log(`pipeline: resumed run ${runId} ended with an error: ${errText(e)}`)
-          release()
-        })
+        watchFinished(projectId, runId, resumed.finished, delivery)
         return { ok: true, runId }
       } catch (e) {
+        deliveryStates.delete(runId)
         log(`pipeline: resume failed: ${errText(e)}`)
         return { ok: false, error: 'resume-failed', message: errText(e).slice(0, MESSAGE_CAP) }
       } finally {
@@ -361,6 +411,7 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
           log(`pipeline: could not delete run ${runId}: ${deleted.error}`)
           return deleted.error === 'not-found' ? { ok: false, error: 'not-found' } : { ok: false, error: 'cleanup-failed' }
         }
+        deliveryStates.delete(runId)
         return { ok: true }
       } catch (e) {
         log(`pipeline: discard failed: ${errText(e)}`)
@@ -433,4 +484,5 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
       }
     }
   }
+  return api
 }

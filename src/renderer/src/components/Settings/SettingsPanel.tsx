@@ -1,7 +1,7 @@
-import { useId, useState, type FormEvent } from 'react'
-import { projectSettingsSchema, type ModelChoice, type ProjectSettings } from '@shared/ipc'
+import { useEffect, useId, useState, type FormEvent } from 'react'
+import { CHECKS_MAX_COUNT, projectSettingsSchema, type AppInfo, type CheckConfig, type DeliveryChoice, type ModelChoice, type ProjectSettings } from '@shared/ipc'
 import { useSettings, type SaveError } from '../../hooks/useSettings'
-import { ChecksEditor, rowsFromChecks, validateRows, type CheckRow, type RowErrors } from './ChecksEditor'
+import { ChecksEditor, newRow, rowsFromChecks, validateRows, type CheckRow, type RowErrors } from './ChecksEditor'
 import {
   LimitsEditor,
   limitsFromSettings,
@@ -14,7 +14,7 @@ import { McpConnections } from './McpConnections'
 import './settings.css'
 
 const MODEL_LABELS: Record<ModelChoice, string> = {
-  auto: 'Auto',
+  auto: 'Use app default',
   haiku: 'Haiku',
   sonnet: 'Sonnet',
   opus: 'Opus'
@@ -40,6 +40,7 @@ function parsePaths(text: string): string[] {
 }
 
 interface FormProps {
+  projectId: string
   initial: ProjectSettings
   saving: boolean
   saveError: SaveError | null
@@ -49,13 +50,21 @@ interface FormProps {
   onEdit: () => void
 }
 
-function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave, onEdit }: FormProps) {
+function SettingsForm({ projectId, initial, saving, saveError, saveOk, sessionReset, onSave, onEdit }: FormProps) {
   const id = useId()
   const [model, setModel] = useState<ModelChoice>(initial.model)
   const [paths, setPaths] = useState(initial.protectedPaths.join('\n'))
   const [allowGitRead, setAllowGitRead] = useState(initial.allowGitRead)
   const [allowPlanWrites, setAllowPlanWrites] = useState(initial.allowPlanWrites)
+  const [allowCommands, setAllowCommands] = useState(initial.allowCommands ?? false)
+  const [delivery, setDelivery] = useState<DeliveryChoice>(initial.delivery ?? 'manual')
   const [rows, setRows] = useState<CheckRow[]>(() => rowsFromChecks(initial.checks))
+  const [suggestions, setSuggestions] = useState<CheckConfig[]>([])
+  useEffect(() => {
+    let live = true
+    void window.api?.settingsSuggestions?.({ projectId }).then((found) => { if (live) setSuggestions(found) }).catch(() => undefined)
+    return () => { live = false }
+  }, [projectId])
   const [checkErrors, setCheckErrors] = useState<ReadonlyMap<number, RowErrors>>(new Map())
   const [clientInvalid, setClientInvalid] = useState(false)
   const [limits, setLimits] = useState<LimitValues>(() => limitsFromSettings(initial))
@@ -79,6 +88,8 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
       protectedPaths: parsePaths(paths),
       allowGitRead,
       allowPlanWrites,
+      allowCommands,
+      delivery,
       checks: validation.errors.size === 0 ? validation.checks : undefined,
       ...(limitsOk ? limitValidation.values : {}),
       ...(reviewOk ? reviewValidation.values : {})
@@ -106,8 +117,7 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
           ))}
         </select>
         <p className="settings__hint">
-          Default for the chat and for pipeline tasks whose plan has no Model (a task&apos;s Model wins). Toolkit
-          agents keep their own model.
+          Use the app default, or choose a different model for Chat and tasks without a model in the plan.
         </p>
       </div>
       <div className="settings__field">
@@ -148,7 +158,23 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
           />
           Allow plan writes
         </label>
-        <p className="settings__hint">Lets the chat write files named docs/plans/&lt;slug&gt;.md, nothing else.</p>
+        <p className="settings__hint">Chat may edit docs/plans/*.md. Plan mode can already edit plans.</p>
+      </div>
+      <div className="settings__field">
+        <label className="settings__toggle">
+          <input type="checkbox" checked={allowCommands} onChange={(e) => { setAllowCommands(e.target.checked); onEdit() }} />
+          Let workers run setup commands
+        </label>
+        <p className="settings__hint">Workers may run supported setup commands inside their worktree.</p>
+      </div>
+      <div className="settings__field">
+        <label htmlFor={`${id}-delivery`}>After a successful run</label>
+        <select id={`${id}-delivery`} value={delivery} onChange={(e) => { setDelivery(e.target.value as DeliveryChoice); onEdit() }}>
+          <option value="manual">Keep local for my decision</option>
+          <option value="open-pr">Push run branch and open a PR</option>
+          <option value="merge-local">Merge into my local project</option>
+        </select>
+        <p className="settings__hint">Automatic actions run only after every task succeeds; manual is the default.</p>
       </div>
       <LimitsEditor
         values={limits}
@@ -166,6 +192,21 @@ function SettingsForm({ initial, saving, saveError, saveOk, sessionReset, onSave
           onEdit()
         }}
       />
+      {suggestions.filter((check) => !rows.some((row) => row.executable === check.executable && row.args === check.args.join('\n'))).length > 0 ? (
+        <section className="settings__section" aria-label="Suggested checks">
+          <h3 className="settings__heading">Suggested checks</h3>
+          <p className="settings__hint">Found from files in this project. Add one, then save Project settings to use it.</p>
+          {suggestions.filter((check) => !rows.some((row) => row.executable === check.executable && row.args === check.args.join('\n'))).map((check) => (
+            <div key={check.name} className="settings__field">
+              <code>{[check.executable, ...check.args].join(' ')}</code>{' '}
+              <button type="button" className="settings__small-button" disabled={rows.length >= CHECKS_MAX_COUNT} onClick={() => {
+                setRows((current) => [...current, newRow({ name: check.name, executable: check.executable, args: check.args.join('\n'), timeoutSec: String(check.timeoutMs / 1000) })])
+                onEdit()
+              }}>Add check</button>
+            </div>
+          ))}
+        </section>
+      ) : null}
       <ChecksEditor
         rows={rows}
         errors={checkErrors}
@@ -205,19 +246,82 @@ export interface SettingsPanelProps {
   projectId: string | null
 }
 
+function AppBasics({ info, error }: { info: AppInfo | null; error: boolean }) {
+  const id = useId()
+  const [root, setRoot] = useState<string | null>(null)
+  const [model, setModel] = useState<ModelChoice>('auto')
+  const [message, setMessage] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    let live = true
+    void window.api?.projectsRootGet?.().then((r) => { if (live) setRoot(r.root) }).catch(() => undefined)
+    void window.api?.appModelGet?.().then((r) => { if (live) setModel(r.model) }).catch(() => undefined)
+    return () => { live = false }
+  }, [])
+  const toolkit = info?.toolkit
+  const toolkitStatus = toolkit?.status === 'valid' ? 'Valid' : toolkit?.status === 'invalid' ? 'Invalid' : 'Not set'
+  async function saveModel() {
+    setSaving(true)
+    setMessage(null)
+    try {
+      const r = await window.api.appModelSet({ model })
+      setMessage(r.ok ? 'App default model saved.' : 'Could not save the app model.')
+    } catch {
+      setMessage('Could not save the app model.')
+    } finally {
+      setSaving(false)
+    }
+  }
+  async function pickRoot() {
+    try {
+      const r = await window.api.projectsRootPick()
+      if (r.root !== null) setRoot(r.root)
+    } catch {
+      setMessage('Could not choose the projects folder.')
+    }
+  }
+  return (
+    <section className="settings__section" aria-label="App">
+      <h3 className="settings__heading">App</h3>
+      <div className="settings__field">
+        <label htmlFor={`${id}-app-model`}>Default model</label>
+        <select id={`${id}-app-model`} value={model} onChange={(e) => setModel(e.target.value as ModelChoice)}>
+          <option value="auto">Auto</option><option value="haiku">Haiku</option>
+          <option value="sonnet">Sonnet</option><option value="opus">Opus</option>
+        </select>
+        <p className="settings__hint">Used by Chat and pipeline tasks unless a project or plan task chooses another model.</p>
+        <button type="button" className="settings__small-button" disabled={saving} onClick={() => void saveModel()}>{saving ? 'Saving...' : 'Save default model'}</button>
+      </div>
+      <div className="settings__field">
+        <strong>Projects folder</strong>
+        <p className="settings__path">{root ?? 'Not set'}</p>
+        <p className="settings__hint">New projects are created inside this folder; existing projects stay where they are.</p>
+        <button type="button" className="settings__small-button" onClick={() => void pickRoot()}>Choose folder…</button>
+      </div>
+      <div className="settings__field">
+        <strong>Toolkit</strong>
+        <p className="settings__hint">The shared agents and skills used for new sessions and pipeline runs.</p>
+        {error ? <p role="alert">Could not load app information.</p> : toolkit ? (
+          <dl><dt>Path</dt><dd className="settings__path">{toolkit.path ?? 'Not set'}</dd>
+            <dt>Status</dt><dd>{toolkitStatus}</dd>
+            {toolkit.version ? <><dt>Plugin version</dt><dd>{toolkit.version}</dd></> : null}</dl>
+        ) : <p role="status">Loading app information...</p>}
+      </div>
+      {message ? <p role="status" className="settings__message">{message}</p> : null}
+    </section>
+  )
+}
+
 export function SettingsPanel({ projectId }: SettingsPanelProps) {
   const s = useSettings(projectId)
 
-  if (projectId === null) {
-    return <p className="settings__empty">Select a project to edit its settings.</p>
-  }
-
-  const toolkit = s.appInfo?.toolkit
-  const toolkitStatus =
-    toolkit?.status === 'valid' ? 'Valid' : toolkit?.status === 'invalid' ? 'Invalid' : 'Not set'
-
   return (
     <div className="settings">
+      <div className="settings__group">
+        <AppBasics info={s.appInfo} error={s.appInfoError} />
+        <McpConnections />
+      </div>
+      {projectId === null ? <p className="settings__empty">Select a project to edit its project settings.</p> : null}
       {s.loading ? <p role="status">Loading settings...</p> : null}
       {s.loadError ? <p role="alert">{s.loadError}</p> : null}
       {s.notice ? (
@@ -227,9 +331,10 @@ export function SettingsPanel({ projectId }: SettingsPanelProps) {
             : 'Stored settings were unreadable. Safe defaults are in use until you save.'}
         </p>
       ) : null}
-      {s.settings ? (
+      {projectId !== null && s.settings ? (
         <SettingsForm
           key={`${projectId}:${s.revision}`}
+          projectId={projectId}
           initial={s.settings}
           saving={s.saving}
           saveError={s.saveError}
@@ -239,28 +344,6 @@ export function SettingsPanel({ projectId }: SettingsPanelProps) {
           onEdit={s.clearSaveState}
         />
       ) : null}
-      <McpConnections />
-      <section className="settings__section" aria-label="App">
-        <h3 className="settings__heading">App</h3>
-        {s.appInfoError ? (
-          <p role="alert">Could not load app information.</p>
-        ) : toolkit ? (
-          <dl>
-            <dt>Toolkit path</dt>
-            <dd className="settings__path">{toolkit.path ?? 'Not set'}</dd>
-            <dt>Status</dt>
-            <dd>{toolkitStatus}</dd>
-            {toolkit.version ? (
-              <>
-                <dt>Plugin version</dt>
-                <dd>{toolkit.version}</dd>
-              </>
-            ) : null}
-          </dl>
-        ) : (
-          <p role="status">Loading app information...</p>
-        )}
-      </section>
     </div>
   )
 }

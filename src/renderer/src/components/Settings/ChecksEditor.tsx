@@ -149,6 +149,7 @@ export function ChecksEditor({ rows, errors, onChange }: Props) {
                 {...field('name')}
                 onChange={(e) => update(row.key, { name: e.target.value })}
               />
+              <p className="settings__hint">A short name workers can use when asking to run this check.</p>
               {err('name')}
             </div>
             <div className="settings__field">
@@ -161,6 +162,7 @@ export function ChecksEditor({ rows, errors, onChange }: Props) {
                 {...field('executable')}
                 onChange={(e) => update(row.key, { executable: e.target.value })}
               />
+              <p className="settings__hint">Program to run, such as npm, mvn or python.</p>
               {err('executable')}
             </div>
             <div className="settings__field">
@@ -172,6 +174,7 @@ export function ChecksEditor({ rows, errors, onChange }: Props) {
                 {...field('args')}
                 onChange={(e) => update(row.key, { args: e.target.value })}
               />
+              <p className="settings__hint">Put each command argument on its own line; no shell syntax.</p>
               {err('args')}
             </div>
             <div className="settings__field">
@@ -184,6 +187,7 @@ export function ChecksEditor({ rows, errors, onChange }: Props) {
                 {...field('timeout')}
                 onChange={(e) => update(row.key, { timeoutSec: e.target.value })}
               />
+              <p className="settings__hint">The check is stopped when this many seconds pass.</p>
               {err('timeout')}
             </div>
             <label className="settings__toggle">
@@ -194,6 +198,7 @@ export function ChecksEditor({ rows, errors, onChange }: Props) {
               />
               Takes a test path
             </label>
+            <p className="settings__hint">Allows a worker to pass one test file path to this check.</p>
             <button
               type="button"
               className="settings__small-button"

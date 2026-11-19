@@ -119,8 +119,8 @@ describe('limits fields', () => {
     render(<SettingsPanel projectId={P1} />)
     await screen.findByLabelText(W)
     expect(screen.getByLabelText(W)).toHaveAccessibleDescription(/cost and machine load grow.*next run/)
-    expect(screen.getByText(/Default for the chat and for pipeline tasks whose plan has no Model/)).toBeInTheDocument()
-    expect(screen.getByText(/Model wins/)).toBeInTheDocument()
+    expect(screen.getByText(/Use the app default, or choose a different model for Chat/)).toBeInTheDocument()
+    expect(screen.getByText(/unless a project or plan task chooses another model/)).toBeInTheDocument()
   })
 })
 

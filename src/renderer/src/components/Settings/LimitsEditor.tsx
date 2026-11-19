@@ -27,6 +27,11 @@ const LABELS: Record<LimitField, string> = {
   maxTurns: 'Max turns per task',
   taskTimeoutMinutes: 'Time limit per task (minutes)'
 }
+const HINTS: Record<LimitField, string> = {
+  maxParallel: PARALLEL_HINT,
+  maxTurns: 'Maximum assistant steps a worker can take before its task stops. Applies to the next run.',
+  taskTimeoutMinutes: 'Maximum elapsed time for one task, including checks and review. Applies to the next run.'
+}
 
 const FIELDS: LimitField[] = ['maxParallel', 'maxTurns', 'taskTimeoutMinutes']
 
@@ -83,17 +88,13 @@ export function LimitsEditor({ values, errors, onChange }: Props) {
               value={values[f]}
               aria-invalid={err ? true : undefined}
               aria-describedby={
-                [f === 'maxParallel' ? `${id}-${f}-hint` : null, err ? `${id}-${f}-err` : null]
+                [`${id}-${f}-hint`, err ? `${id}-${f}-err` : null]
                   .filter(Boolean)
                   .join(' ') || undefined
               }
               onChange={(e) => onChange({ ...values, [f]: e.target.value })}
             />
-            {f === 'maxParallel' ? (
-              <p id={`${id}-${f}-hint`} className="settings__hint">
-                {PARALLEL_HINT}
-              </p>
-            ) : null}
+            <p id={`${id}-${f}-hint`} className="settings__hint">{HINTS[f]}</p>
             {err ? (
               <p id={`${id}-${f}-err`} role="alert" className="settings__error">
                 {err}

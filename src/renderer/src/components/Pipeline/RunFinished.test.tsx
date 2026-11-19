@@ -25,6 +25,16 @@ beforeEach(() => {
 })
 
 describe('RunFinished: Open pull request', () => {
+  it('shows automatic PR progress and the resulting link', () => {
+    const pending = { ...run('auto'), delivery: { policy: 'open-pr' as const, status: 'working' as const } }
+    const { rerender } = render(<RunFinished projectId="p1" run={pending} onMerged={vi.fn()} />)
+    expect(screen.getByText(/Opening the pull request automatically/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open pull request' })).toBeNull()
+    rerender(<RunFinished projectId="p1" run={{ ...pending, delivery: { policy: 'open-pr', status: 'done', url: 'https://example.test/pr/1' } }} onMerged={vi.fn()} />)
+    expect(screen.getByRole('link', { name: 'https://example.test/pr/1' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open pull request' })).toBeNull()
+  })
+
   it('asks first, then pushes, shows the link and opens it in the browser', async () => {
     api['pipelinePr']?.mockResolvedValue({ ok: true, url: 'https://github.com/o/greet-cli/pull/3', branch: 'desk/greet-cli-r1', host: 'github' })
     render(<RunFinished projectId="p1" run={run('r1')} onMerged={vi.fn()} />)

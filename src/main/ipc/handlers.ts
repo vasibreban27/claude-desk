@@ -21,6 +21,8 @@ import {
   projectsRefreshRequestSchema,
   settingsGetRequestSchema,
   settingsSetRequestSchema,
+  appModelSetRequestSchema,
+  type AppModelSetResult,
   type AppInfoResult,
   type ToolkitListResult,
   type ProjectsCreateResult,
@@ -46,6 +48,7 @@ import {
   type ProjectsRefreshResult
 } from '../../shared/ipc'
 import { createProject } from '../projects/createProject'
+import { suggestChecks } from '../projects/suggestChecks'
 import { removeProject } from '../projects/removeProject'
 import type { AppSettings } from '../projects/appSettings'
 import { scanToolkit } from '../toolkit/scan'
@@ -69,6 +72,8 @@ import type { DiscoverResult } from '../mcp/discover'
 import { serverConfig } from '../mcp/servers'
 import type { PlanUsageReader } from '../usage/planUsage'
 import { defaultSettings, needsSessionReset } from '../../shared/settings'
+import type { ModelChoice } from '../../shared/settings'
+import type { CheckConfig } from '../../shared/settings'
 
 export interface HandlerDeps {
   store: ProjectStore
@@ -115,7 +120,10 @@ export interface Handlers {
   usagePlan(payload: unknown): Promise<PlanUsageResult>
   settingsGet(payload: unknown): Promise<SettingsGetResult>
   settingsSet(payload: unknown): Promise<SettingsSetResult>
+  settingsSuggestions(payload: unknown): Promise<CheckConfig[]>
   appInfo(): Promise<AppInfoResult>
+  appModelGet(): Promise<{ model: ModelChoice }>
+  appModelSet(payload: unknown): Promise<AppModelSetResult>
   toolkitList(): Promise<ToolkitListResult>
   createProject(payload: unknown): Promise<ProjectsCreateResult>
   projectsRootGet(): Promise<ProjectsRootResult>
@@ -267,12 +275,43 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       }
     },
 
+    async settingsSuggestions(payload) {
+      const req = settingsGetRequestSchema.strict().safeParse(payload)
+      if (!req.success) return []
+      try {
+        const project = await deps.store.get(req.data.projectId)
+        return project ? await suggestChecks(project.path) : []
+      } catch {
+        return []
+      }
+    },
+
     async appInfo() {
       try {
         return { toolkit: readToolkitInfo() }
       } catch (err) {
         console.error('app:info failed:', err instanceof Error ? err.name : 'unknown')
         return { toolkit: { status: 'invalid', path: null, version: null } }
+      }
+    },
+
+    async appModelGet() {
+      try {
+        return { model: await deps.appSettings?.getDefaultModel() ?? 'auto' }
+      } catch {
+        return { model: 'auto' }
+      }
+    },
+
+    async appModelSet(payload) {
+      const req = appModelSetRequestSchema.strict().safeParse(payload)
+      if (!req.success) return { ok: false, error: 'invalid' }
+      if (!deps.appSettings) return { ok: false, error: 'unavailable' }
+      try {
+        await deps.appSettings.setDefaultModel(req.data.model)
+        return { ok: true, model: req.data.model }
+      } catch {
+        return { ok: false, error: 'unavailable' }
       }
     },
 

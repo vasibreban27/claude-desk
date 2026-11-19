@@ -51,7 +51,8 @@ function buildPipeline(
   settings: SettingsStore,
   projects: ProjectStore,
   pipelineLog: PipelineLog,
-  runStore?: RunStore
+  runStore?: RunStore,
+  appSettings?: AppSettings
 ): PipelineService {
   // 4a crash recovery: runs left `running` by a killed app are failed at registration, not on first start.
   try {
@@ -70,6 +71,7 @@ function buildPipeline(
       orchestrator = createOrchestrator({
         store,
         settings,
+        ...(appSettings ? { loadDefaultModel: () => appSettings.getDefaultModel() } : {}),
         runner,
         pluginPath: toolkit.path,
         log: (m) => console.error(m),
@@ -94,6 +96,11 @@ function buildPipeline(
     projects,
     store,
     orchestrator: lazy,
+    settings,
+    onDelivery: (projectId, runId, text, tone) => {
+      pipelineLog.add(projectId, { runId, taskId: null, role: 'pipeline', text, tone })
+      broadcastPipelineEvent({ projectId, runId })
+    },
     getToolkit: readToolkitInfo,
     log: (m) => console.error(m)
   })
@@ -142,6 +149,7 @@ export function registerIpc(
       if (target && !target.isDestroyed()) target.send(IPC.activityEvent, event)
     },
     settings: settingsStore,
+    ...(appSettings ? { loadDefaultModel: () => appSettings.getDefaultModel() } : {}),
     // Plan mode: the planner starts a run when the user says "build it" (pipeline is created below).
     startPipeline: (projectId: string, planFile: string) =>
       pipeline ? pipeline.start(projectId, planFile) : Promise.resolve({ ok: false as const, error: 'start-failed' as const }),
@@ -172,7 +180,7 @@ export function registerIpc(
   })
 
   const pipelineLog = createPipelineLog(broadcastPipelineLog)
-  const pipeline = pipelineStore ? buildPipeline(pipelineStore, settingsStore, store, pipelineLog, runStore) : undefined
+  const pipeline = pipelineStore ? buildPipeline(pipelineStore, settingsStore, store, pipelineLog, runStore, appSettings) : undefined
 
   const make = (event: IpcMainInvokeEvent) =>
     createHandlers({ store, readGitStatus, pickFolder: () => pickFolder(event), chat,
@@ -207,7 +215,10 @@ export function registerIpc(
   ipcMain.handle(IPC.usagePlan, (event, payload: unknown) => make(event).usagePlan(payload))
   ipcMain.handle(IPC.settingsGet, (event, payload: unknown) => make(event).settingsGet(payload))
   ipcMain.handle(IPC.settingsSet, (event, payload: unknown) => make(event).settingsSet(payload))
+  ipcMain.handle(IPC.settingsSuggestions, (event, payload: unknown) => make(event).settingsSuggestions(payload))
   ipcMain.handle(IPC.appInfo, (event) => make(event).appInfo())
+  ipcMain.handle(IPC.appModelGet, (event) => make(event).appModelGet())
+  ipcMain.handle(IPC.appModelSet, (event, payload: unknown) => make(event).appModelSet(payload))
   ipcMain.handle(IPC.toolkitList, (event) => make(event).toolkitList())
   ipcMain.handle(IPC.projectsCreate, (event, payload: unknown) => make(event).createProject(payload))
   ipcMain.handle(IPC.projectsRootGet, (event) => make(event).projectsRootGet())
@@ -248,7 +259,7 @@ export function registerIpc(
   })
 
   return () => {
-    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.usagePlan, IPC.settingsGet, IPC.settingsSet, IPC.appInfo, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick, IPC.projectsRemove,
+    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.usagePlan, IPC.settingsGet, IPC.settingsSet, IPC.settingsSuggestions, IPC.appInfo, IPC.appModelGet, IPC.appModelSet, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick, IPC.projectsRemove,
       IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineResume, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.openUrl, IPC.mcpList, IPC.mcpSave, IPC.mcpDelete, IPC.mcpTest]) {
       ipcMain.removeHandler(channel)
     }

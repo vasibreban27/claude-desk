@@ -22,9 +22,9 @@ describe('Layout', () => {
     expect(workspace.compareDocumentPosition(chat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('shows a placeholder in the workspace when nothing is provided', () => {
+  it('shows app settings before a project is selected', () => {
     render(<App />)
-    expect(screen.getByText(/Runs, activity and usage will appear here/)).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'App' })).toBeInTheDocument()
   })
 
   it('renders content passed as props', () => {

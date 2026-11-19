@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { projectSettingsSchema, type ProjectSettings } from './settings'
+import { MODEL_CHOICES, projectSettingsSchema, type CheckConfig, type DeliveryChoice, type ModelChoice, type ProjectSettings } from './settings'
 
 import type { PipelineStage, TaskFindingsView } from './review'
 import type { ToolkitListResult } from './toolkit'
@@ -33,7 +33,10 @@ export const IPC = {
   usagePlan: 'usage:plan',
   settingsGet: 'settings:get',
   settingsSet: 'settings:set',
+  settingsSuggestions: 'settings:suggestions',
   appInfo: 'app:info',
+  appModelGet: 'app:model-get',
+  appModelSet: 'app:model-set',
   projectsCreate: 'projects:create',
   projectsRootGet: 'projects:root-get',
   projectsRootPick: 'projects:root-pick',
@@ -120,6 +123,10 @@ export const settingsSetRequestSchema = z.object({
   settings: projectSettingsSchema
 })
 export type SettingsSetRequest = z.infer<typeof settingsSetRequestSchema>
+
+export const appModelSetRequestSchema = z.object({ model: z.enum(MODEL_CHOICES) })
+export type AppModelSetRequest = z.infer<typeof appModelSetRequestSchema>
+export type AppModelSetResult = { ok: true; model: ModelChoice } | { ok: false; error: 'invalid' | 'unavailable' }
 
 export const pipelinePlansRequestSchema = z.object({ projectId: z.uuid() })
 export type PipelinePlansRequest = z.infer<typeof pipelinePlansRequestSchema>
@@ -261,6 +268,7 @@ export interface PipelineRunView {
   /** ISO-8601. */
   createdAt: string
   finishedAt: string | null
+  delivery?: { policy: DeliveryChoice; status: 'pending' | 'working' | 'done' | 'failed'; url?: string; message?: string }
   tasks: PipelineTaskView[]
 }
 
@@ -460,7 +468,10 @@ export interface DeskApi {
   usagePlan(req: PlanUsageRequest): Promise<PlanUsageResult>
   settingsGet(req: SettingsGetRequest): Promise<SettingsGetResult>
   settingsSet(req: SettingsSetRequest): Promise<SettingsSetResult>
+  settingsSuggestions(req: SettingsGetRequest): Promise<CheckConfig[]>
   appInfo(): Promise<AppInfoResult>
+  appModelGet(): Promise<{ model: ModelChoice }>
+  appModelSet(req: AppModelSetRequest): Promise<AppModelSetResult>
   toolkitList(): Promise<ToolkitListResult>
   createProject(req: ProjectsCreateRequest): Promise<ProjectsCreateResult>
   projectsRootGet(): Promise<ProjectsRootResult>

@@ -46,6 +46,8 @@ export interface ChatServiceDeps {
   loadConfig?: () => ConfigResult
   /** Per-project settings; read once per turn. Absent or throwing means the safe defaults. */
   settings?: { get(projectId: string): { settings: ProjectSettings; notice: string | null } }
+  /** App model used when the project selects Auto. */
+  loadDefaultModel?: () => Promise<ProjectSettings['model']>
   /** Session rule; defaults to the shared `needsSessionReset`. Injectable for tests. */
   needsSessionReset?: (previous: ProjectSettings, next: ProjectSettings) => boolean
   now?: () => Date
@@ -105,10 +107,12 @@ export class ChatService {
     const planning = mode === 'plan'
     // Read once, kept for the whole run: a settings change during a run applies to the next turn.
     // Plan mode: the toolkit planner (flow:plan) on Opus, allowed to write docs/plans/ only.
-    const base = this.readSettings(projectId)
-    const settings: ProjectSettings = planning ? { ...base, model: 'opus', allowPlanWrites: true } : base
+    const stored = this.readSettings(projectId)
     const turnStarted = (this.deps.now ?? (() => new Date()))().getTime()
     try {
+      const appModel = await this.deps.loadDefaultModel?.().catch(() => 'auto' as const) ?? 'auto'
+      const base = stored.model === 'auto' ? { ...stored, model: appModel } : stored
+      const settings: ProjectSettings = planning ? { ...base, model: 'opus', allowPlanWrites: true } : base
       const cfg = (this.deps.loadConfig ?? (() => loadConfig()))()
       if (!cfg.ok) throw cfg.error
       run = this.startRun(projectId, planning ? 'plan' : 'chat')

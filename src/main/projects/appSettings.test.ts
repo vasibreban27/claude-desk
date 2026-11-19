@@ -21,4 +21,12 @@ describe('appSettings', () => {
     writeFileSync(path.join(dir, APP_SETTINGS_FILE), '{nope')
     expect(await openAppSettings(dir).getProjectsRoot()).toBeNull()
   })
+  it('keeps the projects folder when the default model changes', async () => {
+    const s = openAppSettings(dir)
+    expect(await s.getDefaultModel()).toBe('auto')
+    await s.setProjectsRoot(dir)
+    await s.setDefaultModel('sonnet')
+    expect(await s.getProjectsRoot()).toBe(path.resolve(dir))
+    expect(await s.getDefaultModel()).toBe('sonnet')
+  })
 })

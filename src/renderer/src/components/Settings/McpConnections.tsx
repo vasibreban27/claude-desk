@@ -184,22 +184,26 @@ function ConnectionForm({
           <option value="sse">Remote (SSE, older servers)</option>
           <option value="stdio">Local command</option>
         </select>
+        <p className="settings__hint">Choose a remote server address or a program that runs on this computer.</p>
       </div>
       {isLocal ? (
         <>
           <div className="settings__field">
             <label htmlFor={`${id}-command`}>Command</label>
             <input id={`${id}-command`} type="text" value={d.command} onChange={(e) => set({ command: e.target.value })} spellCheck={false} />
+            <p className="settings__hint">The local program that starts this connection.</p>
           </div>
           <div className="settings__field">
             <label htmlFor={`${id}-args`}>Arguments (one per line)</label>
             <textarea id={`${id}-args`} value={d.args} onChange={(e) => set({ args: e.target.value })} spellCheck={false} />
+            <p className="settings__hint">Put each program argument on its own line.</p>
           </div>
         </>
       ) : (
         <div className="settings__field">
           <label htmlFor={`${id}-url`}>URL</label>
           <input id={`${id}-url`} type="text" value={d.url} onChange={(e) => set({ url: e.target.value })} spellCheck={false} />
+          <p className="settings__hint">The server address, including https://.</p>
         </div>
       )}
       <fieldset className="mcp__secrets">
@@ -243,6 +247,7 @@ function ConnectionForm({
         <input type="checkbox" checked={d.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
         Enabled in Chat and Plan
       </label>
+      <p className="settings__hint">Turn this connection on for Chat and Plan sessions in every project.</p>
       {d.id !== null && (
         <fieldset className="mcp__tools">
           <legend>Tools agents may use</legend>

@@ -103,6 +103,8 @@ export type ResolveRef = (cwd: string, ref: string) => Promise<string>
 export interface OrchestratorDeps {
   store: PipelineStore
   settings: SettingsStore
+  /** App default used when the project model is Auto. */
+  loadDefaultModel?: () => Promise<ProjectSettings['model']>
   runner: WorkerRunner
   pluginPath: string
   /** The checks gate (default: the app's own `runChecksGate`). */
@@ -215,6 +217,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const newRunId = deps.newRunId ?? randomUUID
   const active = new Map<string, ActiveRun>()
   const runGate = deps.gate ?? ((args: ChecksGateArgs) => runChecksGate(args))
+  const withAppModel = async (settings: ProjectSettings): Promise<ProjectSettings> => {
+    if (settings.model !== 'auto') return settings
+    try {
+      return { ...settings, model: await deps.loadDefaultModel?.() ?? 'auto' }
+    } catch {
+      return settings
+    }
+  }
   let defaultReviewer: ReviewRunner | null = null
   const runReview: ReviewRunner = (args) => {
     const r = deps.reviewRunner ?? (defaultReviewer ??= createReviewRunner())
@@ -683,7 +693,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const handle: ActiveRun = { cancelled: false, controller: new AbortController() }
         active.set(runId, handle)
         const finished = execute(runId, parsed.plan, {
-          settings: loaded.settings,
+          settings: await withAppModel(loaded.settings),
           manager,
           handle,
           projectId: input.projectId,
@@ -762,7 +772,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const handle: ActiveRun = { cancelled: false, controller: new AbortController() }
         active.set(runId, handle)
         const finished = execute(runId, parsed.plan, {
-          settings: loaded.settings,
+          settings: await withAppModel(loaded.settings),
           manager,
           handle,
           projectId: input.projectId,

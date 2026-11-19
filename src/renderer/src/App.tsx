@@ -5,6 +5,7 @@ import { ProjectsPanel } from './components/Projects'
 import { ChatPanel } from './components/Chat'
 import { PlanReadyCard } from './components/Chat/PlanReadyCard'
 import { Workspace, WORKSPACE_TAB_KEY } from './components/Workspace'
+import { SettingsPanel } from './components/Settings'
 import { useProjects } from './hooks/useProjects'
 import { useChat, type UseChat } from './hooks/useChat'
 import { useStartProject } from './hooks/useStartProject'
@@ -101,7 +102,7 @@ export function App() {
         />
       }
       workspace={
-        selected !== null ? <Workspace key={`${selected}:${workspaceKey}`} projectId={selected} projectNames={projectNames} /> : undefined
+        selected !== null ? <Workspace key={`${selected}:${workspaceKey}`} projectId={selected} projectNames={projectNames} /> : <SettingsPanel projectId={null} />
       }
       chat={
         selected === null ? (

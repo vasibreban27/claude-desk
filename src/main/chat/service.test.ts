@@ -360,7 +360,7 @@ describe('ChatService per-turn settings', () => {
   type Reader = NonNullable<ConstructorParameters<typeof ChatService>[0]['settings']>
   const settingsOf = (over: Partial<ProjectSettings> = {}): ProjectSettings => ({ ...defaultSettings(), ...over })
 
-  function build(runner: ChatRunner, settings?: Reader, rule?: (a: ProjectSettings, b: ProjectSettings) => boolean) {
+  function build(runner: ChatRunner, settings?: Reader, rule?: (a: ProjectSettings, b: ProjectSettings) => boolean, loadDefaultModel?: () => Promise<'auto' | 'haiku' | 'sonnet' | 'opus'>) {
     let done: () => void = () => {}
     let ended = new Promise<void>((r) => (done = r))
     const service = new ChatService({
@@ -374,7 +374,8 @@ describe('ChatService per-turn settings', () => {
       },
       loadConfig: () => ({ ok: true, config: { toolkitPath: TOOLKIT } }),
       ...(settings ? { settings } : {}),
-      ...(rule ? { needsSessionReset: rule } : {})
+      ...(rule ? { needsSessionReset: rule } : {}),
+      ...(loadDefaultModel ? { loadDefaultModel } : {})
     })
     const turn = async (id = 'p1'): Promise<void> => {
       const end = ended
@@ -397,6 +398,17 @@ describe('ChatService per-turn settings', () => {
     expect(get).toHaveBeenCalledTimes(1)
     expect(get).toHaveBeenCalledWith('p1')
     expect(runner.mock.calls[0]?.[0].settings?.model).toBe('haiku')
+  })
+
+  it('uses the app model for an inherited project and keeps a project override', async () => {
+    let model: ProjectSettings['model'] = 'auto'
+    const runner = vi.fn(streamOf([]))
+    const { turn } = build(runner, { get: () => ({ settings: settingsOf({ model }), notice: null }) }, undefined, async () => 'sonnet')
+    await turn()
+    expect(runner.mock.calls[0]?.[0].settings?.model).toBe('sonnet')
+    model = 'haiku'
+    await turn()
+    expect(runner.mock.calls[1]?.[0].settings?.model).toBe('haiku')
   })
 
   it('uses the safe defaults without a reader', async () => {
