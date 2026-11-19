@@ -38,7 +38,7 @@ describe('scaffold acceptance (gap coverage)', () => {
     for (const s of ['dev', 'build', 'typecheck', 'lint', 'test']) {
       expect(pkg.scripts[s]).toBeDefined()
     }
-    expect(pkg.scripts['dev']).toBe('electron-vite dev')
+    expect(pkg.scripts['dev']).toBe('electron-vite dev --watch')
   })
 
   it('CLAUDE.md documents each command', () => {

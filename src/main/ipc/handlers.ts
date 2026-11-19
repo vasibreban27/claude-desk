@@ -6,6 +6,9 @@ import {
   pipelineCancelRequestSchema,
   pipelineDiscardRequestSchema,
   pipelineMergeRequestSchema,
+  pipelinePrRequestSchema,
+  openUrlRequestSchema,
+  type PipelinePrResult,
   pipelineLogRequestSchema,
   type PipelineLogResult,
   type PipelineMergeResult,
@@ -71,6 +74,8 @@ export interface HandlerDeps {
   folderExists?: (folder: string) => Promise<boolean>
   /** Live pipeline log (history only; lines are broadcast by the log itself). */
   pipelineLog?: { history(projectId: string): PipelineLogResult }
+  /** Opens an https URL in the default browser (Electron shell.openExternal). */
+  openExternal?: (url: string) => Promise<void>
   gitRun?: (cwd: string, args: string[]) => Promise<void>
   /** Undefined when the pipeline could not be set up; pipeline calls then report storage-unavailable. */
   pipeline?: PipelineService
@@ -97,6 +102,8 @@ export interface Handlers {
   pipelineCancel(payload: unknown): Promise<PipelineCancelResult>
   pipelineDiscard(payload: unknown): Promise<PipelineDiscardResult>
   pipelineMerge(payload: unknown): Promise<PipelineMergeResult>
+  pipelinePr(payload: unknown): Promise<PipelinePrResult>
+  openUrl(payload: unknown): Promise<boolean>
   pipelineLog(payload: unknown): Promise<PipelineLogResult>
   /**
    * `route` runs before the turn starts (events may be emitted synchronously) and returns
@@ -375,6 +382,29 @@ export function createHandlers(deps: HandlerDeps): Handlers {
         return deps.pipelineLog.history(req.data.projectId)
       } catch {
         return []
+      }
+    },
+
+    async pipelinePr(payload) {
+      const req = pipelinePrRequestSchema.strict().safeParse(payload)
+      if (!req.success) return { ok: false, error: 'not-found' }
+      if (!pipeline) return { ok: false, error: 'pr-failed' }
+      try {
+        return await pipeline.openPr(req.data.projectId, req.data.runId)
+      } catch (err) {
+        console.error('pipeline:pr failed:', errName(err))
+        return { ok: false, error: 'pr-failed' }
+      }
+    },
+
+    async openUrl(payload) {
+      const req = openUrlRequestSchema.strict().safeParse(payload)
+      if (!req.success || !deps.openExternal) return false
+      try {
+        await deps.openExternal(req.data.url)
+        return true
+      } catch {
+        return false
       }
     },
 
