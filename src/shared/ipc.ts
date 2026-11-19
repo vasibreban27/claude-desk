@@ -345,6 +345,7 @@ export type ChatEvent =
   | { projectId: string; turnId: string; type: 'done' }
   | { projectId: string; turnId: string; type: 'error'; message: string }
   | { projectId: string; turnId: string; type: 'plan-ready'; planFile: string; problem: string | null }
+  | { projectId: string; turnId: string; type: 'pipeline-started'; planFile: string; runId: string }
   | { projectId: string; turnId: string; type: 'proposal'; name: string; brief: string }
 
 /** A change signal; the renderer re-fetches pipeline:status. */

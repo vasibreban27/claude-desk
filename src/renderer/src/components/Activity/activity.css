@@ -140,7 +140,7 @@
 .pipeline-log__line { display: flex; gap: 8px; padding: 2px 0; align-items: baseline; }
 .pipeline-log__time { color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
 .pipeline-log__task { font-weight: 600; min-width: 2.5em; }
-.pipeline-log__who { color: var(--color-text-muted); min-width: 6em; }
+.pipeline-log__who { color: var(--color-text-muted); min-width: 10em; }
 .pipeline-log__text { overflow-wrap: anywhere; }
 .pipeline-log__line--ok .pipeline-log__text { color: var(--color-success); }
 .pipeline-log__line--error .pipeline-log__text, .pipeline-log__line--denied .pipeline-log__text { color: var(--color-danger-text, #b42318); }

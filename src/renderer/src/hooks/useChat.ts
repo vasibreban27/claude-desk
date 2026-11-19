@@ -31,6 +31,8 @@ export interface UseChat {
   /** The latest plan the planner wrote in this chat. */
   planReady: PlanReady | null
   clearPlanReady: () => void
+  /** The run the planner started from chat ("build it"); the app shows the Pipeline tab. */
+  pipelineStarted: { runId: string; planFile: string } | null
 }
 
 interface ChatState {
@@ -41,6 +43,7 @@ interface ChatState {
   error: string | null
   proposal: Proposal | null
   planReady: PlanReady | null
+  pipelineStarted: { runId: string; planFile: string } | null
 }
 
 /** Cards survive switching projects (the chat state is reset then); cleared when the user acts on them. */
@@ -54,13 +57,15 @@ const empty = (projectId: string | null): ChatState => ({
   busy: false,
   error: null,
   proposal: projectId !== null ? (proposals.get(projectId) ?? null) : null,
-  planReady: projectId !== null ? (plans.get(projectId) ?? null) : null
+  planReady: projectId !== null ? (plans.get(projectId) ?? null) : null,
+  pipelineStarted: null
 })
 
 /** Records cards for any project, so one that arrives while another chat is open is not lost. */
 function remember(event: ChatEvent): void {
   if (event.type === 'proposal') proposals.set(event.projectId, { name: event.name, brief: event.brief })
   if (event.type === 'plan-ready') plans.set(event.projectId, { planFile: event.planFile, problem: event.problem })
+  if (event.type === 'pipeline-started') plans.delete(event.projectId)
 }
 
 function applyEvent(state: ChatState, event: ChatEvent): ChatState {
@@ -77,6 +82,9 @@ function applyEvent(state: ChatState, event: ChatEvent): ChatState {
   }
   if (event.type === 'proposal') return { ...state, proposal: { name: event.name, brief: event.brief } }
   if (event.type === 'plan-ready') return { ...state, planReady: { planFile: event.planFile, problem: event.problem } }
+  if (event.type === 'pipeline-started') {
+    return { ...state, planReady: null, pipelineStarted: { runId: event.runId, planFile: event.planFile } }
+  }
   if (event.type === 'done') return { ...state, busy: false }
   return { ...state, busy: false, error: event.message }
 }
@@ -173,6 +181,7 @@ export function useChat(projectId: string | null, mode: ChatMode = 'chat'): UseC
     proposal: state.proposal,
     clearProposal,
     planReady: state.planReady,
-    clearPlanReady
+    clearPlanReady,
+    pipelineStarted: state.pipelineStarted
   }
 }

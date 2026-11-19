@@ -15,6 +15,7 @@ import { GIT_ALLOWED_TOOLS, GIT_SERVER_NAME, createGitMcpServer } from './gitToo
 import { createProtectedMatcher } from './protectedPaths'
 import { frameProjectContext, loadProjectContext } from './projectContext'
 import { assistantOptions } from './assistant'
+import { DESK_SERVER, START_PIPELINE_TOOL, createDeskServer, type StartPipeline } from './deskTools'
 import { ALLOWED_TOOLS, guardPreToolUse, isDenied, type ToolPolicy } from './tools'
 
 /** What the chat service needs from the SDK; the renderer never sees raw SDK objects. */
@@ -37,6 +38,8 @@ export interface RunnerArgs {
   assistant?: boolean
   /** Extra system-prompt text for this turn (plan mode: the toolkit plan format). */
   appendPrompt?: string
+  /** Plan mode: offers the in-process start_pipeline tool, which starts the app's pipeline. */
+  startPipeline?: StartPipeline
 }
 
 /** The per-turn guard policy derived from the settings. */
@@ -198,10 +201,17 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
   else args.signal?.addEventListener('abort', () => abortController.abort(), { once: true })
   const queue = createQueue<RunnerItem>()
   const settings = args.settings ?? defaultSettings()
-  const policy = policyFromSettings(settings)
+  const policy: ToolPolicy = { ...policyFromSettings(settings), ...(args.startPipeline ? { allowPipelineStart: true } : {}) }
   const allowedTools: string[] = [...ALLOWED_TOOLS]
   if (settings.allowPlanWrites) allowedTools.push('Write')
   if (settings.allowGitRead) allowedTools.push(...GIT_ALLOWED_TOOLS)
+  if (args.startPipeline) allowedTools.push(START_PIPELINE_TOOL)
+  const mcpServers: NonNullable<Options['mcpServers']> = {
+    ...(settings.allowGitRead
+      ? { [GIT_SERVER_NAME]: createGitMcpServer({ cwd: args.cwd, isProtected: createGitIsProtected(args.cwd, settings.protectedPaths) }) }
+      : {}),
+    ...(args.startPipeline ? { [DESK_SERVER]: createDeskServer(args.startPipeline) } : {})
+  }
   const stream = query({
     prompt: args.prompt,
     options: {
@@ -224,16 +234,7 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
       includePartialMessages: true,
       allowedTools,
       ...(settings.model !== 'auto' ? { model: settings.model } : {}),
-      ...(settings.allowGitRead
-        ? {
-            mcpServers: {
-              [GIT_SERVER_NAME]: createGitMcpServer({
-                cwd: args.cwd,
-                isProtected: createGitIsProtected(args.cwd, settings.protectedPaths)
-              })
-            }
-          }
-        : {}),
+      ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
       hooks: buildHooks((draft) => queue.push({ kind: 'activity', draft }), args.cwd, policy),
       ...(args.assistant ? assistantOptions((p) => queue.push({ kind: 'proposal', ...p })) : {}),
       abortController,

@@ -115,6 +115,9 @@ export function registerIpc(
       if (target && !target.isDestroyed()) target.send(IPC.activityEvent, event)
     },
     settings: settingsStore,
+    // Plan mode: the planner starts a run when the user says "build it" (pipeline is created below).
+    startPipeline: (projectId: string, planFile: string) =>
+      pipeline ? pipeline.start(projectId, planFile) : Promise.resolve({ ok: false as const, error: 'start-failed' as const }),
     ...(runStore ? { runStore } : {})
   })
 

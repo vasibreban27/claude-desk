@@ -1112,3 +1112,20 @@ describe('guardPreToolUse plan writes: device names and canonical target (F2, F3
     expect(isDenied(gp(p, 'Write', { file_path: 'docs/plans/secret-one.md', content: 'a' }, dir))).toBe(true)
   })
 })
+
+describe('guardPreToolUse start_pipeline (plan mode)', () => {
+  const name = 'mcp__desk__start_pipeline'
+  const call = (p?: ToolPolicy) => guardPreToolUse({ tool_name: name, tool_input: { planFile: 'a.md' } }, process.cwd(), p)
+
+  it('is allowed only when the policy enables pipeline start', () => {
+    expect(isDenied(call())).toBe(true)
+    expect(isDenied(call(policy({ allowPlanWrites: true })))).toBe(true)
+    expect(call(policy({ allowPlanWrites: true, allowPipelineStart: true }))).toEqual({})
+  })
+
+  it('keeps Bash and other desk-looking tools denied in plan mode', () => {
+    const p = policy({ allowPlanWrites: true, allowPipelineStart: true })
+    expect(isDenied(guardPreToolUse({ tool_name: 'Bash', tool_input: { command: 'npm test' } }, process.cwd(), p))).toBe(true)
+    expect(isDenied(guardPreToolUse({ tool_name: 'mcp__desk__merge', tool_input: {} }, process.cwd(), p))).toBe(true)
+  })
+})

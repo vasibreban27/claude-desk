@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ASSISTANT_PROJECT_ID, type ChatMode, type Project } from '@shared/ipc'
 import { Layout } from './components/Layout'
 import { ProjectsPanel } from './components/Projects'
@@ -30,6 +30,14 @@ export function App() {
   const projectId = assistant ? ASSISTANT_PROJECT_ID : projects.selectedId
   const mode: ChatMode = !assistant && projects.selectedId !== null ? (modes[projects.selectedId] ?? 'chat') : 'chat'
   const chat = useChat(projectId, mode)
+  // "build it" in the Plan chat started a run: show it.
+  const startedRun = chat.pipelineStarted?.runId ?? null
+  useEffect(() => {
+    if (startedRun === null) return
+    showPipelineTab()
+    setWorkspaceKey((k) => k + 1)
+  }, [startedRun])
+
   const projectNames = useMemo(
     () => Object.fromEntries(projects.projects.map((p) => [p.id, p.name])),
     [projects.projects]

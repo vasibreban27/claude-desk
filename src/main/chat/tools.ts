@@ -1,4 +1,5 @@
 /** Tool allowlist and the deny-by-default PreToolUse guard for chat runs (Phase 2: read-only). */
+import { START_PIPELINE_TOOL } from './deskTools'
 import { lstatSync, readlinkSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { DEFAULT_PROTECTED_PATHS } from '../../shared/settings'
@@ -16,6 +17,8 @@ export interface ToolPolicy {
   allowGitRead: boolean
   /** Allows `Write` for exactly `docs/plans/<slug>.md`. */
   allowPlanWrites: boolean
+  /** Plan mode: allows the app's in-process start_pipeline tool. */
+  allowPipelineStart?: boolean
 }
 
 const DEFAULT_POLICY: ToolPolicy = {
@@ -37,7 +40,8 @@ function readPolicy(policy: unknown): ToolPolicy | null {
   return {
     protectedPatterns: usable ? patterns : DEFAULT_PROTECTED_PATHS,
     allowGitRead: p['allowGitRead'],
-    allowPlanWrites: p['allowPlanWrites']
+    allowPlanWrites: p['allowPlanWrites'],
+    allowPipelineStart: p['allowPipelineStart'] === true
   }
 }
 
@@ -88,6 +92,7 @@ export function isToolAllowed(name: string, policy?: ToolPolicy): boolean {
   if (ALLOWED_SET.has(name)) return true
   if (policy === undefined) return false
   if (policy.allowGitRead && (GIT_TOOL_SET.has(name) || name === 'ToolSearch')) return true
+  if (policy.allowPipelineStart === true && name === START_PIPELINE_TOOL) return true
   return policy.allowPlanWrites && name === 'Write'
 }
 
