@@ -6,7 +6,7 @@ import { createMcpStore, type SecretBox } from '../mcp/store'
 import { loadChatMcp } from '../mcp/servers'
 import { discoverTools } from '../mcp/discover'
 import { createPlanUsageReader } from '../usage/planUsage'
-import { IPC, type ActivityEvent, type ChatEvent, type PipelineEvent, type PipelineLogEntry } from '../../shared/ipc'
+import { IPC, type ActivityEvent, type ChatEvent, type PipelineEvent, type PipelineLogEntry, type TracePush } from '../../shared/ipc'
 import { ChatService } from '../chat/service'
 import { sdkRunner } from '../chat/runner'
 import { readGitStatus } from '../git/status'
@@ -23,6 +23,9 @@ import { readToolkitInfo } from '../config'
 import type { ProjectStore } from '../projects/store'
 import { createHandlers } from './handlers'
 import { createTranscriber } from '../speech/transcriber'
+import { createTraceHub, type TraceHub } from '../trace/hub'
+import type { TraceStore } from '../db/traceStore'
+import type { McpStore } from '../mcp/store'
 
 type EventTarget = Pick<WebContents, 'send' | 'isDestroyed'>
 
@@ -47,13 +50,30 @@ function broadcastPipelineLog(entry: PipelineLogEntry): void {
   }
 }
 
+/** Detailed Activity goes to every open window (the Activity tab of any window may show the run). */
+function broadcastTrace(push: TracePush): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    const wc = win.webContents
+    if (!wc.isDestroyed()) wc.send(IPC.activityTrace, push)
+  }
+}
+
+/** Every saved MCP secret value, so Detailed Activity can hide it. */
+async function mcpSecretValues(store: Pick<McpStore, 'list' | 'secretsFor'>): Promise<string[]> {
+  const out: string[] = []
+  for (const c of await store.list()) out.push(...Object.values(await store.secretsFor(c.id)))
+  return out
+}
+
 function buildPipeline(
   rawStore: PipelineStore,
   settings: SettingsStore,
   projects: ProjectStore,
   pipelineLog: PipelineLog,
   runStore?: RunStore,
-  appSettings?: AppSettings
+  appSettings?: AppSettings,
+  trace?: TraceHub
 ): PipelineService {
   // 4a crash recovery: runs left `running` by a killed app are failed at registration, not on first start.
   try {
@@ -76,7 +96,12 @@ function buildPipeline(
         runner,
         pluginPath: toolkit.path,
         log: (m) => console.error(m),
-        onLog: (projectId, line) => pipelineLog.add(projectId, line),
+        onLog: (projectId, line) => {
+          pipelineLog.add(projectId, line)
+          // Progress lines of the run itself; tool lines come from the sessions' own recorders.
+          if (line.role === 'pipeline') trace?.note({ projectId, runId: line.runId, taskId: line.taskId, text: line.text, ...(line.tone ? { tone: line.tone } : {}) })
+        },
+        ...(trace ? { traceSession: trace.session } : {}),
         ...(runStore ? { recordUsage: pipelineUsageRecorder(runStore) } : {})
       })
     }
@@ -100,6 +125,7 @@ function buildPipeline(
     settings,
     onDelivery: (projectId, runId, text, tone) => {
       pipelineLog.add(projectId, { runId, taskId: null, role: 'pipeline', text, tone })
+      trace?.note({ projectId, runId, taskId: null, text, ...(tone ? { tone } : {}) })
       broadcastPipelineEvent({ projectId, runId })
     },
     getToolkit: readToolkitInfo,
@@ -116,7 +142,8 @@ export function registerIpc(
   runStore?: RunStore,
   settingsStore: SettingsStore = createSettingsStore(null),
   pipelineStore?: PipelineStore,
-  appSettings?: AppSettings
+  appSettings?: AppSettings,
+  traceStore?: TraceStore
 ): () => void {
   const targets = new Map<string, EventTarget>()
 
@@ -136,7 +163,15 @@ export function registerIpc(
     }
   }
 
+  const trace = createTraceHub({
+    ...(traceStore ? { store: traceStore } : {}),
+    emit: broadcastTrace,
+    loadSecrets: () => mcpSecretValues(mcpStore),
+    log: (m) => console.error(m)
+  })
+
   const chat = new ChatService({
+    trace,
     // Chat and Plan turns get the user's enabled MCP connections (only the tools they allowed).
     loadMcp: () => loadChatMcp(mcpStore),
     resolveProjectPath: (id) => knownPaths.get(id),
@@ -192,7 +227,7 @@ export function registerIpc(
   })
 
   const pipelineLog = createPipelineLog(broadcastPipelineLog)
-  const pipeline = pipelineStore ? buildPipeline(pipelineStore, settingsStore, store, pipelineLog, runStore, appSettings) : undefined
+  const pipeline = pipelineStore ? buildPipeline(pipelineStore, settingsStore, store, pipelineLog, runStore, appSettings, trace) : undefined
 
   const make = (event: IpcMainInvokeEvent) =>
     createHandlers({ store, readGitStatus, pickFolder: () => pickFolder(event), chat,
@@ -208,7 +243,8 @@ export function registerIpc(
       ...(runStore ? { runStore } : {}),
       mcp,
       planUsage,
-      speech
+      speech,
+      trace
     })
 
   ipcMain.handle(IPC.projectsList, async (event) => {
@@ -224,6 +260,8 @@ export function registerIpc(
   ipcMain.handle(IPC.projectsRefresh, (event, payload: unknown) => make(event).refresh(payload))
   ipcMain.handle(IPC.chatHistory, (event, payload: unknown) => make(event).chatHistory(payload))
   ipcMain.handle(IPC.activityHistory, (event, payload: unknown) => make(event).activityHistory(payload))
+  ipcMain.handle(IPC.activityRuns, (event, payload: unknown) => make(event).activityRuns(payload))
+  ipcMain.handle(IPC.activityEvents, (event, payload: unknown) => make(event).activityEvents(payload))
   ipcMain.handle(IPC.usageSummary, (event, payload: unknown) => make(event).usageSummary(payload))
   ipcMain.handle(IPC.usagePlan, (event, payload: unknown) => make(event).usagePlan(payload))
   ipcMain.handle(IPC.settingsGet, (event, payload: unknown) => make(event).settingsGet(payload))
@@ -250,6 +288,7 @@ export function registerIpc(
   ipcMain.handle(IPC.pipelineMerge, (event, payload: unknown) => make(event).pipelineMerge(payload))
   ipcMain.handle(IPC.pipelineLog, (event, payload: unknown) => make(event).pipelineLog(payload))
   ipcMain.handle(IPC.pipelinePr, (event, payload: unknown) => make(event).pipelinePr(payload))
+  ipcMain.handle(IPC.pipelineBranch, (event, payload: unknown) => make(event).pipelineBranch(payload))
   ipcMain.handle(IPC.openUrl, (event, payload: unknown) => make(event).openUrl(payload))
   ipcMain.handle(IPC.mcpList, (event) => make(event).mcpList())
   ipcMain.handle(IPC.mcpSave, (event, payload: unknown) => make(event).mcpSave(payload))
@@ -273,10 +312,11 @@ export function registerIpc(
   })
 
   return () => {
-    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.usageSummary, IPC.usagePlan, IPC.settingsGet, IPC.settingsSet, IPC.settingsSuggestions, IPC.appInfo, IPC.appModelGet, IPC.appModelSet, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick, IPC.projectsRemove,
-      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineResume, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.openUrl, IPC.mcpList, IPC.mcpSave, IPC.mcpDelete, IPC.mcpTest, IPC.speechTranscribe]) {
+    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.activityRuns, IPC.activityEvents, IPC.usageSummary, IPC.usagePlan, IPC.settingsGet, IPC.settingsSet, IPC.settingsSuggestions, IPC.appInfo, IPC.appModelGet, IPC.appModelSet, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick, IPC.projectsRemove,
+      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineResume, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.pipelineBranch, IPC.openUrl, IPC.mcpList, IPC.mcpSave, IPC.mcpDelete, IPC.mcpTest, IPC.speechTranscribe]) {
       ipcMain.removeHandler(channel)
     }
     targets.clear()
+    trace.dispose()
   }
 }

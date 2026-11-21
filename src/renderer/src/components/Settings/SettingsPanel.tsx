@@ -58,6 +58,7 @@ function SettingsForm({ projectId, initial, saving, saveError, saveOk, sessionRe
   const [allowPlanWrites, setAllowPlanWrites] = useState(initial.allowPlanWrites)
   const [allowCommands, setAllowCommands] = useState(initial.allowCommands ?? false)
   const [delivery, setDelivery] = useState<DeliveryChoice>(initial.delivery ?? 'manual')
+  const [allowBaseMerge, setAllowBaseMerge] = useState(initial.allowBaseMerge ?? false)
   const [rows, setRows] = useState<CheckRow[]>(() => rowsFromChecks(initial.checks))
   const [suggestions, setSuggestions] = useState<CheckConfig[]>([])
   useEffect(() => {
@@ -90,6 +91,7 @@ function SettingsForm({ projectId, initial, saving, saveError, saveOk, sessionRe
       allowPlanWrites,
       allowCommands,
       delivery,
+      allowBaseMerge,
       checks: validation.errors.size === 0 ? validation.checks : undefined,
       ...(limitsOk ? limitValidation.values : {}),
       ...(reviewOk ? reviewValidation.values : {})
@@ -171,10 +173,32 @@ function SettingsForm({ projectId, initial, saving, saveError, saveOk, sessionRe
         <label htmlFor={`${id}-delivery`}>After a successful run</label>
         <select id={`${id}-delivery`} value={delivery} onChange={(e) => { setDelivery(e.target.value as DeliveryChoice); onEdit() }}>
           <option value="manual">Keep local for my decision</option>
+          <option value="save-branch">Save as a feature branch</option>
           <option value="open-pr">Push run branch and open a PR</option>
-          <option value="merge-local">Merge into my local project</option>
+          <option value="merge-local" disabled={!allowBaseMerge}>Merge into the base branch</option>
         </select>
-        <p className="settings__hint">Automatic actions run only after every task succeeds; manual is the default.</p>
+        <p className="settings__hint">
+          Automatic actions run only after every task succeeds; manual is the default. A feature branch is named after the plan
+          (feature/&lt;plan&gt;).
+        </p>
+      </div>
+      <div className="settings__field">
+        <label className="settings__toggle">
+          <input
+            type="checkbox"
+            checked={allowBaseMerge}
+            onChange={(e) => {
+              setAllowBaseMerge(e.target.checked)
+              if (!e.target.checked && delivery === 'merge-local') setDelivery('manual')
+              onEdit()
+            }}
+          />
+          Allow merging runs into the base branch
+        </label>
+        <p className="settings__hint">
+          Off: finished runs are saved as a feature branch or a pull request, never merged into the branch you started from
+          (e.g. main). Turn on only for projects where you may commit to it directly.
+        </p>
       </div>
       <LimitsEditor
         values={limits}

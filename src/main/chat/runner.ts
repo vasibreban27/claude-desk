@@ -18,6 +18,7 @@ import { frameProjectContext, loadProjectContext } from './projectContext'
 import { DESK_SERVER, START_PIPELINE_TOOL, createDeskServer, type StartPipeline } from './deskTools'
 import { RESERVED_MCP_NAMES } from '../../shared/mcp'
 import type { ChatMcp } from '../mcp/servers'
+import { reportDenied, type TraceSink } from '../trace/recorder'
 import { ALLOWED_TOOLS, guardPreToolUse, isDenied, type ToolPolicy } from './tools'
 
 /** What the chat service needs from the SDK; the renderer never sees raw SDK objects. */
@@ -43,6 +44,8 @@ export interface RunnerArgs {
   mcp?: ChatMcp
   /** Images sent with the message (screenshots); the prompt then goes to the SDK as one user message. */
   images?: PromptImage[]
+  /** Detailed Activity: receives every SDK message and the guard's denials. */
+  trace?: TraceSink
 }
 
 /** The per-turn guard policy derived from the settings. */
@@ -125,7 +128,12 @@ type Hooks = NonNullable<Options['hooks']>
  * `tool-finished` itself because a denied tool never reaches PostToolUse. Doing both in one callback
  * keeps start before finish. Tracking-only hooks use `onFailure: "continue"`.
  */
-export function buildHooks(emit: (draft: ActivityDraft) => void, cwd: string, policy?: ToolPolicy): Hooks {
+export function buildHooks(
+  emit: (draft: ActivityDraft) => void,
+  cwd: string,
+  policy?: ToolPolicy,
+  onDenied?: (toolUseId: string, reason: string | null) => void
+): Hooks {
   const safeEmit = (draft: ActivityDraft | null): void => {
     if (!draft) return
     try {
@@ -138,7 +146,10 @@ export function buildHooks(emit: (draft: ActivityDraft) => void, cwd: string, po
   const guard: HookCallback = async (input) => {
     safeEmit(mapHookInput(input))
     const output = guardPreToolUse(input, cwd, policy)
-    if (isDenied(output)) safeEmit(mapDeniedToolUse(input))
+    if (isDenied(output)) {
+      safeEmit(mapDeniedToolUse(input))
+      reportDenied(onDenied, input, output)
+    }
     return output
   }
 
@@ -268,7 +279,12 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
       allowedTools,
       ...(settings.model !== 'auto' ? { model: settings.model } : {}),
       ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
-      hooks: buildHooks((draft) => queue.push({ kind: 'activity', draft }), args.cwd, policy),
+      hooks: buildHooks(
+        (draft) => queue.push({ kind: 'activity', draft }),
+        args.cwd,
+        policy,
+        args.trace ? (id, reason) => args.trace?.denied(id, reason) : undefined
+      ),
       abortController,
       ...(args.resume ? { resume: args.resume } : {})
     }
@@ -286,6 +302,7 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
             queue.push({ kind: 'session', sessionId })
           }
         }
+        args.trace?.message(message)
         const text = extractTextDelta(message)
         if (text !== null) queue.push({ kind: 'text', text })
         accumulator.add(message)

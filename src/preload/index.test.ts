@@ -34,13 +34,16 @@ describe('preload bridge', () => {
     expect(exposeInMainWorld.mock.calls[0]![0]).toBe('api')
     expect(Object.keys(api).sort()).toEqual(
       [
+        'activityEvents',
         'activityHistory',
+        'activityRuns',
         'appModelGet',
         'appModelSet',
         'chatHistory',
         'chatSend',
         'listProjects',
         'onActivityEvent',
+        'onActivityTrace',
         'onChatEvent',
         'onSpeechProgress',
         'pickAndAddProject',
@@ -62,6 +65,7 @@ describe('preload bridge', () => {
         'pipelineResume',
         'pipelineDiscard',
         'pipelineMerge',
+        'pipelineBranch',
         'pipelinePr',
         'openUrl',
         'mcpList',
@@ -86,6 +90,8 @@ describe('preload bridge', () => {
     await api['chatHistory']!({ projectId: 'a' })
     await api['chatSend']!({ projectId: 'a', text: 'x' })
     await api['activityHistory']!({ projectId: 'a' })
+    await api['activityRuns']!({ projectId: 'a' })
+    await api['activityEvents']!({ projectId: 'a', runId: 'r' })
     await api['usageSummary']!({ projectId: null, days: 7 })
     await api['pipelinePlans']!({ projectId: 'a' })
     await api['pipelineStart']!({ projectId: 'a', planFile: 'p.md' })
@@ -99,6 +105,8 @@ describe('preload bridge', () => {
       ['chat:history', { projectId: 'a' }],
       ['chat:send', { projectId: 'a', text: 'x' }],
       ['activity:history', { projectId: 'a' }],
+      ['activity:runs', { projectId: 'a' }],
+      ['activity:events', { projectId: 'a', runId: 'r' }],
       ['usage:summary', { projectId: null, days: 7 }],
       ['pipeline:plans', { projectId: 'a' }],
       ['pipeline:start', { projectId: 'a', planFile: 'p.md' }],
@@ -142,5 +150,17 @@ describe('preload bridge', () => {
     expect(listener).toHaveBeenCalledWith({ type: 'run-started' })
     off()
     expect(removeListener).toHaveBeenCalledWith('activity:event', wrapped)
+  })
+
+  it('subscribes to detailed activity without leaking the IPC event, and unsubscribes', async () => {
+    const api = await load()
+    const listener = vi.fn()
+    const off = api['onActivityTrace']!(listener) as () => void
+    expect(on).toHaveBeenCalledWith('activity:trace', expect.any(Function))
+    const wrapped = on.mock.calls[0]![1] as (e: unknown, ev: unknown) => void
+    wrapped({ sender: 'leak' }, { type: 'run' })
+    expect(listener).toHaveBeenCalledWith({ type: 'run' })
+    off()
+    expect(removeListener).toHaveBeenCalledWith('activity:trace', wrapped)
   })
 })

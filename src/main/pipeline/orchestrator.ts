@@ -19,6 +19,7 @@ import type { WorkerOutcome, WorkerRunner } from './workerRunner'
 import { runChecksGate, type ChecksGateArgs, type ChecksGateResult } from './checksGate'
 import { MAX_REPORTED_PATHS, uncommittedWork } from './uncommitted'
 import type { PipelineLogInput } from './pipelineLog'
+import type { TraceSessionMeta, TraceSink } from '../trace/recorder'
 import type { RunUsage } from '../chat/activity'
 import type { PipelineLogRole, PipelineLogTone } from '../../shared/pipelineLog'
 import { createReviewRunner, type ReviewOutcome, type ReviewRunner } from './reviewRunner'
@@ -127,6 +128,8 @@ export interface OrchestratorDeps {
   pathExists?: (p: string) => Promise<boolean>
   /** Live, short progress lines for the Activity tab. Never throws into a run. */
   onLog?: (projectId: string, line: PipelineLogInput) => void
+  /** Detailed Activity: a recorder for each worker, fix round and reviewer session. */
+  traceSession?: (meta: TraceSessionMeta) => TraceSink
   newRunId?: () => string
   now?: () => number
   log?: (message: string) => void
@@ -264,6 +267,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         // the live log never breaks a run
       }
     }
+    /** A Detailed Activity recorder for one session; absent when tracing is off or broken. */
+    const traceFor = (taskId: string, role: 'worker' | 'fix' | 'reviewer', session: string, agent: string, cwd: string): { trace?: TraceSink } => {
+      if (!deps.traceSession) return {}
+      try {
+        return { trace: deps.traceSession({ projectId: ctx.projectId, runId, taskId, role, session, agent, cwd }) }
+      } catch {
+        return {}
+      }
+    }
     /** A usage sink for one session; the start time is taken when the session is about to start. */
     const usageSink = (kind: PipelineUsageInput['kind'], agent: string): ((usage: RunUsage) => void) => {
       const startedAt = now()
@@ -381,7 +393,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           signal,
           ...(ctx.planCopy ? { planFile: ctx.planCopy.file } : {}),
           onLog: (l) => say(task.id, 'worker', l.text, l.tone, task.worker),
-          onUsage: usageSink('worker', task.worker)
+          onUsage: usageSink('worker', task.worker),
+          ...traceFor(task.id, 'worker', 'worker', task.worker, wt.path)
         })
         if (abortReason !== null) return
         absorb(outcome)
@@ -452,7 +465,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     pluginPath: deps.pluginPath,
                     signal,
                     onLog: (l) => say(task.id, 'reviewer', l.text, l.tone, reviewer),
-                    onUsage: usageSink('reviewer', reviewer)
+                    onUsage: usageSink('reviewer', reviewer),
+                    ...traceFor(task.id, 'reviewer', `reviewer ${reviewer}`, reviewer, wt.path)
                   })
                 } catch (e) {
                   if (abortReason !== null) return
@@ -516,7 +530,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               signal,
               fix: { kind: fix.kind, text: fix.text, sessionId: outcome.sessionId ?? null },
               onLog: (l) => say(task.id, 'fix', l.text, l.tone, task.worker),
-              onUsage: usageSink('worker', task.worker)
+              onUsage: usageSink('worker', task.worker),
+              ...traceFor(task.id, 'fix', `fix round ${rounds}`, task.worker, wt.path)
             })
             if (abortReason !== null) return
             absorb(outcome)

@@ -298,3 +298,23 @@ describe('createWorkerRunner', () => {
     expect(queryFn).not.toHaveBeenCalled()
   })
 })
+
+describe('worker detailed activity', () => {
+  it('feeds every SDK message to the recorder', async () => {
+    const trace = { message: vi.fn(), denied: vi.fn() }
+    const msgs = [{ type: 'assistant', message: { content: [] } }, result()]
+    const { q } = fakeQuery(msgs)
+    await createWorkerRunner({ queryFn: () => q })({ ...baseArgs(), trace })
+    expect(trace.message.mock.calls.map((c) => c[0])).toEqual(msgs)
+  })
+
+  it('reports guard denials with the reason', async () => {
+    const trace = { message: vi.fn(), denied: vi.fn() }
+    const { options } = buildWorkerOptions({ ...baseArgs(), trace }, new AbortController())
+    const hook = options.hooks?.PreToolUse?.[0]?.hooks[0]
+    await hook?.({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'tu9', tool_input: { command: 'ls' } } as never, undefined, {
+      signal: new AbortController().signal
+    })
+    expect(trace.denied).toHaveBeenCalledWith('tu9', expect.any(String))
+  })
+})

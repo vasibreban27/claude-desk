@@ -8,6 +8,7 @@ import type { McpDeleteResult, McpIdRequest, McpListResult, McpSaveRequest, McpS
 import type { PlanUsageRequest, PlanUsageResult } from './usage'
 import { ATTACHMENTS_MAX, attachmentRefSchema, attachmentSchema } from './attachments'
 import type { SpeechProgress, SpeechTranscribeRequest, SpeechTranscribeResult } from './speech'
+import type { TraceEventsRequest, TraceEventsResult, TracePush, TraceRunsRequest, TraceRunsResult } from './trace'
 
 export * from './settings'
 export * from './review'
@@ -17,6 +18,7 @@ export * from './mcp'
 export * from './usage'
 export * from './attachments'
 export * from './speech'
+export * from './trace'
 
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
 
@@ -33,6 +35,9 @@ export const IPC = {
   chatEvent: 'chat:event',
   activityEvent: 'activity:event',
   activityHistory: 'activity:history',
+  activityRuns: 'activity:runs',
+  activityEvents: 'activity:events',
+  activityTrace: 'activity:trace',
   usageSummary: 'usage:summary',
   usagePlan: 'usage:plan',
   settingsGet: 'settings:get',
@@ -54,6 +59,7 @@ export const IPC = {
   pipelineDiscard: 'pipeline:discard',
   pipelineMerge: 'pipeline:merge',
   pipelinePr: 'pipeline:pr',
+  pipelineBranch: 'pipeline:branch',
   openUrl: 'app:open-url',
   mcpList: 'mcp:list',
   mcpSave: 'mcp:save',
@@ -179,6 +185,52 @@ export const pipelineMergeRequestSchema = z.object({
 })
 export type PipelineMergeRequest = z.infer<typeof pipelineMergeRequestSchema>
 
+/**
+ * A git branch name the user typed for "Save as branch": letters, digits, `.`, `_`, `-` and `/` separated parts, no
+ * `..`, no leading `-` or `/`, no trailing `/` `.` or `.lock`. The main process also runs `git check-ref-format`.
+ */
+export const BRANCH_NAME_PATTERN = /^(?![-/.])(?!.*(?:\.\.|\/\/|\/\.|@\{|\.lock$|[/.]$))[A-Za-z0-9._/-]{1,100}$/
+/** Branches the pipeline creates and deletes itself; the user's branch may not live there. */
+export const RESERVED_BRANCH_PREFIXES = ['run/', 'task/'] as const
+
+/** The suggested branch for a run: `feature/<plan slug>`. */
+export function featureBranchName(planFile: string): string {
+  const slug = planFile
+    .replace(/\.md$/i, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+    .replace(/-+$/g, '')
+  return `feature/${slug || 'pipeline-run'}`
+}
+
+/** Keeps a finished run as a branch of the user's choosing: created, or fast-forwarded when it already exists. */
+export const pipelineBranchRequestSchema = z
+  .object({
+    projectId: z.uuid(),
+    runId: z.string().min(1).max(100),
+    branch: z.string().min(1).max(100).regex(BRANCH_NAME_PATTERN)
+  })
+  .strict()
+export type PipelineBranchRequest = z.infer<typeof pipelineBranchRequestSchema>
+export type PipelineBranchResult =
+  | { ok: true; branch: string; head: string; created: boolean; cleanedUp: boolean }
+  | {
+      ok: false
+      error:
+        | 'not-found'
+        | 'not-finished'
+        | 'invalid-branch'
+        | 'reserved-branch'
+        | 'base-protected'
+        | 'dirty'
+        | 'not-fast-forward'
+        | 'git-failed'
+      message?: string
+    }
+
 /** Pushes a finished run's branch to origin and opens a PR (gh) / MR (glab) into the base branch. Nothing merges. */
 export const pipelinePrRequestSchema = pipelineMergeRequestSchema
 export type PipelinePrRequest = PipelineMergeRequest
@@ -206,7 +258,7 @@ export type PipelineMergeResult =
   | { ok: true; baseBranch: string; head: string; planCommitted: boolean; cleanedUp: boolean }
   | {
       ok: false
-      error: 'not-found' | 'not-finished' | 'wrong-branch' | 'dirty' | 'not-fast-forward' | 'git-failed'
+      error: 'not-found' | 'not-finished' | 'base-protected' | 'wrong-branch' | 'dirty' | 'not-fast-forward' | 'git-failed'
       message?: string
     }
 
@@ -279,7 +331,9 @@ export interface PipelineRunView {
   /** ISO-8601. */
   createdAt: string
   finishedAt: string | null
-  delivery?: { policy: DeliveryChoice; status: 'pending' | 'working' | 'done' | 'failed'; url?: string; message?: string }
+  delivery?: { policy: DeliveryChoice; status: 'pending' | 'working' | 'done' | 'failed'; url?: string; branch?: string; message?: string }
+  /** The project allows "Merge into <base>" (off by default; the result is saved as a feature branch instead). */
+  allowBaseMerge?: boolean
   tasks: PipelineTaskView[]
 }
 
@@ -496,6 +550,8 @@ export interface DeskApi {
   pipelineDiscard(req: PipelineDiscardRequest): Promise<PipelineDiscardResult>
   pipelineMerge(req: PipelineMergeRequest): Promise<PipelineMergeResult>
   pipelinePr(req: PipelinePrRequest): Promise<PipelinePrResult>
+  /** Saves a finished run as a branch (created or fast-forwarded); the checked-out branch is left alone. */
+  pipelineBranch(req: PipelineBranchRequest): Promise<PipelineBranchResult>
   openUrl(req: OpenUrlRequest): Promise<boolean>
   mcpList(): Promise<McpListResult>
   mcpSave(req: McpSaveRequest): Promise<McpSaveResult>
@@ -514,4 +570,10 @@ export interface DeskApi {
   speechTranscribe(req: SpeechTranscribeRequest): Promise<SpeechTranscribeResult>
   /** Subscribe to model download / load progress; returns an unsubscribe function. */
   onSpeechProgress(listener: (progress: SpeechProgress) => void): () => void
+  /** Detailed Activity: the project's recent runs, newest first. */
+  activityRuns(req: TraceRunsRequest): Promise<TraceRunsResult>
+  /** Detailed Activity: every kept event of one run, oldest first. */
+  activityEvents(req: TraceEventsRequest): Promise<TraceEventsResult>
+  /** Subscribe to live Detailed Activity events and run changes; returns an unsubscribe function. */
+  onActivityTrace(listener: (push: TracePush) => void): () => void
 }

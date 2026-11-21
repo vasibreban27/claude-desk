@@ -4,6 +4,7 @@ import { app, BrowserWindow, type BrowserWindowConstructorOptions } from 'electr
 import { openDatabase, createRunStore, createSettingsStore, createPipelineStore, type PipelineStore, type RunStore, type SettingsStore } from './db'
 import type Database from 'better-sqlite3'
 import { registerIpc } from './ipc/register'
+import { createTraceStore, type TraceStore } from './db/traceStore'
 import { openJsonProjectStore } from './projects/store'
 import { openAppSettings } from './projects/appSettings'
 import { loadEnvFile } from './config'
@@ -81,19 +82,32 @@ function openPipelineStore(db: Database.Database | null): PipelineStore {
   }
 }
 
+/** Detailed Activity store over the database; on failure Activity is live-only. */
+function openTraceStore(db: Database.Database | null): TraceStore | undefined {
+  if (db === null) return undefined
+  try {
+    return createTraceStore(db)
+  } catch (err) {
+    console.error('opening activity store failed:', err instanceof Error ? err.name : 'unknown')
+    return undefined
+  }
+}
+
 /** Opens the database-backed stores; a database problem never stops the app, it only makes those stores unavailable. */
 export function bootstrapStores(dataDir: string): {
   db: Database.Database | undefined
   runStore: RunStore | undefined
   settingsStore: SettingsStore
   pipelineStore: PipelineStore
+  traceStore: TraceStore | undefined
 } {
   const opened = openRunStore(dataDir)
   return {
     db: opened?.db,
     runStore: opened?.store,
     settingsStore: openSettingsStore(opened?.db ?? null),
-    pipelineStore: openPipelineStore(opened?.db ?? null)
+    pipelineStore: openPipelineStore(opened?.db ?? null),
+    traceStore: openTraceStore(opened?.db ?? null)
   }
 }
 
@@ -106,7 +120,7 @@ app
     const store = await openJsonProjectStore(dataDir)
     const stores = bootstrapStores(dataDir)
     database = stores.db
-    disposeIpc = registerIpc(store, stores.runStore, stores.settingsStore, stores.pipelineStore, openAppSettings(dataDir))
+    disposeIpc = registerIpc(store, stores.runStore, stores.settingsStore, stores.pipelineStore, openAppSettings(dataDir), stores.traceStore)
     createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

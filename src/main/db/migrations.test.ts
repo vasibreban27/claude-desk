@@ -95,7 +95,7 @@ describe('migration 5: run kind', () => {
        VALUES ('old', 'p', 1, '2026-01-01', 'success', 0.1, 10, 1, 1, 0, 0)`
     ).run()
 
-    expect(migrate(db)).toBe(1)
+    expect(migrate(db, MIGRATIONS.slice(0, 5))).toBe(1)
     expect(db.pragma('user_version', { simple: true })).toBe(5)
     expect(db.prepare('SELECT kind FROM runs WHERE id = ?').get('old')).toEqual({ kind: 'chat' })
     const insert = db.prepare(
@@ -104,5 +104,22 @@ describe('migration 5: run kind', () => {
     )
     expect(() => insert.run('w', 'worker')).not.toThrow()
     expect(() => insert.run('x', 'other')).toThrow()
+  })
+})
+
+describe('migration 6: detailed activity', () => {
+  it('adds trace runs and events, deleting events with their run', () => {
+    const db = new Database(':memory:')
+    db.pragma('foreign_keys = ON')
+    migrate(db, MIGRATIONS.slice(0, 5))
+    expect(migrate(db, MIGRATIONS.slice(0, 6))).toBe(1)
+    expect(db.pragma('user_version', { simple: true })).toBe(6)
+    db.prepare(`INSERT INTO trace_runs (id, project_id, source, title, started_at, status) VALUES ('r', 'p', 'chat', 't', 1, 'running')`).run()
+    db.prepare(`INSERT INTO trace_events (run_id, seq, data) VALUES ('r', 0, '{}')`).run()
+    expect(() =>
+      db.prepare(`INSERT INTO trace_runs (id, project_id, source, title, started_at, status) VALUES ('x', 'p', 'other', 't', 1, 'running')`).run()
+    ).toThrow()
+    db.prepare(`DELETE FROM trace_runs WHERE id = 'r'`).run()
+    expect(db.prepare('SELECT COUNT(*) AS n FROM trace_events').get()).toEqual({ n: 0 })
   })
 })

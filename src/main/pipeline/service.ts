@@ -3,6 +3,7 @@ import { lstat, readFile, readdir, realpath } from 'node:fs/promises'
 import path from 'node:path'
 import type {
   AppInfo,
+  PipelineBranchResult,
   PipelineCancelResult,
   PipelineDiscardResult,
   PipelineMergeResult,
@@ -15,7 +16,7 @@ import type {
   PlanEntry
 } from '../../shared/ipc'
 import type { DeliveryChoice } from '../../shared/settings'
-import { PLAN_FILE_PATTERN } from '../../shared/ipc'
+import { BRANCH_NAME_PATTERN, PLAN_FILE_PATTERN, RESERVED_BRANCH_PREFIXES, featureBranchName } from '../../shared/ipc'
 import type { PipelineRunRow, PipelineStore, PipelineTaskRow } from '../db/pipelineStore'
 import type { SettingsStore } from '../db/settingsStore'
 import { readGitStatus, type GitStatusResult } from '../git/status'
@@ -23,7 +24,14 @@ import type { ProjectStore } from '../projects/store'
 import type { Orchestrator, RunSummary } from './orchestrator'
 import { MAX_PLAN_BYTES, parsePlan, type PlanError } from './planParser'
 import { openPullRequest, type OpenPrArgs, type OpenPrResult } from './openPr'
-import { mergeRunIntoBase, type MergeRunArgs, type MergeRunResult } from './mergeRun'
+import {
+  mergeRunIntoBase,
+  saveRunToBranch,
+  type MergeRunArgs,
+  type MergeRunResult,
+  type SaveBranchArgs,
+  type SaveBranchResult
+} from './mergeRun'
 import { createWorktreeManager, type WorktreeManager, type WorktreeManagerOptions } from './worktrees'
 
 /**
@@ -46,6 +54,8 @@ export interface PipelineService {
   discard(projectId: string, runId: string): Promise<PipelineDiscardResult>
   /** Fast-forwards the base branch to a finished run, commits its plan file, then removes the run's worktrees. */
   merge(projectId: string, runId: string): Promise<PipelineMergeResult>
+  /** Keeps a finished run as a branch (created or fast-forwarded), then removes the run's worktrees and branches. */
+  saveBranch(projectId: string, runId: string, branch: string): Promise<PipelineBranchResult>
   /** Pushes a finished run's branch and opens a PR / MR with the user's gh / glab login. */
   openPr(projectId: string, runId: string): Promise<PipelinePrResult>
 }
@@ -63,6 +73,7 @@ export interface PipelineServiceDeps {
   newRunId?: () => string
   log?: (message: string) => void
   mergeRun?: (args: MergeRunArgs) => Promise<MergeRunResult>
+  saveBranch?: (args: SaveBranchArgs) => Promise<SaveBranchResult>
   openPullRequest?: (args: OpenPrArgs) => Promise<OpenPrResult>
 }
 
@@ -103,6 +114,17 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
           reportDelivery(projectId, runId,
             result.ok ? { policy: delivery, status: 'done', url: result.url } : { policy: delivery, status: 'failed', message: result.message ?? result.error },
             result.ok ? `pull request opened: ${result.url}` : `automatic pull request failed: ${result.message ?? result.error}`,
+            result.ok ? 'ok' : 'error')
+        } else if (delivery === 'save-branch') {
+          reportDelivery(projectId, runId, { policy: delivery, status: 'working' }, 'saving the result as a feature branch', 'info')
+          const run = deps.store.getRun(runId)
+          const name = featureBranchName(run.ok ? path.basename(run.value.planPath) : '')
+          let result = await api.saveBranch(projectId, runId, name)
+          // The usual name holds unrelated work: keep this run apart under its id.
+          if (!result.ok && result.error === 'not-fast-forward') result = await api.saveBranch(projectId, runId, `${name}-${runId.slice(0, 8)}`)
+          reportDelivery(projectId, runId,
+            result.ok ? { policy: delivery, status: 'done', branch: result.branch } : { policy: delivery, status: 'failed', message: result.message ?? result.error },
+            result.ok ? `saved as branch ${result.branch} at ${result.head}` : `saving the branch failed: ${result.message ?? result.error}`,
             result.ok ? 'ok' : 'error')
         } else if (delivery === 'merge-local') {
           reportDelivery(projectId, runId, { policy: delivery, status: 'working' }, 'merging into the local project automatically', 'info')
@@ -213,6 +235,23 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
     return { project, run: run.value }
   }
 
+  /** The project setting; unreadable settings mean no. */
+  const allowsBaseMerge = (projectId: string): boolean => {
+    try {
+      return deps.settings?.get(projectId).settings.allowBaseMerge === true
+    } catch {
+      return false
+    }
+  }
+
+  /** After the run's work is saved elsewhere: remove its worktrees and branches, then its row. */
+  const cleanUpRun = async (projectPath: string, runId: string): Promise<boolean> => {
+    const removed = await createManager({ projectPath, runId }).removeRun()
+    if (removed.ok) return deps.store.deleteRun(runId).ok
+    log(`pipeline: saved run ${runId} but could not remove its worktrees: ${removed.error}`)
+    return false
+  }
+
   const toView = (run: PipelineRunRow, tasks: PipelineTaskRow[], active: boolean): PipelineRunView => ({
     runId: run.id,
     planFile: path.basename(run.planPath),
@@ -223,6 +262,7 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
     createdAt: new Date(run.createdAt).toISOString(),
     finishedAt: run.finishedAt === null ? null : new Date(run.finishedAt).toISOString(),
     ...(deliveryStates.has(run.id) ? { delivery: deliveryStates.get(run.id) } : {}),
+    allowBaseMerge: allowsBaseMerge(run.projectId),
     tasks: tasks.map((t) => ({
       taskId: t.taskId,
       title: t.title,
@@ -465,6 +505,13 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
         if (activeRuns.get(projectId) === runId || owned.run.status !== 'done') return { ok: false, error: 'not-finished' }
         const planFile = path.basename(owned.run.planPath)
         if (!PLAN_FILE_PATTERN.test(planFile)) return { ok: false, error: 'git-failed', message: 'unexpected plan file name' }
+        if (!allowsBaseMerge(projectId)) {
+          return {
+            ok: false,
+            error: 'base-protected',
+            message: `Merging into ${owned.run.baseBranch} is off for this project. Save the run as a feature branch, or allow it in Settings.`
+          }
+        }
         const merged = await (deps.mergeRun ?? mergeRunIntoBase)({
           projectPath: owned.project.path,
           baseBranch: owned.run.baseBranch,
@@ -472,14 +519,43 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
           planFile
         })
         if (!merged.ok) return { ok: false, error: merged.error, message: merged.message }
-        // The work is in the base branch now: remove the run's worktrees and branches, then its row.
-        let cleanedUp = false
-        const removed = await createManager({ projectPath: owned.project.path, runId }).removeRun()
-        if (removed.ok) cleanedUp = deps.store.deleteRun(runId).ok
-        else log(`pipeline: merged run ${runId} but could not remove its worktrees: ${removed.error}`)
+        // The work is in the base branch now.
+        const cleanedUp = await cleanUpRun(owned.project.path, runId)
         return { ok: true, baseBranch: owned.run.baseBranch, head: merged.head, planCommitted: merged.planCommitted, cleanedUp }
       } catch (e) {
         log(`pipeline: merge failed: ${errText(e)}`)
+        return { ok: false, error: 'git-failed' }
+      }
+    },
+
+    async saveBranch(projectId, runId, branch) {
+      try {
+        if (!BRANCH_NAME_PATTERN.test(branch)) return { ok: false, error: 'invalid-branch', message: `"${branch}" is not a valid branch name.` }
+        if (RESERVED_BRANCH_PREFIXES.some((p) => branch.startsWith(p))) {
+          return { ok: false, error: 'reserved-branch', message: 'run/ and task/ branches belong to the pipeline and are deleted after a run; pick another name.' }
+        }
+        const owned = await ownedRun(projectId, runId)
+        if (owned === null) return { ok: false, error: 'not-found' }
+        if (activeRuns.get(projectId) === runId || owned.run.status !== 'done') return { ok: false, error: 'not-finished' }
+        if (branch === owned.run.baseBranch) {
+          return {
+            ok: false,
+            error: 'base-protected',
+            message: allowsBaseMerge(projectId)
+              ? `Use "Merge into ${branch}" for the base branch.`
+              : `${branch} is the base branch, and merging into it is off for this project. Pick a feature branch name.`
+          }
+        }
+        const saved = await (deps.saveBranch ?? saveRunToBranch)({
+          projectPath: owned.project.path,
+          runBranch: owned.run.integrationBranch,
+          branch
+        })
+        if (!saved.ok) return { ok: false, error: saved.error, message: saved.message }
+        const cleanedUp = await cleanUpRun(owned.project.path, runId)
+        return { ok: true, branch: saved.branch, head: saved.head, created: saved.created, cleanedUp }
+      } catch (e) {
+        log(`pipeline: save branch failed: ${errText(e)}`)
         return { ok: false, error: 'git-failed' }
       }
     }

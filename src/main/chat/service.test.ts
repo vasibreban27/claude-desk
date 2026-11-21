@@ -521,6 +521,59 @@ describe('ChatService per-turn settings', () => {
   })
 })
 
+describe('ChatService detailed activity', () => {
+  function setupTrace(runner: ChatRunner) {
+    const sink = { message: vi.fn(), denied: vi.fn() }
+    const trace = { startRun: vi.fn(), endRun: vi.fn(), session: vi.fn().mockReturnValue(sink) }
+    let done: () => void = () => {}
+    const ended = new Promise<void>((r) => (done = r))
+    const service = new ChatService({
+      resolveProjectPath: (id) => paths[id],
+      runner,
+      emit: (e) => {
+        if (e.type !== 'text-delta') done()
+      },
+      trace,
+      loadConfig: () => ({ ok: true, config: { toolkitPath: TOOLKIT } })
+    })
+    return { service, trace, sink, ended }
+  }
+
+  it('starts a run, hands its recorder to the runner and ends it', async () => {
+    const runner = vi.fn(streamOf([{ kind: 'text', text: 'x' }]))
+    const { service, trace, sink, ended } = setupTrace(runner)
+    service.send('p1', 'fix the bug', 'plan')
+    await ended
+    expect(trace.startRun).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'p1', source: 'plan', title: 'fix the bug' }))
+    const runId = trace.startRun.mock.calls[0]![0].runId as string
+    expect(trace.session).toHaveBeenCalledWith({
+      projectId: 'p1',
+      runId,
+      taskId: null,
+      role: 'plan',
+      session: 'planner',
+      agent: 'main',
+      cwd: '/work/one'
+    })
+    expect(runner).toHaveBeenCalledWith(expect.objectContaining({ trace: sink }))
+    expect(trace.endRun).toHaveBeenCalledWith(runId, 'ok')
+  })
+
+  it('ends the run as an error when the turn fails, and a broken hub never breaks the turn', async () => {
+    const runner: ChatRunner = async function* () {
+      yield { kind: 'text', text: 'a' }
+      throw new Error('sdk')
+    }
+    const { service, trace, ended } = setupTrace(runner)
+    trace.endRun.mockImplementation(() => {
+      throw new Error('db')
+    })
+    service.send('p1', 'go')
+    await ended
+    expect(trace.endRun).toHaveBeenCalledWith(expect.any(String), 'error')
+  })
+})
+
 describe('ChatService attachments', () => {
   it('adds prepared text and images to the turn and records the attachment names', async () => {
     const runner = vi.fn(streamOf([{ kind: 'text', text: 'ok' }]))

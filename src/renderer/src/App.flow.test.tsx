@@ -122,7 +122,7 @@ describe('new project to planner flow', () => {
     expect(screen.getByRole('tab', { name: 'Pipeline' })).toHaveAttribute('aria-selected', 'true')
   })
 
-  it('shows live pipeline lines in Activity and the latest line on the running task', async () => {
+  it('shows the latest live pipeline line on the running task', async () => {
     api['listProjects']?.mockResolvedValue([P])
     const run: PipelineRunView = {
       runId: 'r1',
@@ -165,9 +165,9 @@ describe('new project to planner flow', () => {
       text: 'Write app/schemas.py',
       tone: 'info'
     }
-    act(() => emitLog(line))
-    expect(await screen.findByRole('list', { name: 'Pipeline activity' })).toHaveTextContent('Write app/schemas.py')
     fireEvent.click(screen.getByRole('tab', { name: 'Pipeline' }))
+    await act(async () => undefined)
+    act(() => emitLog(line))
     expect(await screen.findByLabelText('T1 latest')).toHaveTextContent('worker: Write app/schemas.py')
   })
 

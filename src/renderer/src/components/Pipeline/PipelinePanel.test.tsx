@@ -159,10 +159,25 @@ describe('PipelinePanel', () => {
     expect(screen.queryByRole('region', { name: 'Run finished' })).toBeNull()
   })
 
+  it('saves a done run as a feature branch and shows where it went', async () => {
+    const pipelineBranch = vi.fn().mockResolvedValue({ ok: true, branch: 'feature/x', head: 'def5678', created: true, cleanedUp: true })
+    ;(window as unknown as { api: unknown }).api = { pipelineBranch }
+    const done = run({ status: 'done', active: false })
+    render(<PipelinePanel {...props({ run: done })} projectId="p1" />)
+    expect(screen.queryByRole('button', { name: 'Merge into main' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Save as branch…' }))
+    const dialog = screen.getByRole('alertdialog', { name: 'Save as branch' })
+    fireEvent.change(within(dialog).getByLabelText('Branch name'), { target: { value: 'feature/x' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save branch' }))
+    expect(await screen.findByRole('status', { name: 'Saved as branch' })).toHaveTextContent(/Saved as new branch feature\/x at def5678/)
+    expect(pipelineBranch).toHaveBeenCalledWith({ projectId: 'p1', runId: done.runId, branch: 'feature/x' })
+    expect(screen.queryByRole('region', { name: 'Run finished' })).toBeNull()
+  })
+
   it('shows Run finished for a done run and merges into main only after confirming', async () => {
     const pipelineMerge = vi.fn().mockResolvedValue({ ok: true, baseBranch: 'main', head: 'abc1234', planCommitted: true, cleanedUp: true })
     ;(window as unknown as { api: unknown }).api = { pipelineMerge }
-    const done = run({ status: 'done', active: false })
+    const done = { ...run({ status: 'done', active: false }), allowBaseMerge: true }
     render(<PipelinePanel {...props({ run: done })} projectId="p1" />)
     expect(screen.getByRole('region', { name: 'Run finished' })).toHaveTextContent(/Run finished/)
     fireEvent.click(screen.getByRole('button', { name: 'Merge into main' }))
@@ -178,7 +193,7 @@ describe('PipelinePanel', () => {
   it('shows why a merge was refused and keeps the run', async () => {
     const pipelineMerge = vi.fn().mockResolvedValue({ ok: false, error: 'dirty' })
     ;(window as unknown as { api: unknown }).api = { pipelineMerge }
-    render(<PipelinePanel {...props({ run: run({ status: 'done', active: false }) })} projectId="p1" />)
+    render(<PipelinePanel {...props({ run: { ...run({ status: 'done', active: false }), allowBaseMerge: true } })} projectId="p1" />)
     fireEvent.click(screen.getByRole('button', { name: 'Merge into main' }))
     fireEvent.click(within(screen.getByRole('alertdialog', { name: 'Confirm merge' })).getByRole('button', { name: 'Merge into main' }))
     expect(await screen.findByText('The project has uncommitted changes.')).toBeInTheDocument()

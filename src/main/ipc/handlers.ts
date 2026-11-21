@@ -2,6 +2,10 @@ import { speechTranscribeRequestSchema, type SpeechTranscribeResult } from '../.
 import type { Transcriber } from '../speech/transcriber'
 import {
   activityHistoryRequestSchema,
+  traceRunsRequestSchema,
+  traceEventsRequestSchema,
+  type TraceRunsResult,
+  type TraceEventsResult,
   usageSummaryRequestSchema,
   planUsageRequestSchema,
   type PlanUsageResult,
@@ -11,6 +15,8 @@ import {
   pipelineResumeRequestSchema,
   pipelineDiscardRequestSchema,
   pipelineMergeRequestSchema,
+  pipelineBranchRequestSchema,
+  type PipelineBranchResult,
   pipelinePrRequestSchema,
   openUrlRequestSchema,
   type PipelinePrResult,
@@ -112,6 +118,8 @@ export interface HandlerDeps {
   planUsage?: PlanUsageReader
   /** Local speech-to-text. Absent: speech:transcribe reports failed. */
   speech?: Transcriber
+  /** Detailed Activity reader. Absent: no runs. */
+  trace?: { runs(projectId: string): TraceRunsResult; events(projectId: string, runId: string): TraceEventsResult }
 }
 
 export interface Handlers {
@@ -120,6 +128,8 @@ export interface Handlers {
   refresh(payload: unknown): Promise<ProjectsRefreshResult>
   chatHistory(payload: unknown): Promise<ChatHistoryResult>
   activityHistory(payload: unknown): Promise<ActivityHistoryResult>
+  activityRuns(payload: unknown): Promise<TraceRunsResult>
+  activityEvents(payload: unknown): Promise<TraceEventsResult>
   usageSummary(payload: unknown): Promise<UsageSummaryResult>
   usagePlan(payload: unknown): Promise<PlanUsageResult>
   settingsGet(payload: unknown): Promise<SettingsGetResult>
@@ -141,6 +151,7 @@ export interface Handlers {
   pipelineDiscard(payload: unknown): Promise<PipelineDiscardResult>
   pipelineMerge(payload: unknown): Promise<PipelineMergeResult>
   pipelinePr(payload: unknown): Promise<PipelinePrResult>
+  pipelineBranch(payload: unknown): Promise<PipelineBranchResult>
   openUrl(payload: unknown): Promise<boolean>
   pipelineLog(payload: unknown): Promise<PipelineLogResult>
   mcpList(): Promise<McpListResult>
@@ -224,6 +235,28 @@ export function createHandlers(deps: HandlerDeps): Handlers {
         return deps.chat.activityHistory(req.data.projectId)
       } catch (err) {
         console.error('activity:history failed:', err instanceof Error ? err.name : 'unknown')
+        return []
+      }
+    },
+
+    async activityRuns(payload) {
+      const req = traceRunsRequestSchema.safeParse(payload)
+      if (!req.success || !deps.trace) return []
+      try {
+        return deps.trace.runs(req.data.projectId)
+      } catch (err) {
+        console.error('activity:runs failed:', err instanceof Error ? err.name : 'unknown')
+        return []
+      }
+    },
+
+    async activityEvents(payload) {
+      const req = traceEventsRequestSchema.safeParse(payload)
+      if (!req.success || !deps.trace) return []
+      try {
+        return deps.trace.events(req.data.projectId, req.data.runId)
+      } catch (err) {
+        console.error('activity:events failed:', err instanceof Error ? err.name : 'unknown')
         return []
       }
     },
@@ -556,6 +589,21 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       } catch (err) {
         console.error('pipeline:pr failed:', errName(err))
         return { ok: false, error: 'pr-failed' }
+      }
+    },
+
+    async pipelineBranch(payload) {
+      const req = pipelineBranchRequestSchema.safeParse(payload)
+      if (!req.success) {
+        const named = typeof payload === 'object' && payload !== null && 'branch' in payload
+        return named ? { ok: false, error: 'invalid-branch', message: 'That is not a valid branch name.' } : { ok: false, error: 'not-found' }
+      }
+      if (!pipeline) return { ok: false, error: 'git-failed' }
+      try {
+        return await pipeline.saveBranch(req.data.projectId, req.data.runId, req.data.branch)
+      } catch (err) {
+        console.error('pipeline:branch failed:', errName(err))
+        return { ok: false, error: 'git-failed' }
       }
     },
 

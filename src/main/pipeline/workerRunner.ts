@@ -1,5 +1,7 @@
 import { query, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk'
 import { logToolUse, type LogSink } from './pipelineLog'
+import { reportDenied, type TraceSink } from '../trace/recorder'
+import { isDenied } from '../chat/tools'
 import { effectiveLimits, type ProjectSettings } from '../../shared/settings'
 import { guardWorkerToolUse } from './workerGuard'
 import { WORK_ALLOWED_TOOLS, WORK_SERVER_NAME, createWorkerTools, type CheckResult } from './workerTools'
@@ -49,6 +51,8 @@ export interface WorkerRunArgs {
   onLog?: LogSink
   /** Token usage of each session's result message (for the Usage tab). */
   onUsage?: (usage: RunUsage) => void
+  /** Detailed Activity: every SDK message and the guard's denials. */
+  trace?: TraceSink
 }
 
 export type WorkerRunner = (args: WorkerRunArgs) => Promise<WorkerOutcome>
@@ -99,6 +103,7 @@ export function buildWorkerOptions(
       protectedPatterns: args.settings.protectedPaths
     })
     logToolUse(args.onLog, input, out, args.worktree)
+    if (isDenied(out)) reportDenied(args.trace ? (id, why) => args.trace?.denied(id, why) : undefined, input, out)
     return out
   }
   const options: Options = {
@@ -196,6 +201,7 @@ export function createWorkerRunner(deps: WorkerRunnerDeps = {}): WorkerRunner {
       timer = setTimeout(() => stop('limit'), timeCap)
       try {
         for await (const message of q) {
+          args.trace?.message(message)
           if (!isRecord(message)) continue
           if (message['type'] === 'assistant') assistantTurns += 1
           if (typeof message['session_id'] === 'string' && message['session_id'].length > 0) {
