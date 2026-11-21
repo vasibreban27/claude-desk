@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ChatMode } from '@shared/ipc'
+import type { Attachment, ChatMode } from '@shared/ipc'
 import { Layout } from './components/Layout'
 import { ProjectsPanel } from './components/Projects'
 import { ChatPanel } from './components/Chat'
@@ -34,7 +34,7 @@ export function App() {
   const [workspaceKey, setWorkspaceKey] = useState(0)
   const starter = useStartProject()
   /** The first message of a project started from the chat, sent once its chat has loaded. */
-  const firstMessage = useRef<{ projectId: string; text: string } | null>(null)
+  const firstMessage = useRef<{ projectId: string; text: string; attachments: Attachment[] } | null>(null)
 
   const selected = newChat ? null : projects.selectedId
   const mode: ChatMode = selected !== null ? (modes[selected] ?? 'chat') : 'chat'
@@ -55,7 +55,7 @@ export function App() {
     const first = firstMessage.current
     if (first === null || first.projectId !== selected || chatLoading) return
     firstMessage.current = null
-    void chatSend(first.text)
+    void chatSend(first.text, first.attachments)
   }, [selected, chatLoading, chatSend])
 
   const projectNames = useMemo(
@@ -64,10 +64,10 @@ export function App() {
   )
 
   /** No project: the first message creates one named from it and opens it in Plan mode with that message. */
-  async function startProject(text: string) {
-    const project = await starter.start(text)
+  async function startProject(text: string, attachments: Attachment[] = []) {
+    const project = await starter.start(text.trim() !== '' ? text : 'new project')
     if (project === null) return
-    firstMessage.current = { projectId: project.id, text }
+    firstMessage.current = { projectId: project.id, text, attachments }
     setModes((m) => ({ ...m, [project.id]: 'plan' }))
     projects.adopt(project)
     setNewChat(false)

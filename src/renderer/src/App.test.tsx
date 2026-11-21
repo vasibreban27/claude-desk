@@ -69,6 +69,8 @@ beforeEach(() => {
     mcpSave: vi.fn(),
     mcpDelete: vi.fn(),
     mcpTest: vi.fn(),
+    speechTranscribe: vi.fn(),
+    onSpeechProgress: vi.fn().mockReturnValue(() => undefined),
     usagePlan: vi.fn().mockResolvedValue({ ok: false, error: 'failed' }),
     onActivityEvent: vi.fn().mockImplementation((l: (e: ActivityEvent) => void) => {
       emitActivity = l

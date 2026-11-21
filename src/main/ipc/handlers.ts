@@ -1,3 +1,5 @@
+import { speechTranscribeRequestSchema, type SpeechTranscribeResult } from '../../shared/speech'
+import type { Transcriber } from '../speech/transcriber'
 import {
   activityHistoryRequestSchema,
   traceRunsRequestSchema,
@@ -114,6 +116,8 @@ export interface HandlerDeps {
   }
   /** Reads the plan limits (Claude Code `/usage`). Absent: usage:plan reports failed. */
   planUsage?: PlanUsageReader
+  /** Local speech-to-text. Absent: speech:transcribe reports failed. */
+  speech?: Transcriber
   /** Detailed Activity reader. Absent: no runs. */
   trace?: { runs(projectId: string): TraceRunsResult; events(projectId: string, runId: string): TraceEventsResult }
 }
@@ -154,6 +158,7 @@ export interface Handlers {
   mcpSave(payload: unknown): Promise<McpSaveResult>
   mcpDelete(payload: unknown): Promise<McpDeleteResult>
   mcpTest(payload: unknown): Promise<McpTestResult>
+  speechTranscribe(payload: unknown): Promise<SpeechTranscribeResult>
   /**
    * `route` runs before the turn starts (events may be emitted synchronously) and returns
    * an undo function that is called when the send is rejected.
@@ -563,6 +568,18 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       }
     },
 
+    async speechTranscribe(payload) {
+      const req = speechTranscribeRequestSchema.safeParse(payload)
+      if (!req.success) return { ok: false, error: 'invalid', message: req.error.issues[0]?.message ?? 'invalid recording' }
+      if (!deps.speech) return { ok: false, error: 'failed' }
+      try {
+        return await deps.speech.transcribe(req.data.samples, req.data.language)
+      } catch (err) {
+        console.error('speech:transcribe failed:', errName(err))
+        return { ok: false, error: 'failed' }
+      }
+    },
+
     async pipelinePr(payload) {
       const req = pipelinePrRequestSchema.strict().safeParse(payload)
       if (!req.success) return { ok: false, error: 'not-found' }
@@ -618,7 +635,7 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       if (!req.success) return { ok: false, error: 'invalid' }
       const undo = route?.(req.data.projectId)
       try {
-        const result = deps.chat.send(req.data.projectId, req.data.text, req.data.mode ?? 'chat')
+        const result = deps.chat.send(req.data.projectId, req.data.text, req.data.mode ?? 'chat', req.data.attachments ?? [])
         if (!result.ok) undo?.()
         return result
       } catch (err) {

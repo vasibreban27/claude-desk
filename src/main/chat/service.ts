@@ -17,6 +17,8 @@ import {
 import type { ActivityDraft, AgentUsage, RunUsage } from './activity'
 import type { ChatRunner } from './runner'
 import type { ChatMcp } from '../mcp/servers'
+import type { Attachment } from '../../shared/attachments'
+import { AttachmentError, prepareAttachments, type PreparedAttachments } from './attachments'
 import type { TraceHub } from '../trace/hub'
 import type { ChatMode, PipelineStartResult } from '../../shared/ipc'
 import { BUILD_IN_APP_NOTE } from './deskTools'
@@ -60,6 +62,8 @@ export interface ChatServiceDeps {
   startPipeline?: (projectId: string, planFile: string) => Promise<PipelineStartResult>
   /** The user's MCP connections for Chat and Plan turns; read once per turn. A failure means none. */
   loadMcp?: () => Promise<ChatMcp>
+  /** Turns attachments into images and message text (default: saves files in the project). */
+  prepareAttachments?: (projectPath: string, list: readonly Attachment[]) => Promise<PreparedAttachments>
   /** Detailed Activity (kept for a short time, previews only). */
   trace?: Pick<TraceHub, 'startRun' | 'endRun' | 'session'>
 }
@@ -85,16 +89,17 @@ export class ChatService {
   }
 
   /** Accepts a turn synchronously; progress is reported through `emit`. */
-  send(projectId: string, text: string, mode: ChatMode = 'chat'): ChatSendResult {
+  send(projectId: string, text: string, mode: ChatMode = 'chat', attachments: readonly Attachment[] = []): ChatSendResult {
     const projectPath = this.deps.resolveProjectPath(projectId)
     if (projectPath === undefined) return { ok: false, error: 'not-found' }
     if (this.busy.has(projectId)) return { ok: false, error: 'busy' }
 
     this.busy.add(projectId)
     const turnId = this.id()
-    this.append(projectId, 'user', text)
+    const user = this.append(projectId, 'user', text)
+    if (attachments.length > 0) user.attachments = attachments.map((a) => ({ kind: a.kind, name: a.name }))
     const assistant = this.append(projectId, 'assistant', '')
-    void this.runTurn(projectId, turnId, projectPath, text, assistant, mode)
+    void this.runTurn(projectId, turnId, projectPath, text, assistant, mode, attachments, user)
     return { ok: true, turnId }
   }
 
@@ -104,7 +109,9 @@ export class ChatService {
     projectPath: string,
     text: string,
     assistant: ChatMessage,
-    mode: ChatMode = 'chat'
+    mode: ChatMode = 'chat',
+    attachments: readonly Attachment[] = [],
+    user?: ChatMessage
   ): Promise<void> {
     let run: RunState | null = null
     const planning = mode === 'plan'
@@ -122,10 +129,15 @@ export class ChatService {
       const resume = this.resumeId(projectId, settings)
       const format = planning ? await (this.deps.loadPlanFormat ?? loadPlanFormat)(cfg.config.toolkitPath).catch(() => null) : null
       const mcp = this.deps.loadMcp ? await this.deps.loadMcp().catch(() => null) : null
+      const prepared = attachments.length > 0 ? await (this.deps.prepareAttachments ?? prepareAttachments)(projectPath, attachments) : null
+      if (prepared && user) user.attachments = prepared.refs
+      // Inlined text files and notes about saved files follow the user's own words.
+      const message = prepared && prepared.text !== '' ? [text, prepared.text].filter((t) => t.trim() !== '').join('\n\n') : text
       const trace = this.traceFor(run, projectPath, text)
       const stream = this.deps.runner({
         // A new planning session starts the toolkit's plan skill; later turns continue that conversation.
-        prompt: planning && resume === undefined ? `${PLAN_COMMAND} ${text}` : text,
+        prompt: planning && resume === undefined ? `${PLAN_COMMAND} ${message}` : message,
+        ...(prepared && prepared.images.length > 0 ? { images: prepared.images } : {}),
         cwd: projectPath,
         pluginPath: cfg.config.toolkitPath,
         resume,
@@ -158,7 +170,7 @@ export class ChatService {
       if (run) this.finishRun(run, 'error')
       this.busy.delete(projectId)
       console.error('chat turn failed:', err instanceof Error ? err.name : 'unknown')
-      const message = err instanceof ConfigError ? err.message : GENERIC_ERROR
+      const message = err instanceof ConfigError || err instanceof AttachmentError ? err.message : GENERIC_ERROR
       this.deps.emit({ projectId, turnId, type: 'error', message })
     }
   }

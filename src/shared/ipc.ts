@@ -6,6 +6,8 @@ import type { ToolkitListResult } from './toolkit'
 import type { PipelineLogEntry, PipelineLogRequest, PipelineLogResult } from './pipelineLog'
 import type { McpDeleteResult, McpIdRequest, McpListResult, McpSaveRequest, McpSaveResult, McpTestResult } from './mcp'
 import type { PlanUsageRequest, PlanUsageResult } from './usage'
+import { ATTACHMENTS_MAX, attachmentRefSchema, attachmentSchema } from './attachments'
+import type { SpeechProgress, SpeechTranscribeRequest, SpeechTranscribeResult } from './speech'
 import type { TraceEventsRequest, TraceEventsResult, TracePush, TraceRunsRequest, TraceRunsResult } from './trace'
 
 export * from './settings'
@@ -14,6 +16,8 @@ export * from './toolkit'
 export * from './pipelineLog'
 export * from './mcp'
 export * from './usage'
+export * from './attachments'
+export * from './speech'
 export * from './trace'
 
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
@@ -61,6 +65,8 @@ export const IPC = {
   mcpSave: 'mcp:save',
   mcpDelete: 'mcp:delete',
   mcpTest: 'mcp:test',
+  speechTranscribe: 'speech:transcribe',
+  speechProgress: 'speech:progress',
   pipelineEvent: 'pipeline:event',
   pipelineLog: 'pipeline:log',
   pipelineLogEvent: 'pipeline:log-event'
@@ -87,7 +93,9 @@ export const chatMessageSchema = z.object({
   id: z.string(),
   role: z.enum(['user', 'assistant']),
   text: z.string(),
-  at: z.iso.datetime({ offset: true })
+  at: z.iso.datetime({ offset: true }),
+  /** Files and images sent with a user message (names only). */
+  attachments: z.array(attachmentRefSchema).max(ATTACHMENTS_MAX).optional()
 })
 export type ChatMessage = z.infer<typeof chatMessageSchema>
 
@@ -103,11 +111,14 @@ export type ChatHistoryRequest = z.infer<typeof chatHistoryRequestSchema>
 export const CHAT_MODES = ['chat', 'plan'] as const
 export type ChatMode = (typeof CHAT_MODES)[number]
 
-export const chatSendRequestSchema = z.object({
-  projectId: z.uuid(),
-  text: z.string().min(1).max(CHAT_TEXT_MAX),
-  mode: z.enum(CHAT_MODES).optional()
-})
+export const chatSendRequestSchema = z
+  .object({
+    projectId: z.uuid(),
+    text: z.string().max(CHAT_TEXT_MAX),
+    mode: z.enum(CHAT_MODES).optional(),
+    attachments: z.array(attachmentSchema).max(ATTACHMENTS_MAX).optional()
+  })
+  .refine((r) => r.text.trim().length > 0 || (r.attachments?.length ?? 0) > 0, { message: 'empty message' })
 export type ChatSendRequest = z.infer<typeof chatSendRequestSchema>
 
 export const activityHistoryRequestSchema = z.object({ projectId: z.uuid() })
@@ -555,6 +566,10 @@ export interface DeskApi {
   onPipelineLog(listener: (entry: PipelineLogEntry) => void): () => void
   /** Subscribe to activity events; returns an unsubscribe function. */
   onActivityEvent(listener: (event: ActivityEvent) => void): () => void
+  /** Local speech-to-text (Whisper on this PC); the model is downloaded on first use. */
+  speechTranscribe(req: SpeechTranscribeRequest): Promise<SpeechTranscribeResult>
+  /** Subscribe to model download / load progress; returns an unsubscribe function. */
+  onSpeechProgress(listener: (progress: SpeechProgress) => void): () => void
   /** Detailed Activity: the project's recent runs, newest first. */
   activityRuns(req: TraceRunsRequest): Promise<TraceRunsResult>
   /** Detailed Activity: every kept event of one run, oldest first. */

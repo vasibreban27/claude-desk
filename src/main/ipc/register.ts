@@ -22,6 +22,7 @@ import type { AppSettings } from '../projects/appSettings'
 import { readToolkitInfo } from '../config'
 import type { ProjectStore } from '../projects/store'
 import { createHandlers } from './handlers'
+import { createTranscriber } from '../speech/transcriber'
 import { createTraceHub, type TraceHub } from '../trace/hub'
 import type { TraceStore } from '../db/traceStore'
 import type { McpStore } from '../mcp/store'
@@ -205,6 +206,17 @@ export function registerIpc(
     return result.canceled || first === undefined ? undefined : first
   }
 
+  // Local Whisper: the model is downloaded into the app's data folder on the first dictation.
+  const speech = createTranscriber({
+    cacheDir: () => join(app.getPath('userData'), 'models'),
+    onProgress: (p) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(IPC.speechProgress, p)
+      }
+    },
+    log: (m) => console.error(m)
+  })
+
   // One reader for the app: its cache keeps `/usage` checks sparse.
   const planUsage = createPlanUsageReader({
     cwd: () => {
@@ -231,6 +243,7 @@ export function registerIpc(
       ...(runStore ? { runStore } : {}),
       mcp,
       planUsage,
+      speech,
       trace
     })
 
@@ -281,6 +294,7 @@ export function registerIpc(
   ipcMain.handle(IPC.mcpSave, (event, payload: unknown) => make(event).mcpSave(payload))
   ipcMain.handle(IPC.mcpDelete, (event, payload: unknown) => make(event).mcpDelete(payload))
   ipcMain.handle(IPC.mcpTest, (event, payload: unknown) => make(event).mcpTest(payload))
+  ipcMain.handle(IPC.speechTranscribe, (event, payload: unknown) => make(event).speechTranscribe(payload))
   ipcMain.handle(IPC.chatSend, async (event, payload: unknown) => {
     try {
       await refreshPaths()
@@ -299,7 +313,7 @@ export function registerIpc(
 
   return () => {
     for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.activityRuns, IPC.activityEvents, IPC.usageSummary, IPC.usagePlan, IPC.settingsGet, IPC.settingsSet, IPC.settingsSuggestions, IPC.appInfo, IPC.appModelGet, IPC.appModelSet, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick, IPC.projectsRemove,
-      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineResume, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.pipelineBranch, IPC.openUrl, IPC.mcpList, IPC.mcpSave, IPC.mcpDelete, IPC.mcpTest]) {
+      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineResume, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.pipelineBranch, IPC.openUrl, IPC.mcpList, IPC.mcpSave, IPC.mcpDelete, IPC.mcpTest, IPC.speechTranscribe]) {
       ipcMain.removeHandler(channel)
     }
     targets.clear()

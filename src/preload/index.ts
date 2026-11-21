@@ -6,6 +6,7 @@ import {
   type DeskApi,
   type PipelineEvent,
   type PipelineLogEntry,
+  type SpeechProgress,
   type TracePush
 } from '../shared/ipc'
 
@@ -53,6 +54,14 @@ const api: DeskApi = {
   mcpSave: (req) => ipcRenderer.invoke(IPC.mcpSave, req),
   mcpDelete: (req) => ipcRenderer.invoke(IPC.mcpDelete, req),
   mcpTest: (req) => ipcRenderer.invoke(IPC.mcpTest, req),
+  speechTranscribe: (req) => ipcRenderer.invoke(IPC.speechTranscribe, req),
+  onSpeechProgress: (listener) => {
+    const wrapped = (_e: IpcRendererEvent, progress: SpeechProgress): void => listener(progress)
+    ipcRenderer.on(IPC.speechProgress, wrapped)
+    return () => {
+      ipcRenderer.removeListener(IPC.speechProgress, wrapped)
+    }
+  },
   pipelineLog: (req) => ipcRenderer.invoke(IPC.pipelineLog, req),
   onPipelineLog: (listener) => {
     const wrapped = (_e: IpcRendererEvent, entry: PipelineLogEntry): void => listener(entry)
