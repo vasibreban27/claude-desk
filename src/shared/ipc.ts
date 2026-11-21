@@ -6,6 +6,7 @@ import type { ToolkitListResult } from './toolkit'
 import type { PipelineLogEntry, PipelineLogRequest, PipelineLogResult } from './pipelineLog'
 import type { McpDeleteResult, McpIdRequest, McpListResult, McpSaveRequest, McpSaveResult, McpTestResult } from './mcp'
 import type { PlanUsageRequest, PlanUsageResult } from './usage'
+import { ATTACHMENTS_MAX, attachmentRefSchema, attachmentSchema } from './attachments'
 
 export * from './settings'
 export * from './review'
@@ -13,6 +14,7 @@ export * from './toolkit'
 export * from './pipelineLog'
 export * from './mcp'
 export * from './usage'
+export * from './attachments'
 
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
 
@@ -81,7 +83,9 @@ export const chatMessageSchema = z.object({
   id: z.string(),
   role: z.enum(['user', 'assistant']),
   text: z.string(),
-  at: z.iso.datetime({ offset: true })
+  at: z.iso.datetime({ offset: true }),
+  /** Files and images sent with a user message (names only). */
+  attachments: z.array(attachmentRefSchema).max(ATTACHMENTS_MAX).optional()
 })
 export type ChatMessage = z.infer<typeof chatMessageSchema>
 
@@ -97,11 +101,14 @@ export type ChatHistoryRequest = z.infer<typeof chatHistoryRequestSchema>
 export const CHAT_MODES = ['chat', 'plan'] as const
 export type ChatMode = (typeof CHAT_MODES)[number]
 
-export const chatSendRequestSchema = z.object({
-  projectId: z.uuid(),
-  text: z.string().min(1).max(CHAT_TEXT_MAX),
-  mode: z.enum(CHAT_MODES).optional()
-})
+export const chatSendRequestSchema = z
+  .object({
+    projectId: z.uuid(),
+    text: z.string().max(CHAT_TEXT_MAX),
+    mode: z.enum(CHAT_MODES).optional(),
+    attachments: z.array(attachmentSchema).max(ATTACHMENTS_MAX).optional()
+  })
+  .refine((r) => r.text.trim().length > 0 || (r.attachments?.length ?? 0) > 0, { message: 'empty message' })
 export type ChatSendRequest = z.infer<typeof chatSendRequestSchema>
 
 export const activityHistoryRequestSchema = z.object({ projectId: z.uuid() })

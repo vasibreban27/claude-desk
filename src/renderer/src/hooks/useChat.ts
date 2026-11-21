@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { ChatEvent, ChatMessage, ChatMode, ChatSendError } from '@shared/ipc'
+import type { Attachment, ChatEvent, ChatMessage, ChatMode, ChatSendError } from '@shared/ipc'
 import { BRIDGE_UNAVAILABLE } from './useProjects'
 
 export const SEND_ERROR_MESSAGES: Record<ChatSendError, string> = {
@@ -19,7 +19,7 @@ export interface UseChat {
   loading: boolean
   busy: boolean
   error: string | null
-  send: (text: string) => Promise<void>
+  send: (text: string, attachments?: Attachment[]) => Promise<void>
   /** The latest plan the planner wrote in this chat. */
   planReady: PlanReady | null
   clearPlanReady: () => void
@@ -111,7 +111,7 @@ export function useChat(projectId: string | null, mode: ChatMode = 'chat'): UseC
   }, [projectId])
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, attachments: Attachment[] = []) => {
       const api = window.api
       if (projectId === null) return
       if (!api) {
@@ -122,11 +122,17 @@ export function useChat(projectId: string | null, mode: ChatMode = 'chat'): UseC
         id: `local:${Date.now()}`,
         role: 'user',
         text,
-        at: new Date().toISOString()
+        at: new Date().toISOString(),
+        ...(attachments.length > 0 ? { attachments: attachments.map((a) => ({ kind: a.kind, name: a.name })) } : {})
       }
       setState((s) => ({ ...s, busy: true, error: null, messages: [...s.messages, user] }))
       try {
-        const result = await api.chatSend(mode === 'plan' ? { projectId, text, mode } : { projectId, text })
+        const result = await api.chatSend({
+          projectId,
+          text,
+          ...(mode === 'plan' ? { mode } : {}),
+          ...(attachments.length > 0 ? { attachments } : {})
+        })
         if (!result.ok) {
           setState((s) =>
             s.projectId === projectId

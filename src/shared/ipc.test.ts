@@ -111,6 +111,18 @@ describe('request schemas', () => {
     expect(chatSendRequestSchema.safeParse({ projectId: 'x', text: 'hi' }).success).toBe(false)
   })
 
+  it('accepts attachments, alone or with text, and checks their shape', () => {
+    const image = { kind: 'image', name: 'a.png', mediaType: 'image/png', data: 'iVBORw0KGgo=' }
+    const file = { kind: 'file', name: 'a.pdf', data: 'JVBERg==' }
+    expect(chatSendRequestSchema.safeParse({ projectId: uuid, text: '', attachments: [image] }).success).toBe(true)
+    expect(chatSendRequestSchema.safeParse({ projectId: uuid, text: 'hi', attachments: [image, file] }).success).toBe(true)
+    expect(chatSendRequestSchema.safeParse({ projectId: uuid, text: ' ', attachments: [] }).success).toBe(false)
+    expect(chatSendRequestSchema.safeParse({ projectId: uuid, text: 'hi', attachments: [{ ...image, mediaType: 'image/svg+xml' }] }).success).toBe(false)
+    expect(chatSendRequestSchema.safeParse({ projectId: uuid, text: 'hi', attachments: [{ ...file, data: 'not base64!' }] }).success).toBe(false)
+    expect(chatSendRequestSchema.safeParse({ projectId: uuid, text: 'hi', attachments: [{ ...file, extra: 1 }] }).success).toBe(false)
+    expect(chatSendRequestSchema.safeParse({ projectId: uuid, text: 'hi', attachments: Array(11).fill(file) }).success).toBe(false)
+  })
+
   it('rejects empty text and wrong shapes', () => {
     expect(chatSendRequestSchema.safeParse({ projectId: uuid, text: '' }).success).toBe(false)
     expect(chatSendRequestSchema.safeParse({ projectId: uuid }).success).toBe(false)

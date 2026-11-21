@@ -552,3 +552,14 @@ describe('pipeline handlers', () => {
     expect(await h.pipelineStatus({ projectId: ID })).toEqual({ ok: false, error: 'storage-unavailable' })
   })
 })
+
+describe('chat:send attachments', () => {
+  it('passes validated attachments to the service and refuses bad ones', async () => {
+    const { h, deps } = setup()
+    const image = { kind: 'image', name: 'a.png', mediaType: 'image/png', data: 'iVBORw0KGgo=' }
+    expect(await h.chatSend({ projectId: ID, text: '', attachments: [image] })).toEqual({ ok: true, turnId: 't1' })
+    expect(deps.chat.send).toHaveBeenCalledWith(ID, '', 'chat', [image])
+    expect(await h.chatSend({ projectId: ID, text: 'hi', attachments: [{ ...image, mediaType: 'text/html' }] })).toEqual({ ok: false, error: 'invalid' })
+    expect(deps.chat.send).toHaveBeenCalledTimes(1)
+  })
+})

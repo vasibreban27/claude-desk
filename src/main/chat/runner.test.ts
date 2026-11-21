@@ -42,7 +42,7 @@ vi.mock('./gitTools', async (importOriginal) => {
   }
 })
 
-import { buildHooks, createGitIsProtected, createSdkRunner, policyFromSettings, sdkRunner, type RunnerItem } from './runner'
+import { buildHooks, buildPrompt, createGitIsProtected, createSdkRunner, policyFromSettings, sdkRunner, type RunnerItem } from './runner'
 
 const run = (args: Partial<Parameters<typeof sdkRunner>[0]> = {}) =>
   sdkRunner({ prompt: 'p', cwd: '/w', pluginPath: '/plug', ...args })
@@ -403,5 +403,40 @@ describe('buildHooks', () => {
       { type: 'tool-finished', durationMs: 12, denied: false },
       { type: 'agent-finished', summary: 'done', agent: 'reviewer' }
     ])
+  })
+})
+
+describe('image prompts', () => {
+  it('keeps a plain text prompt without images', () => {
+    expect(buildPrompt('hello')).toBe('hello')
+    expect(buildPrompt('hello', [])).toBe('hello')
+  })
+
+  it('sends one user message with the images before the text', async () => {
+    const prompt = buildPrompt('what is this?', [{ mediaType: 'image/png', data: 'AAAA' }])
+    if (typeof prompt === 'string') throw new Error('expected a message stream')
+    const messages = []
+    for await (const m of prompt) messages.push(m)
+    expect(messages).toEqual([
+      {
+        type: 'user',
+        parent_tool_use_id: null,
+        message: {
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+            { type: 'text', text: 'what is this?' }
+          ]
+        }
+      }
+    ])
+  })
+
+  it('gives an image-only message a short text and hands the stream to the SDK', async () => {
+    state.script = async function* () {}
+    await collect(run({ prompt: '  ', images: [{ mediaType: 'image/gif', data: 'R0lG' }] }))
+    const prompt = (state.captured as unknown as { prompt: AsyncIterable<{ message: { content: { type: string; text?: string }[] } }> }).prompt
+    const first = await prompt[Symbol.asyncIterator]().next()
+    expect(first.value?.message.content.at(-1)).toEqual({ type: 'text', text: 'See the attached image.' })
   })
 })

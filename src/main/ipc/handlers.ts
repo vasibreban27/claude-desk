@@ -570,7 +570,7 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       if (!req.success) return { ok: false, error: 'invalid' }
       const undo = route?.(req.data.projectId)
       try {
-        const result = deps.chat.send(req.data.projectId, req.data.text, req.data.mode ?? 'chat')
+        const result = deps.chat.send(req.data.projectId, req.data.text, req.data.mode ?? 'chat', req.data.attachments ?? [])
         if (!result.ok) undo?.()
         return result
       } catch (err) {

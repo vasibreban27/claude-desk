@@ -82,7 +82,7 @@ describe('ChatPanel', () => {
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
     expect(send).not.toHaveBeenCalled()
     fireEvent.keyDown(input, { key: 'Enter' })
-    expect(send).toHaveBeenCalledWith('hi')
+    expect(send).toHaveBeenCalledWith('hi', [])
     expect(input).toHaveValue('')
   })
 

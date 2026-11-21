@@ -1,4 +1,5 @@
-import { query, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk'
+import { query, type HookCallback, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { PromptImage } from './attachments'
 import {
   createUsageAccumulator,
   mapDeniedToolUse,
@@ -40,6 +41,8 @@ export interface RunnerArgs {
   startPipeline?: StartPipeline
   /** The user's MCP connections for Chat and Plan: their servers and the exact tool names they allowed. */
   mcp?: ChatMcp
+  /** Images sent with the message (screenshots); the prompt then goes to the SDK as one user message. */
+  images?: PromptImage[]
 }
 
 /** The per-turn guard policy derived from the settings. */
@@ -73,6 +76,25 @@ export function createGitIsProtected(
 }
 
 export type ChatRunner = (args: RunnerArgs) => AsyncIterable<RunnerItem>
+
+/** The SDK prompt: plain text, or one user message with the images first and the text after them. */
+export function buildPrompt(text: string, images: readonly PromptImage[] = []): string | AsyncIterable<SDKUserMessage> {
+  if (images.length === 0) return text
+  const message: SDKUserMessage = {
+    type: 'user',
+    parent_tool_use_id: null,
+    message: {
+      role: 'user',
+      content: [
+        ...images.map((i) => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: i.mediaType, data: i.data } })),
+        { type: 'text' as const, text: text.trim() === '' ? 'See the attached image.' : text }
+      ]
+    }
+  }
+  return (async function* () {
+    yield message
+  })()
+}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null
@@ -224,7 +246,7 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
     ...(args.startPipeline ? { [DESK_SERVER]: createDeskServer(args.startPipeline) } : {})
   }
   const stream = query({
-    prompt: args.prompt,
+    prompt: buildPrompt(args.prompt, args.images),
     options: {
       cwd: args.cwd,
       // Deliberately []: project, user and local settings are never loaded. A cloned untrusted repo's

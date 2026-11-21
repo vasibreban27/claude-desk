@@ -520,3 +520,70 @@ describe('ChatService per-turn settings', () => {
     })
   })
 })
+
+describe('ChatService attachments', () => {
+  it('adds prepared text and images to the turn and records the attachment names', async () => {
+    const runner = vi.fn(streamOf([{ kind: 'text', text: 'ok' }]))
+    const prepareAttachments = vi.fn(async () => ({
+      images: [{ mediaType: 'image/png' as const, data: 'AAAA' }],
+      text: 'Attached file a.pdf is saved in the project at .claude-desk/attachments/x-a.pdf.',
+      refs: [
+        { kind: 'image' as const, name: 'shot.png' },
+        { kind: 'file' as const, name: 'a.pdf', path: '.claude-desk/attachments/x-a.pdf' }
+      ]
+    }))
+    let done: () => void = () => {}
+    const ended = new Promise<void>((r) => (done = r))
+    const service = new ChatService({
+      resolveProjectPath: (id) => paths[id],
+      runner,
+      emit: (e) => {
+        if (e.type !== 'text-delta') done()
+      },
+      prepareAttachments,
+      loadConfig: () => ({ ok: true, config: { toolkitPath: TOOLKIT } })
+    })
+    const attachments = [
+      { kind: 'image' as const, name: 'shot.png', mediaType: 'image/png' as const, data: 'AAAA' },
+      { kind: 'file' as const, name: 'a.pdf', data: 'JVBERg==' }
+    ]
+    expect(service.send('p1', 'look', 'chat', attachments)).toMatchObject({ ok: true })
+    expect(service.getHistory('p1')[0]?.attachments).toEqual([
+      { kind: 'image', name: 'shot.png' },
+      { kind: 'file', name: 'a.pdf' }
+    ])
+    await ended
+    expect(prepareAttachments).toHaveBeenCalledWith('/work/one', attachments)
+    expect(runner).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: 'look\n\nAttached file a.pdf is saved in the project at .claude-desk/attachments/x-a.pdf.',
+        images: [{ mediaType: 'image/png', data: 'AAAA' }]
+      })
+    )
+    expect(service.getHistory('p1')[0]?.attachments?.[1]).toEqual({ kind: 'file', name: 'a.pdf', path: '.claude-desk/attachments/x-a.pdf' })
+  })
+
+  it('shows the attachment problem instead of the generic error', async () => {
+    const { AttachmentError } = await import('./attachments')
+    const events: ChatEvent[] = []
+    let done: () => void = () => {}
+    const ended = new Promise<void>((r) => (done = r))
+    const runner = vi.fn(streamOf([]))
+    const service = new ChatService({
+      resolveProjectPath: (id) => paths[id],
+      runner,
+      emit: (e) => {
+        events.push(e)
+        if (e.type !== 'text-delta') done()
+      },
+      prepareAttachments: async () => {
+        throw new AttachmentError('x.png is not a PNG, JPEG, GIF or WebP image.')
+      },
+      loadConfig: () => ({ ok: true, config: { toolkitPath: TOOLKIT } })
+    })
+    service.send('p1', '', 'chat', [{ kind: 'image', name: 'x.png', mediaType: 'image/png', data: 'AAAA' }])
+    await ended
+    expect(events.at(-1)).toMatchObject({ type: 'error', message: 'x.png is not a PNG, JPEG, GIF or WebP image.' })
+    expect(runner).not.toHaveBeenCalled()
+  })
+})
