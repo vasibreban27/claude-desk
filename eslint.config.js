@@ -4,7 +4,7 @@ import tseslint from 'typescript-eslint'
 import reactHooks from 'eslint-plugin-react-hooks'
 
 export default tseslint.config(
-  { ignores: ['node_modules', 'out', 'dist'] },
+  { ignores: ['node_modules', 'out', 'dist', 'release'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -20,7 +20,7 @@ export default tseslint.config(
     rules: reactHooks.configs.recommended.rules
   },
   {
-    files: ['src/main/**/*.ts', 'src/preload/**/*.ts', 'tests/**/*.ts', '*.ts', '*.js'],
+    files: ['src/main/**/*.ts', 'src/preload/**/*.ts', 'tests/**/*.ts', 'scripts/**/*.mjs', '*.ts', '*.js'],
     languageOptions: { globals: globals.node }
   }
 )

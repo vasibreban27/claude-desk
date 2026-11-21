@@ -1,5 +1,6 @@
 import { query, type HookCallback, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { PromptImage } from './attachments'
+import { withClaudeExecutable } from '../sdk'
 import {
   createUsageAccumulator,
   mapDeniedToolUse,
@@ -256,7 +257,7 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
       : {}),
     ...(args.startPipeline ? { [DESK_SERVER]: createDeskServer(args.startPipeline) } : {})
   }
-  const stream = query({
+  const stream = query(withClaudeExecutable({
     prompt: buildPrompt(args.prompt, args.images),
     options: {
       cwd: args.cwd,
@@ -288,7 +289,7 @@ async function* runSdk(args: RunnerArgs, deps: SdkRunnerDeps): AsyncGenerator<Ru
       abortController,
       ...(args.resume ? { resume: args.resume } : {})
     }
-  })
+  }))
 
   const accumulator = createUsageAccumulator()
   const pump = (async (): Promise<void> => {

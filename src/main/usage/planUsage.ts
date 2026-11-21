@@ -2,6 +2,7 @@ import { query, type Options } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import type { ExtraUsage, PlanLimit, PlanUsage, PlanUsageResult } from '../../shared/usage'
 import type { QueryFn } from '../pipeline/workerRunner'
+import { withClaudeExecutable } from '../sdk'
 
 /**
  * Reads the plan limits Claude Code's `/usage` command shows (5-hour session, weekly meters, extra usage) by sending
@@ -125,7 +126,7 @@ export interface PlanUsageReader {
 }
 
 export function createPlanUsageReader(deps: PlanUsageReaderDeps): PlanUsageReader {
-  const queryFn: QueryFn = deps.queryFn ?? ((p) => query(p))
+  const queryFn: QueryFn = deps.queryFn ?? ((p) => query(withClaudeExecutable(p)))
   const now = deps.now ?? Date.now
   const ttl = deps.ttlMs ?? PLAN_USAGE_TTL_MS
   const timeout = deps.timeoutMs ?? PLAN_USAGE_TIMEOUT_MS

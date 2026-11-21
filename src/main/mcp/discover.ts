@@ -1,6 +1,7 @@
 import { query, type McpServerConfig, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import { MCP_MAX_TOOLS, MCP_TOOL_NAME_PATTERN, type McpStatus, type McpToolInfo } from '../../shared/mcp'
+import { withClaudeExecutable } from '../sdk'
 
 /**
  * Lists a server's tools without sending anything to the model: a session is started with only this server and an
@@ -65,7 +66,7 @@ export function toToolInfos(server: string, tools: z.infer<typeof statusSchema>[
 }
 
 export async function discoverTools(server: string, config: McpServerConfig, deps: DiscoverDeps): Promise<DiscoverResult> {
-  const queryFn: DiscoverQueryFn = deps.queryFn ?? ((p) => query(p))
+  const queryFn: DiscoverQueryFn = deps.queryFn ?? ((p) => query(withClaudeExecutable(p)))
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const timeout = deps.timeoutMs ?? DISCOVER_TIMEOUT_MS
   const stop = new AbortController()
