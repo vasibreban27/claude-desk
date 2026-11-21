@@ -1325,3 +1325,35 @@ describe('orchestrator detailed activity', () => {
     expect(t2?.[0]).not.toHaveProperty('trace')
   })
 })
+
+describe('orchestrator toolkit agents', () => {
+  it('gives each worker its resolved agent and notes it in the log', async () => {
+    const c = setup({})
+    const lines: string[] = []
+    const orch = createOrchestrator({
+      ...c.deps,
+      onLog: (_p, l) => lines.push(l.text),
+      resolveAgent: async (_projectId, name) => {
+        if (name === 'broken') throw new Error('x')
+        return { text: `## Agent instructions\n${name} body`, model: 'opus', fingerprint: 'abcd1234', customized: true }
+      }
+    })
+    const r = await orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    expect((await r.finished).status).toBe('done')
+    const first = c.runner.mock.calls[0]?.[0]
+    expect(first?.agent).toEqual({ text: `## Agent instructions\n${first?.task.worker} body`, model: 'opus' })
+    expect(lines.some((l) => l.includes(': opus · instructions abcd1234, project rules'))).toBe(true)
+  })
+})
+
+describe('orchestrator toolkit agents when resolving fails', () => {
+  it('runs the workers with the app rules only', async () => {
+    const c = setup({})
+    const orch = createOrchestrator({ ...c.deps, resolveAgent: async () => Promise.reject(new Error('toolkit gone')) })
+    const r = await orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    expect((await r.finished).status).toBe('done')
+    expect(c.runner.mock.calls.every((call) => call[0].agent === undefined)).toBe(true)
+  })
+})

@@ -62,6 +62,8 @@ export interface ChatServiceDeps {
   startPipeline?: (projectId: string, planFile: string) => Promise<PipelineStartResult>
   /** The user's MCP connections for Chat and Plan turns; read once per turn. A failure means none. */
   loadMcp?: () => Promise<ChatMcp>
+  /** Plan mode: the project's house rules and turned-off workers, for the planner (null when there is nothing). */
+  planNote?: (projectId: string) => string | null
   /** Turns attachments into images and message text (default: saves files in the project). */
   prepareAttachments?: (projectPath: string, list: readonly Attachment[]) => Promise<PreparedAttachments>
   /** Detailed Activity (kept for a short time, previews only). */
@@ -145,7 +147,7 @@ export class ChatService {
         ...(mcp !== null && mcp.allowedTools.length > 0 ? { mcp } : {}),
         ...(trace ? { trace } : {}),
         ...(planning
-          ? { appendPrompt: [format ? framePlanFormat(format) : '', BUILD_IN_APP_NOTE].filter(Boolean).join('\n\n') }
+          ? { appendPrompt: [format ? framePlanFormat(format) : '', BUILD_IN_APP_NOTE, this.planNoteFor(projectId)].filter(Boolean).join('\n\n') }
           : {}),
         ...(planning && this.deps.startPipeline ? { startPipeline: (planFile: string) => this.startFromChat(projectId, turnId, planFile) } : {})
       })
@@ -201,6 +203,15 @@ export class ChatService {
       for (const p of found) this.deps.emit({ projectId, turnId, type: 'plan-ready', planFile: p.planFile, problem: p.problem })
     } catch (err) {
       console.error('chat: plan scan failed:', err instanceof Error ? err.name : 'unknown')
+    }
+  }
+
+  /** Never throws: no note when the reader is missing or fails. */
+  private planNoteFor(projectId: string): string {
+    try {
+      return this.deps.planNote?.(projectId) ?? ''
+    } catch {
+      return ''
     }
   }
 

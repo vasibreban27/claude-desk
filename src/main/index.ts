@@ -5,6 +5,7 @@ import { openDatabase, createRunStore, createSettingsStore, createPipelineStore,
 import type Database from 'better-sqlite3'
 import { registerIpc } from './ipc/register'
 import { createTraceStore, type TraceStore } from './db/traceStore'
+import { createAgentProfileStore, type AgentProfileStore } from './db/agentProfileStore'
 import { openJsonProjectStore } from './projects/store'
 import { openAppSettings } from './projects/appSettings'
 import { loadEnvFile } from './config'
@@ -93,6 +94,17 @@ function openTraceStore(db: Database.Database | null): TraceStore | undefined {
   }
 }
 
+/** Per-project agent settings over the database; on failure the Toolkit tab is read-only. */
+function openAgentStore(db: Database.Database | null): AgentProfileStore | undefined {
+  if (db === null) return undefined
+  try {
+    return createAgentProfileStore(db)
+  } catch (err) {
+    console.error('opening agent settings store failed:', err instanceof Error ? err.name : 'unknown')
+    return undefined
+  }
+}
+
 /** Opens the database-backed stores; a database problem never stops the app, it only makes those stores unavailable. */
 export function bootstrapStores(dataDir: string): {
   db: Database.Database | undefined
@@ -100,6 +112,7 @@ export function bootstrapStores(dataDir: string): {
   settingsStore: SettingsStore
   pipelineStore: PipelineStore
   traceStore: TraceStore | undefined
+  agentStore: AgentProfileStore | undefined
 } {
   const opened = openRunStore(dataDir)
   return {
@@ -107,7 +120,8 @@ export function bootstrapStores(dataDir: string): {
     runStore: opened?.store,
     settingsStore: openSettingsStore(opened?.db ?? null),
     pipelineStore: openPipelineStore(opened?.db ?? null),
-    traceStore: openTraceStore(opened?.db ?? null)
+    traceStore: openTraceStore(opened?.db ?? null),
+    agentStore: openAgentStore(opened?.db ?? null)
   }
 }
 
@@ -120,7 +134,7 @@ app
     const store = await openJsonProjectStore(dataDir)
     const stores = bootstrapStores(dataDir)
     database = stores.db
-    disposeIpc = registerIpc(store, stores.runStore, stores.settingsStore, stores.pipelineStore, openAppSettings(dataDir), stores.traceStore)
+    disposeIpc = registerIpc(store, stores.runStore, stores.settingsStore, stores.pipelineStore, openAppSettings(dataDir), stores.traceStore, stores.agentStore)
     createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

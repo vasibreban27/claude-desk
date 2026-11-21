@@ -1,5 +1,6 @@
 import { speechTranscribeRequestSchema, type SpeechTranscribeResult } from '../../shared/speech'
 import type { Transcriber } from '../speech/transcriber'
+import { createAgentHandlers, type AgentHandlerDeps, type AgentHandlers } from './agentHandlers'
 import {
   activityHistoryRequestSchema,
   traceRunsRequestSchema,
@@ -116,13 +117,15 @@ export interface HandlerDeps {
   }
   /** Reads the plan limits (Claude Code `/usage`). Absent: usage:plan reports failed. */
   planUsage?: PlanUsageReader
+  /** Per-project agents (the Toolkit tab). Absent: no toolkit view, nothing can be saved. */
+  agents?: Pick<AgentHandlerDeps, 'resolver' | 'store'>
   /** Local speech-to-text. Absent: speech:transcribe reports failed. */
   speech?: Transcriber
   /** Detailed Activity reader. Absent: no runs. */
   trace?: { runs(projectId: string): TraceRunsResult; events(projectId: string, runId: string): TraceEventsResult }
 }
 
-export interface Handlers {
+export interface Handlers extends AgentHandlers {
   listProjects(): Promise<ProjectsListResult>
   pickAndAdd(): Promise<ProjectsPickAndAddResult>
   refresh(payload: unknown): Promise<ProjectsRefreshResult>
@@ -177,8 +180,15 @@ export function createHandlers(deps: HandlerDeps): Handlers {
   const settingsStore = deps.settingsStore ?? createSettingsStore(null)
   const readToolkitInfo = deps.readToolkitInfo ?? (() => ({ status: 'unset' as const, path: null, version: null }))
   const pipeline = deps.pipeline
+  const agentHandlers = createAgentHandlers({
+    projects: deps.store,
+    ...(deps.agents?.resolver ? { resolver: deps.agents.resolver } : {}),
+    ...(deps.agents?.store ? { store: deps.agents.store } : {}),
+    ...(deps.runStore ? { runStore: deps.runStore } : {})
+  })
   const errName = (err: unknown): string => (err instanceof Error ? err.name : 'unknown')
   return {
+    ...agentHandlers,
     async listProjects() {
       try {
         const list = await deps.store.list()

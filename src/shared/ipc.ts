@@ -8,6 +8,15 @@ import type { McpDeleteResult, McpIdRequest, McpListResult, McpSaveRequest, McpS
 import type { PlanUsageRequest, PlanUsageResult } from './usage'
 import { ATTACHMENTS_MAX, attachmentRefSchema, attachmentSchema } from './attachments'
 import type { SpeechProgress, SpeechTranscribeRequest, SpeechTranscribeResult } from './speech'
+import type {
+  AgentOverrideSaveRequest,
+  AgentPreviewRequest,
+  AgentPreviewResult,
+  AgentsSaveResult,
+  HouseRulesSaveRequest,
+  ProjectAgentsRequest,
+  ProjectAgentsResult
+} from './agents'
 import type { TraceEventsRequest, TraceEventsResult, TracePush, TraceRunsRequest, TraceRunsResult } from './trace'
 
 export * from './settings'
@@ -18,6 +27,7 @@ export * from './mcp'
 export * from './usage'
 export * from './attachments'
 export * from './speech'
+export * from './agents'
 export * from './trace'
 
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
@@ -66,6 +76,10 @@ export const IPC = {
   mcpDelete: 'mcp:delete',
   mcpTest: 'mcp:test',
   speechTranscribe: 'speech:transcribe',
+  agentsView: 'agents:view',
+  agentsSave: 'agents:save',
+  agentsRules: 'agents:rules',
+  agentsPreview: 'agents:preview',
   speechProgress: 'speech:progress',
   pipelineEvent: 'pipeline:event',
   pipelineLog: 'pipeline:log',
@@ -566,6 +580,14 @@ export interface DeskApi {
   onPipelineLog(listener: (entry: PipelineLogEntry) => void): () => void
   /** Subscribe to activity events; returns an unsubscribe function. */
   onActivityEvent(listener: (event: ActivityEvent) => void): () => void
+  /** The project's view of the toolkit agents (with its overrides, house rules and usage). */
+  agentsView(req: ProjectAgentsRequest): Promise<ProjectAgentsResult>
+  /** Saves (or with null, removes) a project's override for one agent. */
+  agentsSave(req: AgentOverrideSaveRequest): Promise<AgentsSaveResult>
+  /** Saves the project's house rules (applied to every worker and reviewer, and told to the planner). */
+  agentsRules(req: HouseRulesSaveRequest): Promise<AgentsSaveResult>
+  /** What a session of this agent receives in the project, layer by layer. */
+  agentsPreview(req: AgentPreviewRequest): Promise<AgentPreviewResult>
   /** Local speech-to-text (Whisper on this PC); the model is downloaded on first use. */
   speechTranscribe(req: SpeechTranscribeRequest): Promise<SpeechTranscribeResult>
   /** Subscribe to model download / load progress; returns an unsubscribe function. */

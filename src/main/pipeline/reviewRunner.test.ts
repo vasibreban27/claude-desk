@@ -195,3 +195,20 @@ describe('guardReviewerToolUse', () => {
     expect(Object.keys(guardReviewerToolUse({}, process.cwd(), [])).length).toBeGreaterThan(0)
   })
 })
+
+describe('reviewer toolkit agent', () => {
+  it('uses the toolkit reviewer instructions and model, keeping the app rules last', async () => {
+    const { buildReviewerSystemPrompt } = await import('./reviewRunner')
+    const text = buildReviewerSystemPrompt('reviewer', '## Agent instructions\nCheck nulls.')
+    expect(text.indexOf('Check nulls.')).toBeLessThan(text.indexOf('## App rules'))
+    expect(text).toContain('Severities:')
+    expect(buildReviewerSystemPrompt('reviewer').startsWith('You are a code reviewer.')).toBe(true)
+  })
+})
+
+describe('reviewer model', () => {
+  it('uses the agent model when the project sets one, else sonnet', () => {
+    expect(buildReviewerOptions({ ...args(), agent: { text: '', model: 'opus' } }, new AbortController()).options.model).toBe('opus')
+    expect(buildReviewerOptions({ ...args(), agent: { text: '', model: null } }, new AbortController()).options.model).toBe('sonnet')
+  })
+})

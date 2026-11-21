@@ -640,3 +640,36 @@ describe('ChatService attachments', () => {
     expect(runner).not.toHaveBeenCalled()
   })
 })
+
+describe('ChatService plan note', () => {
+  it('adds the project note to plan mode only, and survives a failing reader', async () => {
+    const runner = vi.fn(streamOf([{ kind: 'text', text: 'x' }]))
+    let done: () => void = () => {}
+    let ended = new Promise<void>((r) => (done = r))
+    let fail = false
+    const service = new ChatService({
+      resolveProjectPath: (id) => paths[id],
+      runner,
+      emit: (e) => {
+        if (e.type !== 'text-delta') done()
+      },
+      planNote: () => {
+        if (fail) throw new Error('db')
+        return '## This project\nLayer-first packages.'
+      },
+      loadConfig: () => ({ ok: true, config: { toolkitPath: TOOLKIT } })
+    })
+    service.send('p1', 'plan it', 'plan')
+    await ended
+    expect(runner.mock.calls[0]?.[0].appendPrompt).toContain('## This project\nLayer-first packages.')
+    ended = new Promise<void>((r) => (done = r))
+    service.send('p2', 'hi', 'chat')
+    await ended
+    expect(runner.mock.calls[1]?.[0].appendPrompt).toBeUndefined()
+    fail = true
+    ended = new Promise<void>((r) => (done = r))
+    service.send('p2', 'plan', 'plan')
+    await ended
+    expect(runner.mock.calls[2]?.[0].appendPrompt).not.toContain('## This project')
+  })
+})

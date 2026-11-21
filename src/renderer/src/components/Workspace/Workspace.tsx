@@ -154,7 +154,7 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
         ) : tab === 'usage' ? (
           <UsageTab usage={usage} projectNames={projectNames} refreshSignal={refresh.signal} />
         ) : tab === 'toolkit' ? (
-          <ToolkitPanel />
+          <ToolkitPanel projectId={projectId} />
         ) : (
           <SettingsPanel projectId={projectId} />
         )}

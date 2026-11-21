@@ -128,11 +128,24 @@ export interface OrchestratorDeps {
   pathExists?: (p: string) => Promise<boolean>
   /** Live, short progress lines for the Activity tab. Never throws into a run. */
   onLog?: (projectId: string, line: PipelineLogInput) => void
+  /**
+   * The toolkit agent for a project (its instructions, house rules, project instructions and model). Absent or
+   * failing: the session runs with the app's rules only, as before.
+   */
+  resolveAgent?: (projectId: string, name: string) => Promise<ResolvedAgentInfo>
   /** Detailed Activity: a recorder for each worker, fix round and reviewer session. */
   traceSession?: (meta: TraceSessionMeta) => TraceSink
   newRunId?: () => string
   now?: () => number
   log?: (message: string) => void
+}
+
+/** The part of a resolved agent the orchestrator passes on. */
+export interface ResolvedAgentInfo {
+  text: string
+  model: 'haiku' | 'sonnet' | 'opus' | null
+  fingerprint: string
+  customized: boolean
 }
 
 const defaultUncommitted = (cwd: string): Promise<string[]> =>
@@ -276,6 +289,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return {}
       }
     }
+    /** The resolved agent for a session; undefined (app rules only) when there is no resolver or it fails. */
+    const agentFor = async (taskId: string, name: string, announce: boolean): Promise<{ agent?: { text: string; model: ResolvedAgentInfo['model'] } }> => {
+      if (!deps.resolveAgent) return {}
+      try {
+        const r = await deps.resolveAgent(ctx.projectId, name)
+        if (announce) {
+          const how = r.text === '' ? 'no toolkit instructions found' : `instructions ${r.fingerprint}${r.customized ? ', project rules' : ''}`
+          say(taskId, 'pipeline', `${name}: ${r.model ?? 'project model'} · ${how}`)
+        }
+        return { agent: { text: r.text, model: r.model } }
+      } catch (e) {
+        log(`pipeline: could not resolve agent ${name}: ${short(e)}`)
+        return {}
+      }
+    }
     /** A usage sink for one session; the start time is taken when the session is about to start. */
     const usageSink = (kind: PipelineUsageInput['kind'], agent: string): ((usage: RunUsage) => void) => {
       const startedAt = now()
@@ -384,6 +412,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const startSha = await resolveRef(wt.path, wt.branch)
         const signal = handle.controller.signal
 
+        const workerAgent = await agentFor(task.id, task.worker, true)
         let outcome = await deps.runner({
           task,
           worktree: wt.path,
@@ -394,7 +423,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(ctx.planCopy ? { planFile: ctx.planCopy.file } : {}),
           onLog: (l) => say(task.id, 'worker', l.text, l.tone, task.worker),
           onUsage: usageSink('worker', task.worker),
-          ...traceFor(task.id, 'worker', 'worker', task.worker, wt.path)
+          ...traceFor(task.id, 'worker', 'worker', task.worker, wt.path),
+          ...workerAgent
         })
         if (abortReason !== null) return
         absorb(outcome)
@@ -456,6 +486,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               for (const reviewer of reviewers) {
                 let rv: ReviewOutcome
                 try {
+                  const reviewerAgent = await agentFor(task.id, reviewer, true)
                   rv = await runReview({
                     reviewer,
                     task,
@@ -466,7 +497,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     signal,
                     onLog: (l) => say(task.id, 'reviewer', l.text, l.tone, reviewer),
                     onUsage: usageSink('reviewer', reviewer),
-                    ...traceFor(task.id, 'reviewer', `reviewer ${reviewer}`, reviewer, wt.path)
+                    ...traceFor(task.id, 'reviewer', `reviewer ${reviewer}`, reviewer, wt.path),
+                    ...reviewerAgent
                   })
                 } catch (e) {
                   if (abortReason !== null) return
@@ -531,7 +563,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               fix: { kind: fix.kind, text: fix.text, sessionId: outcome.sessionId ?? null },
               onLog: (l) => say(task.id, 'fix', l.text, l.tone, task.worker),
               onUsage: usageSink('worker', task.worker),
-              ...traceFor(task.id, 'fix', `fix round ${rounds}`, task.worker, wt.path)
+              ...traceFor(task.id, 'fix', `fix round ${rounds}`, task.worker, wt.path),
+              ...workerAgent
             })
             if (abortReason !== null) return
             absorb(outcome)
