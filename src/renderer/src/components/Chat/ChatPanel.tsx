@@ -83,14 +83,6 @@ export function ChatPanel({
     if (pinned) scrollToBottom()
   }, [messages, busy, pinned, scrollToBottom])
 
-  // Grow the textarea with its content; CSS max-height makes it scroll beyond that.
-  useLayoutEffect(() => {
-    const el = inputRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight}px`
-  }, [draft])
-
   const onScroll = () => {
     const el = listRef.current
     if (el) setPin(isNearBottom(el))
@@ -223,7 +215,9 @@ export function ChatPanel({
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
       >
-        <label htmlFor="chat-input">Message</label>
+        <label htmlFor="chat-input" className="chat__sr">
+          Message
+        </label>
         {files.length > 0 && (
           <ul className="chat__attachments" aria-label="Attachments">
             {files.map((f) => (
@@ -251,57 +245,86 @@ export function ChatPanel({
             ))}
           </ul>
         )}
-        {(dictation.state === 'transcribing' || dictation.error) && (
-          <p role="status" className={dictation.error ? 'chat__attach-error' : 'chat__dictation-status'}>
-            {dictation.error ??
-              (dictation.downloadPercent !== null
-                ? `Downloading the speech model (first time only, about 80 MB)… ${dictation.downloadPercent}%`
-                : 'Transcribing…')}
-          </p>
-        )}
-        {attachError && (
-          <p role="status" className="chat__attach-error">
-            {attachError}
-          </p>
-        )}
-        <button
-          type="button"
-          className="chat__attach"
-          aria-label="Attach files"
-          title="Attach images or files (you can also paste or drop them here)"
-          disabled={disabled || reading}
-          onClick={() => fileInputRef.current?.click()}
-        >
-          📎
-        </button>
-        {dictation.supported && (
-          <>
+        <div className="chat__composer">
+          <div className="chat__tools">
             <button
               type="button"
-              className={`chat__mic${recording ? ' chat__mic--on' : ''}`}
-              aria-label={recording ? 'Stop recording' : 'Dictate'}
-              aria-pressed={recording}
-              title={recording ? 'Stop and transcribe' : 'Dictate with the microphone (transcribed on this PC)'}
-              disabled={disabled || dictation.state === 'starting' || dictation.state === 'transcribing'}
-              onClick={dictation.toggle}
+              className="chat__tool"
+              aria-label="Attach files"
+              title="Attach images or files (you can also paste or drop them here)"
+              disabled={disabled || reading}
+              onClick={() => fileInputRef.current?.click()}
             >
-              {recording ? `■ ${Math.floor(dictation.seconds / 60)}:${String(dictation.seconds % 60).padStart(2, '0')}` : '🎤'}
+              <PaperclipIcon />
             </button>
-            <select
-              className="chat__mic-lang"
-              aria-label="Dictation language"
-              value={dictation.language}
-              disabled={recording || dictation.state === 'transcribing'}
-              onChange={(ev) => dictation.setLanguage(ev.target.value as SpeechLanguage)}
-            >
-              {SPEECH_LANGUAGES.map((l) => (
-                <option key={l} value={l} title={SPEECH_LANGUAGE_NAMES[l]}>
-                  {l.toUpperCase()}
-                </option>
-              ))}
-            </select>
-          </>
-        )}
+            {dictation.supported && (
+              <button
+                type="button"
+                className={`chat__tool${recording ? ' chat__tool--recording' : ''}`}
+                aria-label={recording ? 'Stop recording' : 'Dictate'}
+                aria-pressed={recording}
+                title={recording ? 'Stop and transcribe' : 'Dictate with the microphone (transcribed on this PC)'}
+                disabled={disabled || dictation.state === 'starting' || dictation.state === 'transcribing'}
+                onClick={dictation.toggle}
+              >
+                {recording ? <StopIcon /> : <MicIcon />}
+              </button>
+            )}
+          </div>
+          <textarea
+            id="chat-input"
+            ref={inputRef}
+            className="chat__input"
+            rows={2}
+            value={draft}
+            maxLength={CHAT_TEXT_MAX}
+            disabled={disabled}
+            placeholder={placeholder ?? (hasProject ? 'Ask Claude about this project' : 'Add or select a project to chat')}
+            onChange={(ev) => setDraft(ev.target.value)}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+          />
+          <button type="submit" className="chat__send" disabled={!canSend}>
+            Send
+          </button>
+        </div>
+        <div className="chat__footer">
+          {recording ? (
+            <p role="status" className="chat__status chat__status--recording">
+              <span className="chat__rec-dot" aria-hidden="true" />
+              Recording {Math.floor(dictation.seconds / 60)}:{String(dictation.seconds % 60).padStart(2, '0')} · click stop to transcribe
+            </p>
+          ) : dictation.error || attachError ? (
+            <p role="status" className="chat__status chat__status--error">
+              {dictation.error ?? attachError}
+            </p>
+          ) : dictation.state === 'transcribing' ? (
+            <p role="status" className="chat__status">
+              {dictation.downloadPercent !== null
+                ? `Downloading the speech model (first time only, about 80 MB)… ${dictation.downloadPercent}%`
+                : 'Transcribing…'}
+            </p>
+          ) : (
+            <p className="chat__status chat__status--hint">Enter to send · Shift+Enter for a new line · paste or drop files</p>
+          )}
+          {dictation.supported && (
+            <label className="chat__lang" title="Language you speak when dictating">
+              <MicIcon size={12} />
+              <select
+                aria-label="Dictation language"
+                value={dictation.language}
+                disabled={recording || dictation.state === 'transcribing'}
+                onChange={(ev) => dictation.setLanguage(ev.target.value as SpeechLanguage)}
+              >
+                {SPEECH_LANGUAGES.map((l) => (
+                  <option key={l} value={l}>
+                    {SPEECH_LANGUAGE_NAMES[l]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
         <input
           ref={fileInputRef}
           type="file"
@@ -314,21 +337,6 @@ export function ChatPanel({
             void addFiles(picked)
           }}
         />
-        <textarea
-          id="chat-input"
-          ref={inputRef}
-          rows={1}
-          value={draft}
-          maxLength={CHAT_TEXT_MAX}
-          disabled={disabled}
-          placeholder={placeholder ?? (hasProject ? 'Ask Claude about this project' : 'Add or select a project to chat')}
-          onChange={(ev) => setDraft(ev.target.value)}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-        />
-        <button type="submit" disabled={!canSend}>
-          Send
-        </button>
       </form>
     </div>
   )
@@ -348,3 +356,48 @@ function SentAttachments({ refs }: { refs: AttachmentRef[] }) {
   )
 }
 
+/** Line icons drawn with the text colour, so they match the theme (emoji render small and faint here). */
+function Icon({ size = 18, children }: { size?: number; children: ReactNode }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {children}
+    </svg>
+  )
+}
+
+function PaperclipIcon() {
+  return (
+    <Icon>
+      <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </Icon>
+  )
+}
+
+function MicIcon({ size }: { size?: number }) {
+  return (
+    <Icon {...(size !== undefined ? { size } : {})}>
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+      <path d="M12 18v4" />
+    </Icon>
+  )
+}
+
+function StopIcon() {
+  return (
+    <Icon>
+      <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
+    </Icon>
+  )
+}

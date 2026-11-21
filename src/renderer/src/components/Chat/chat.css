@@ -135,25 +135,157 @@
 .chat__form {
   display: flex;
   flex: none;
-  flex-wrap: wrap;
-  align-items: flex-end;
+  flex-direction: column;
   gap: var(--space-2);
-  padding-top: var(--space-2);
+  padding-top: var(--space-3);
   border-top: 1px solid var(--color-border);
 }
 
-.chat__form label {
-  flex: 1 0 100%;
-  font-size: var(--font-size-xs);
+/* The message box: tools stacked on the left, the text field, Send on the right. */
+.chat__composer {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.chat__composer:focus-within {
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 18%, transparent);
+}
+.chat__tools {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+.chat__tool {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-color: transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  line-height: 0;
+}
+.chat__tool:hover:not(:disabled) {
+  border-color: var(--color-border);
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+.chat__tool--recording,
+.chat__tool--recording:hover:not(:disabled) {
+  border-color: var(--color-danger);
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+}
+.chat__input {
+  flex: 1;
+  min-width: 0;
+  /* Grows with the text (Chromium), from two lines up to about eight, then scrolls. */
+  field-sizing: content;
+  min-height: calc(2lh + var(--space-2));
+  max-height: 12rem;
+  padding: var(--space-1) var(--space-1);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  line-height: var(--line-height);
+  resize: none;
+  overflow-y: auto;
+}
+.chat__input:focus-visible {
+  outline: none;
+}
+.chat__send {
+  flex: none;
+  align-self: flex-end;
+  padding: var(--space-2) var(--space-4);
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+  font-weight: 600;
+}
+.chat__send:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  filter: brightness(1.08);
+}
+.chat__send:disabled {
+  border-color: var(--color-border);
+  background: var(--color-surface);
   color: var(--color-text-muted);
 }
 
-.chat__form textarea {
+/* Under the box: hints and status on the left, the dictation language on the right. */
+.chat__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 1.5rem;
+  font-size: var(--font-size-xs);
+}
+.chat__status {
   flex: 1;
   min-width: 0;
-  max-height: 10rem;
-  resize: none;
-  overflow-y: auto;
+  margin: 0;
+  color: var(--color-text-muted);
+}
+.chat__status--hint {
+  opacity: 0.8;
+}
+.chat__status--error {
+  color: var(--color-danger-text);
+}
+.chat__status--recording {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-danger-text);
+  font-variant-numeric: tabular-nums;
+}
+.chat__rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-danger);
+  animation: chat-rec 1.2s ease-in-out infinite;
+}
+@keyframes chat-rec {
+  50% {
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat__rec-dot {
+    animation: none;
+  }
+}
+.chat__lang {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-muted);
+}
+.chat__lang select {
+  padding: 2px var(--space-1);
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+.chat__lang select:hover:not(:disabled) {
+  border-color: var(--color-border);
 }
 
 /* Attachments waiting in the message box. */
@@ -163,7 +295,6 @@
   border-radius: var(--radius-md);
 }
 .chat__attachments {
-  flex: 1 0 100%;
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
@@ -211,28 +342,6 @@
 }
 .chat__attachment-remove:hover {
   color: var(--color-text);
-}
-.chat__attach-error {
-  flex: 1 0 100%;
-  margin: 0;
-  color: var(--color-danger-text);
-  font-size: var(--font-size-xs);
-}
-.chat__mic--on {
-  border-color: var(--color-danger);
-  color: var(--color-danger-text);
-  font-variant-numeric: tabular-nums;
-}
-.chat__mic-lang {
-  align-self: flex-end;
-  padding: var(--space-1);
-  font-size: var(--font-size-xs);
-}
-.chat__dictation-status {
-  flex: 1 0 100%;
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-xs);
 }
 .chat__sent-attachments {
   display: flex;

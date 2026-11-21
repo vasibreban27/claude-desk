@@ -110,7 +110,8 @@ describe('ChatPanel dictation', () => {
     await act(async () => {
       vi.advanceTimersByTime(65_000)
     })
-    expect(stop).toHaveTextContent('1:05')
+    expect(stop).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText(/Recording 1:05/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
   })
 
