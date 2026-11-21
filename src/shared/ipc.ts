@@ -6,6 +6,7 @@ import type { ToolkitListResult } from './toolkit'
 import type { PipelineLogEntry, PipelineLogRequest, PipelineLogResult } from './pipelineLog'
 import type { McpDeleteResult, McpIdRequest, McpListResult, McpSaveRequest, McpSaveResult, McpTestResult } from './mcp'
 import type { PlanUsageRequest, PlanUsageResult } from './usage'
+import type { TraceEventsRequest, TraceEventsResult, TracePush, TraceRunsRequest, TraceRunsResult } from './trace'
 
 export * from './settings'
 export * from './review'
@@ -13,6 +14,7 @@ export * from './toolkit'
 export * from './pipelineLog'
 export * from './mcp'
 export * from './usage'
+export * from './trace'
 
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
 
@@ -29,6 +31,9 @@ export const IPC = {
   chatEvent: 'chat:event',
   activityEvent: 'activity:event',
   activityHistory: 'activity:history',
+  activityRuns: 'activity:runs',
+  activityEvents: 'activity:events',
+  activityTrace: 'activity:trace',
   usageSummary: 'usage:summary',
   usagePlan: 'usage:plan',
   settingsGet: 'settings:get',
@@ -499,4 +504,10 @@ export interface DeskApi {
   onPipelineLog(listener: (entry: PipelineLogEntry) => void): () => void
   /** Subscribe to activity events; returns an unsubscribe function. */
   onActivityEvent(listener: (event: ActivityEvent) => void): () => void
+  /** Detailed Activity: the project's recent runs, newest first. */
+  activityRuns(req: TraceRunsRequest): Promise<TraceRunsResult>
+  /** Detailed Activity: every kept event of one run, oldest first. */
+  activityEvents(req: TraceEventsRequest): Promise<TraceEventsResult>
+  /** Subscribe to live Detailed Activity events and run changes; returns an unsubscribe function. */
+  onActivityTrace(listener: (push: TracePush) => void): () => void
 }

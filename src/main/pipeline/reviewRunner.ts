@@ -1,8 +1,9 @@
 import { query, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk'
 import { logToolUse, type LogSink } from './pipelineLog'
+import { reportDenied, type TraceSink } from '../trace/recorder'
 import { FINDINGS_MAX_COUNT, type Finding, type ReviewerName } from '../../shared/review'
 import { effectiveLimits, type ProjectSettings } from '../../shared/settings'
-import { guardPreToolUse, type GuardOutput } from '../chat/tools'
+import { guardPreToolUse, isDenied, type GuardOutput } from '../chat/tools'
 import type { PlanTask } from './planParser'
 import { reportUsage, type QueryFn, type QueryLike } from './workerRunner'
 import type { RunUsage } from '../chat/activity'
@@ -43,6 +44,8 @@ export interface ReviewRunArgs {
   onLog?: LogSink
   /** Token usage of the session's result message (for the Usage tab). */
   onUsage?: (usage: RunUsage) => void
+  /** Detailed Activity: every SDK message and the guard's denials. */
+  trace?: TraceSink
 }
 
 export type ReviewRunner = (args: ReviewRunArgs) => Promise<ReviewOutcome>
@@ -137,6 +140,7 @@ export function buildReviewerOptions(
   const guard: HookCallback = async (input) => {
     const out = guardReviewerToolUse(input, args.worktree, args.settings.protectedPaths)
     logToolUse(args.onLog, input, out, args.worktree)
+    if (isDenied(out)) reportDenied(args.trace ? (id, why) => args.trace?.denied(id, why) : undefined, input, out)
     return out
   }
   const options: Options = {
@@ -206,6 +210,7 @@ export function createReviewRunner(deps: ReviewRunnerDeps = {}): ReviewRunner {
       timer = setTimeout(() => stop('limit'), timeCap)
       try {
         for await (const message of q) {
+          args.trace?.message(message)
           if (!isRecord(message)) continue
           if (message['type'] === 'assistant') assistantTurns += 1
           if (message['type'] === 'result') {

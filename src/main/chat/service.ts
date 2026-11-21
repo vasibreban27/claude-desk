@@ -17,6 +17,7 @@ import {
 import type { ActivityDraft, AgentUsage, RunUsage } from './activity'
 import type { ChatRunner } from './runner'
 import type { ChatMcp } from '../mcp/servers'
+import type { TraceHub } from '../trace/hub'
 import type { ChatMode, PipelineStartResult } from '../../shared/ipc'
 import { BUILD_IN_APP_NOTE } from './deskTools'
 import { PLAN_COMMAND, findPlansWrittenSince, framePlanFormat, loadPlanFormat, type PlanFound } from './plans'
@@ -59,6 +60,8 @@ export interface ChatServiceDeps {
   startPipeline?: (projectId: string, planFile: string) => Promise<PipelineStartResult>
   /** The user's MCP connections for Chat and Plan turns; read once per turn. A failure means none. */
   loadMcp?: () => Promise<ChatMcp>
+  /** Detailed Activity (kept for a short time, previews only). */
+  trace?: Pick<TraceHub, 'startRun' | 'endRun' | 'session'>
 }
 
 const GENERIC_ERROR = 'The Claude session failed. Check that Claude Code is logged in and try again.'
@@ -119,6 +122,7 @@ export class ChatService {
       const resume = this.resumeId(projectId, settings)
       const format = planning ? await (this.deps.loadPlanFormat ?? loadPlanFormat)(cfg.config.toolkitPath).catch(() => null) : null
       const mcp = this.deps.loadMcp ? await this.deps.loadMcp().catch(() => null) : null
+      const trace = this.traceFor(run, projectPath, text)
       const stream = this.deps.runner({
         // A new planning session starts the toolkit's plan skill; later turns continue that conversation.
         prompt: planning && resume === undefined ? `${PLAN_COMMAND} ${text}` : text,
@@ -127,6 +131,7 @@ export class ChatService {
         resume,
         settings,
         ...(mcp !== null && mcp.allowedTools.length > 0 ? { mcp } : {}),
+        ...(trace ? { trace } : {}),
         ...(planning
           ? { appendPrompt: [format ? framePlanFormat(format) : '', BUILD_IN_APP_NOTE].filter(Boolean).join('\n\n') }
           : {}),
@@ -252,6 +257,27 @@ export class ChatService {
     }
   }
 
+  /** Starts the run in Detailed Activity and returns its recorder; undefined when tracing is off or fails. */
+  private traceFor(run: RunState, projectPath: string, text: string) {
+    const hub = this.deps.trace
+    if (!hub) return undefined
+    try {
+      hub.startRun({ runId: run.runId, projectId: run.projectId, source: run.kind, title: text })
+      return hub.session({
+        projectId: run.projectId,
+        runId: run.runId,
+        taskId: null,
+        role: run.kind,
+        session: run.kind === 'plan' ? 'planner' : 'chat',
+        agent: 'main',
+        cwd: projectPath
+      })
+    } catch {
+      console.error('activity: could not start the run')
+      return undefined
+    }
+  }
+
   /** Emits exactly one run-finished and stores the run's usage; a store failure never breaks the chat turn. */
   private finishRun(run: RunState, status: 'success' | 'error'): void {
     if (run.finished) return
@@ -264,6 +290,11 @@ export class ChatService {
       costUsd: run.usage?.usage.costUsd ?? null,
       durationMs: run.usage?.usage.durationMs ?? null
     })
+    try {
+      this.deps.trace?.endRun(run.runId, status === 'success' ? 'ok' : 'error')
+    } catch {
+      console.error('activity: could not end the run')
+    }
     if (run.usage && this.deps.runStore) {
       try {
         this.deps.runStore.recordRun({

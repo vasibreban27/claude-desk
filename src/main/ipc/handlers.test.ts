@@ -552,3 +552,34 @@ describe('pipeline handlers', () => {
     expect(await h.pipelineStatus({ projectId: ID })).toEqual({ ok: false, error: 'storage-unavailable' })
   })
 })
+
+describe('activity:runs and activity:events', () => {
+  it('validates payloads and reads from the trace hub', async () => {
+    const trace = { runs: vi.fn(() => []), events: vi.fn(() => []) }
+    const { h } = setup({ trace })
+    expect(await h.activityRuns({ projectId: 'nope' })).toEqual([])
+    expect(await h.activityRuns({ projectId: ID, extra: 1 })).toEqual([])
+    expect(await h.activityEvents({ projectId: ID })).toEqual([])
+    expect(trace.runs).not.toHaveBeenCalled()
+    expect(trace.events).not.toHaveBeenCalled()
+    await h.activityRuns({ projectId: ID })
+    await h.activityEvents({ projectId: ID, runId: 'r1' })
+    expect(trace.runs).toHaveBeenCalledWith(ID)
+    expect(trace.events).toHaveBeenCalledWith(ID, 'r1')
+  })
+
+  it('returns [] without a hub or when it throws', async () => {
+    expect(await setup().h.activityRuns({ projectId: ID })).toEqual([])
+    const trace = {
+      runs: vi.fn(() => {
+        throw new Error('db')
+      }),
+      events: vi.fn(() => {
+        throw new Error('db')
+      })
+    }
+    const { h } = setup({ trace })
+    expect(await h.activityRuns({ projectId: ID })).toEqual([])
+    expect(await h.activityEvents({ projectId: ID, runId: 'r' })).toEqual([])
+  })
+})

@@ -1,5 +1,9 @@
 import {
   activityHistoryRequestSchema,
+  traceRunsRequestSchema,
+  traceEventsRequestSchema,
+  type TraceRunsResult,
+  type TraceEventsResult,
   usageSummaryRequestSchema,
   planUsageRequestSchema,
   type PlanUsageResult,
@@ -108,6 +112,8 @@ export interface HandlerDeps {
   }
   /** Reads the plan limits (Claude Code `/usage`). Absent: usage:plan reports failed. */
   planUsage?: PlanUsageReader
+  /** Detailed Activity reader. Absent: no runs. */
+  trace?: { runs(projectId: string): TraceRunsResult; events(projectId: string, runId: string): TraceEventsResult }
 }
 
 export interface Handlers {
@@ -116,6 +122,8 @@ export interface Handlers {
   refresh(payload: unknown): Promise<ProjectsRefreshResult>
   chatHistory(payload: unknown): Promise<ChatHistoryResult>
   activityHistory(payload: unknown): Promise<ActivityHistoryResult>
+  activityRuns(payload: unknown): Promise<TraceRunsResult>
+  activityEvents(payload: unknown): Promise<TraceEventsResult>
   usageSummary(payload: unknown): Promise<UsageSummaryResult>
   usagePlan(payload: unknown): Promise<PlanUsageResult>
   settingsGet(payload: unknown): Promise<SettingsGetResult>
@@ -219,6 +227,28 @@ export function createHandlers(deps: HandlerDeps): Handlers {
         return deps.chat.activityHistory(req.data.projectId)
       } catch (err) {
         console.error('activity:history failed:', err instanceof Error ? err.name : 'unknown')
+        return []
+      }
+    },
+
+    async activityRuns(payload) {
+      const req = traceRunsRequestSchema.safeParse(payload)
+      if (!req.success || !deps.trace) return []
+      try {
+        return deps.trace.runs(req.data.projectId)
+      } catch (err) {
+        console.error('activity:runs failed:', err instanceof Error ? err.name : 'unknown')
+        return []
+      }
+    },
+
+    async activityEvents(payload) {
+      const req = traceEventsRequestSchema.safeParse(payload)
+      if (!req.success || !deps.trace) return []
+      try {
+        return deps.trace.events(req.data.projectId, req.data.runId)
+      } catch (err) {
+        console.error('activity:events failed:', err instanceof Error ? err.name : 'unknown')
         return []
       }
     },

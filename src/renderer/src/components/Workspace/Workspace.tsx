@@ -1,5 +1,6 @@
 import { useRef, useState, type KeyboardEvent } from 'react'
-import { ActivityFeed, PipelineLogFeed } from '../Activity'
+import { TraceView } from '../Activity'
+import { useTrace } from '../../hooks/useTrace'
 import { usePipelineLog } from '../../hooks/usePipelineLog'
 import { UsagePanel } from '../Usage'
 import { usePlanUsage } from '../../hooks/usePlanUsage'
@@ -90,10 +91,9 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
   const usage = useUsage(projectId, refresh.signal)
   // Subscribe only while the tab is open so existing Workspace tests need no pipeline bridge.
   const pipeline = usePipeline(tab === 'pipeline' ? projectId : null)
-  const pipelineLog = usePipelineLog(tab === 'activity' || tab === 'pipeline' ? projectId : null)
-  /** Activity shows chat runs or the pipeline log; Pipeline is the default once a run has logged something. */
-  const [activityView, setActivityView] = useState<'chat' | 'pipeline' | null>(null)
-  const view = activityView ?? (pipelineLog.entries.length > 0 ? 'pipeline' : 'chat')
+  const pipelineLog = usePipelineLog(tab === 'pipeline' ? projectId : null)
+  /** Detailed Activity: subscribed only while its tab is open. */
+  const trace = useTrace(tab === 'activity' ? projectId : null)
 
   function select(next: WorkspaceTab, focus = false) {
     setTab(next)
@@ -148,20 +148,7 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
         className="workspace__panel"
       >
         {tab === 'activity' ? (
-          <>
-            <div className="activity__views" role="radiogroup" aria-label="Activity source">
-              {(['chat', 'pipeline'] as const).map((v) => (
-                <button key={v} type="button" role="radio" aria-checked={view === v} onClick={() => setActivityView(v)}>
-                  {v === 'chat' ? 'Chat' : 'Pipeline'}
-                </button>
-              ))}
-            </div>
-            {view === 'pipeline' ? (
-              <PipelineLogFeed entries={pipelineLog.entries} />
-            ) : (
-              <ActivityFeed events={activity.events} loading={activity.loading} error={activity.error} hasProject />
-            )}
-          </>
+          <TraceView {...trace} />
         ) : tab === 'pipeline' ? (
           <PipelinePanel {...pipeline} latestByTask={pipelineLog.latestByTask} />
         ) : tab === 'usage' ? (

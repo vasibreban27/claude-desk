@@ -1301,3 +1301,27 @@ describe('orchestrator plan copy', () => {
     expect((await r.finished).status).toBe('done')
   })
 })
+
+describe('orchestrator detailed activity', () => {
+  it('gives each worker session its own recorder, and a broken factory never stops the run', async () => {
+    const c = setup({})
+    const metas: unknown[] = []
+    const sink = { message: vi.fn(), denied: vi.fn() }
+    const orch = createOrchestrator({
+      ...c.deps,
+      traceSession: (meta) => {
+        metas.push(meta)
+        if (meta.taskId === 'T2') throw new Error('broken')
+        return sink
+      }
+    })
+    const r = await orch.startRun(input)
+    if (!r.ok) throw new Error(r.error)
+    expect((await r.finished).status).toBe('done')
+    expect(metas[0]).toEqual({ projectId: input.projectId, runId: r.runId, taskId: 'T1', role: 'worker', session: 'worker', agent: expect.any(String), cwd: '/wt/T1' })
+    const t1 = c.runner.mock.calls.find((call) => call[0].task.id === 'T1')
+    const t2 = c.runner.mock.calls.find((call) => call[0].task.id === 'T2')
+    expect(t1?.[0].trace).toBe(sink)
+    expect(t2?.[0]).not.toHaveProperty('trace')
+  })
+})
