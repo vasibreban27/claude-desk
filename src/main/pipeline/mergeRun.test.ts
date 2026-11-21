@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mergeRunIntoBase } from './mergeRun'
+import { mergeRunIntoBase, saveRunToBranch } from './mergeRun'
 
 let repo: string
 const g = (...args: string[]): string =>
@@ -55,5 +55,50 @@ describe('mergeRunIntoBase (real git)', () => {
     const before = g('rev-parse', 'main')
     expect(await mergeRunIntoBase(args())).toMatchObject({ ok: false, error: 'not-fast-forward' })
     expect(g('rev-parse', 'main')).toBe(before)
+  })
+})
+
+describe('saveRunToBranch (real git)', () => {
+  const save = (branch: string) => saveRunToBranch({ projectPath: repo, runBranch: 'run/abcd1234', branch })
+
+  it('creates a new branch at the run, leaving the checkout and the plan file alone', async () => {
+    const main = g('rev-parse', 'main')
+    const r = await save('feature/todo')
+    expect(r).toMatchObject({ ok: true, branch: 'feature/todo', created: true })
+    expect(g('rev-parse', 'feature/todo')).toBe(g('rev-parse', 'run/abcd1234'))
+    expect(g('rev-parse', 'main')).toBe(main)
+    expect(g('symbolic-ref', '--short', 'HEAD')).toBe('main')
+    expect(g('status', '--porcelain')).toBe('?? docs/')
+    // The untracked plan does not block switching to the new branch.
+    g('switch', '-q', 'feature/todo')
+  })
+
+  it('fast-forwards an existing branch that is behind the run', async () => {
+    g('branch', 'feature/api', 'main')
+    expect(await save('feature/api')).toMatchObject({ ok: true, created: false })
+    expect(g('rev-parse', 'feature/api')).toBe(g('rev-parse', 'run/abcd1234'))
+  })
+
+  it('fast-forwards a checked-out branch when it is clean, and refuses when it is dirty', async () => {
+    g('switch', '-q', '-c', 'feature/here', 'main')
+    writeFileSync(path.join(repo, 'x.txt'), 'x')
+    g('add', 'x.txt')
+    expect(await save('feature/here')).toMatchObject({ ok: false, error: 'dirty' })
+    g('reset', '-q', '--hard')
+    expect(await save('feature/here')).toMatchObject({ ok: true, created: false })
+    expect(g('rev-parse', 'HEAD')).toBe(g('rev-parse', 'run/abcd1234'))
+  })
+
+  it('refuses a branch with commits the run lacks and leaves it untouched', async () => {
+    g('switch', '-q', '-c', 'feature/other', 'main')
+    g('commit', '-q', '--allow-empty', '-m', 'theirs')
+    g('switch', '-q', 'main')
+    const before = g('rev-parse', 'feature/other')
+    expect(await save('feature/other')).toMatchObject({ ok: false, error: 'not-fast-forward' })
+    expect(g('rev-parse', 'feature/other')).toBe(before)
+  })
+
+  it('refuses names git does not accept', async () => {
+    expect(await save('feature/a..b')).toMatchObject({ ok: false, error: 'invalid-branch' })
   })
 })

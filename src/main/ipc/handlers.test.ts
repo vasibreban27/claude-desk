@@ -483,7 +483,8 @@ describe('pipeline handlers', () => {
     resume: vi.fn(async () => ({ ok: true as const, runId: 'r1' })),
     discard: vi.fn(async () => ({ ok: true as const })),
     merge: vi.fn(async () => ({ ok: true as const, baseBranch: 'main', head: 'abc1234', planCommitted: true, cleanedUp: true })),
-    openPr: vi.fn(async () => ({ ok: true as const, url: 'https://github.com/o/r/pull/1', branch: 'desk/x-1', host: 'github' as const }))
+    openPr: vi.fn(async () => ({ ok: true as const, url: 'https://github.com/o/r/pull/1', branch: 'desk/x-1', host: 'github' as const })),
+    saveBranch: vi.fn(async () => ({ ok: true as const, branch: 'feature/x', head: 'abc1234', created: true, cleanedUp: true }))
   })
 
   it('passes valid payloads to the service and returns its result unchanged', async () => {
@@ -500,6 +501,8 @@ describe('pipeline handlers', () => {
     expect(pipeline.merge).toHaveBeenCalledWith(ID, 'r1')
     expect(await h.pipelinePr({ projectId: ID, runId: 'r1' })).toMatchObject({ ok: true, url: 'https://github.com/o/r/pull/1' })
     expect(pipeline.openPr).toHaveBeenCalledWith(ID, 'r1')
+    expect(await h.pipelineBranch({ projectId: ID, runId: 'r1', branch: 'feature/x' })).toMatchObject({ ok: true, branch: 'feature/x' })
+    expect(pipeline.saveBranch).toHaveBeenCalledWith(ID, 'r1', 'feature/x')
     expect(pipeline.start).toHaveBeenCalledWith(ID, 'a.md')
     expect(pipeline.cancel).toHaveBeenCalledWith(ID, 'r1')
   })
@@ -515,6 +518,10 @@ describe('pipeline handlers', () => {
       expect(await h.pipelineDiscard(bad)).toEqual({ ok: false, error: 'not-found' })
       expect(await h.pipelineMerge(bad)).toEqual({ ok: false, error: 'not-found' })
       expect(await h.pipelinePr(bad)).toEqual({ ok: false, error: 'not-found' })
+      expect(await h.pipelineBranch(bad)).toEqual({ ok: false, error: 'not-found' })
+    }
+    for (const branch of ['', '-x', 'a..b', 'a b', 'x/', 5]) {
+      expect(await h.pipelineBranch({ projectId: ID, runId: 'r1', branch })).toMatchObject({ ok: false, error: 'invalid-branch' })
     }
     for (const bad of [null, 'x', 5, [], {}, { projectId: 'nope', planFile: 'a.md' }]) {
       expect(await h.pipelineStart(bad)).toEqual({ ok: false, error: 'not-found' })
@@ -534,7 +541,7 @@ describe('pipeline handlers', () => {
       throw new RangeError('secret /home/someone')
     })
     const { h } = setup({
-      pipeline: { listPlans: boom, start: boom, status: boom, cancel: boom, resume: boom, discard: boom, merge: boom, openPr: boom }
+      pipeline: { listPlans: boom, start: boom, status: boom, cancel: boom, resume: boom, discard: boom, merge: boom, openPr: boom, saveBranch: boom }
     })
     expect(await h.pipelinePlans({ projectId: ID })).toEqual({ ok: false, error: 'unreadable' })
     expect(await h.pipelineStart({ projectId: ID, planFile: 'a.md' })).toEqual({ ok: false, error: 'start-failed' })

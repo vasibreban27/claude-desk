@@ -208,3 +208,28 @@ describe('needsSessionReset', () => {
     expect(needsSessionReset(base, { ...base, model: 'opus' }, ['allowGitRead'])).toBe(false)
   })
 })
+
+describe('base branch merges', () => {
+  it('are off by default and for new settings', () => {
+    expect(defaultSettings().allowBaseMerge).toBe(false)
+    const base = { ...defaultSettings() } as Record<string, unknown>
+    delete base['allowBaseMerge']
+    expect(parseSettingsOrDefaults(JSON.stringify({ ...base, delivery: 'save-branch' })).settings.allowBaseMerge).toBe(false)
+  })
+
+  it('stay allowed for older settings that already merged automatically', () => {
+    const base = { ...defaultSettings() } as Record<string, unknown>
+    delete base['allowBaseMerge']
+    expect(parseSettingsOrDefaults(JSON.stringify({ ...base, delivery: 'merge-local' })).settings.allowBaseMerge).toBe(true)
+    expect(parseSettingsOrDefaults(JSON.stringify({ ...base, delivery: 'merge-local', allowBaseMerge: false })).settings.allowBaseMerge).toBe(false)
+  })
+})
+
+describe('featureBranchName', () => {
+  it('names the branch after the plan', () => {
+    expect(ipc.featureBranchName('ticket-tracker-crud-api.md')).toBe('feature/ticket-tracker-crud-api')
+    expect(ipc.featureBranchName('Weird Name!!.md')).toBe('feature/weird-name')
+    expect(ipc.featureBranchName('.md')).toBe('feature/pipeline-run')
+    expect(ipc.BRANCH_NAME_PATTERN.test(ipc.featureBranchName(`${'a-'.repeat(50)}.md`))).toBe(true)
+  })
+})

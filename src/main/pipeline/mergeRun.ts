@@ -79,3 +79,76 @@ export async function mergeRunIntoBase(args: MergeRunArgs, git: GitExec = defaul
     return { ok: false, error: 'git-failed', message: text.slice(0, 300) }
   }
 }
+
+export type SaveBranchError = 'invalid-branch' | 'dirty' | 'not-fast-forward' | 'git-failed'
+export type SaveBranchResult =
+  | { ok: true; branch: string; head: string; created: boolean }
+  | { ok: false; error: SaveBranchError; message: string }
+
+export interface SaveBranchArgs {
+  projectPath: string
+  runBranch: string
+  /** Already checked against BRANCH_NAME_PATTERN, the reserved prefixes and the base branch. */
+  branch: string
+}
+
+const gitMessage = (e: unknown): string => {
+  const stderr = (e as { stderr?: unknown }).stderr
+  const text = typeof stderr === 'string' && stderr.trim() !== '' ? stderr.trim() : e instanceof Error ? e.message : 'git failed'
+  return text.slice(0, 300)
+}
+
+/**
+ * "Save as branch": the user's click keeps a finished run as `branch`. A new branch is created at the run's tip; an
+ * existing one is only fast-forwarded (refused when it has commits the run lacks). The checked-out branch of the
+ * project never changes, except that a checked-out `branch` itself is fast-forwarded when its tracked files are clean.
+ * Nothing is pushed, and the plan file is not added (it stays in the folder, so switching branches keeps working).
+ */
+export async function saveRunToBranch(args: SaveBranchArgs, git: GitExec = defaultGitExec): Promise<SaveBranchResult> {
+  const cwd = args.projectPath
+  const ref = `refs/heads/${args.branch}`
+  const run = `refs/heads/${args.runBranch}`
+  try {
+    await git(cwd, ['check-ref-format', '--branch', args.branch])
+  } catch {
+    return { ok: false, error: 'invalid-branch', message: `"${args.branch}" is not a valid branch name.` }
+  }
+  try {
+    const exists = await git(cwd, ['show-ref', '--verify', '--quiet', ref]).then(
+      () => true,
+      () => false
+    )
+    if (!exists) {
+      await git(cwd, ['branch', '--no-track', '--end-of-options', args.branch, run])
+      const head = (await git(cwd, ['rev-parse', '--short', ref])).trim()
+      return { ok: true, branch: args.branch, head, created: true }
+    }
+    try {
+      await git(cwd, ['merge-base', '--is-ancestor', '--end-of-options', ref, run])
+    } catch {
+      return {
+        ok: false,
+        error: 'not-fast-forward',
+        message: `${args.branch} has commits this run does not have. Pick a new branch name, or merge ${args.runBranch} into it by hand.`
+      }
+    }
+    const current = await git(cwd, ['symbolic-ref', '--short', '-q', 'HEAD']).then(
+      (s) => s.trim(),
+      () => ''
+    )
+    if (current === args.branch) {
+      const tracked = (await git(cwd, ['status', '--porcelain=v1', '--untracked-files=no'])).trim()
+      if (tracked !== '') {
+        return { ok: false, error: 'dirty', message: `${args.branch} is checked out with uncommitted changes; commit or stash them first.` }
+      }
+      await git(cwd, ['merge', '--ff-only', '--quiet', '--end-of-options', run])
+    } else {
+      // Refused by git when the branch is checked out in another worktree.
+      await git(cwd, ['branch', '--force', '--no-track', '--end-of-options', args.branch, run])
+    }
+    const head = (await git(cwd, ['rev-parse', '--short', ref])).trim()
+    return { ok: true, branch: args.branch, head, created: false }
+  } catch (e) {
+    return { ok: false, error: 'git-failed', message: gitMessage(e) }
+  }
+}

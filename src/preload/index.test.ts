@@ -63,6 +63,7 @@ describe('preload bridge', () => {
         'pipelineResume',
         'pipelineDiscard',
         'pipelineMerge',
+        'pipelineBranch',
         'pipelinePr',
         'openUrl',
         'mcpList',

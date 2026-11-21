@@ -275,6 +275,7 @@ export function registerIpc(
   ipcMain.handle(IPC.pipelineMerge, (event, payload: unknown) => make(event).pipelineMerge(payload))
   ipcMain.handle(IPC.pipelineLog, (event, payload: unknown) => make(event).pipelineLog(payload))
   ipcMain.handle(IPC.pipelinePr, (event, payload: unknown) => make(event).pipelinePr(payload))
+  ipcMain.handle(IPC.pipelineBranch, (event, payload: unknown) => make(event).pipelineBranch(payload))
   ipcMain.handle(IPC.openUrl, (event, payload: unknown) => make(event).openUrl(payload))
   ipcMain.handle(IPC.mcpList, (event) => make(event).mcpList())
   ipcMain.handle(IPC.mcpSave, (event, payload: unknown) => make(event).mcpSave(payload))
@@ -298,7 +299,7 @@ export function registerIpc(
 
   return () => {
     for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.activityRuns, IPC.activityEvents, IPC.usageSummary, IPC.usagePlan, IPC.settingsGet, IPC.settingsSet, IPC.settingsSuggestions, IPC.appInfo, IPC.appModelGet, IPC.appModelSet, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick, IPC.projectsRemove,
-      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineResume, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.openUrl, IPC.mcpList, IPC.mcpSave, IPC.mcpDelete, IPC.mcpTest]) {
+      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineResume, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.pipelineBranch, IPC.openUrl, IPC.mcpList, IPC.mcpSave, IPC.mcpDelete, IPC.mcpTest]) {
       ipcMain.removeHandler(channel)
     }
     targets.clear()

@@ -47,6 +47,7 @@ const api: DeskApi = {
   pipelineDiscard: (req) => ipcRenderer.invoke(IPC.pipelineDiscard, req),
   pipelineMerge: (req) => ipcRenderer.invoke(IPC.pipelineMerge, req),
   pipelinePr: (req) => ipcRenderer.invoke(IPC.pipelinePr, req),
+  pipelineBranch: (req) => ipcRenderer.invoke(IPC.pipelineBranch, req),
   openUrl: (req) => ipcRenderer.invoke(IPC.openUrl, req),
   mcpList: () => ipcRenderer.invoke(IPC.mcpList),
   mcpSave: (req) => ipcRenderer.invoke(IPC.mcpSave, req),

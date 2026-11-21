@@ -13,6 +13,8 @@ import {
   pipelineResumeRequestSchema,
   pipelineDiscardRequestSchema,
   pipelineMergeRequestSchema,
+  pipelineBranchRequestSchema,
+  type PipelineBranchResult,
   pipelinePrRequestSchema,
   openUrlRequestSchema,
   type PipelinePrResult,
@@ -145,6 +147,7 @@ export interface Handlers {
   pipelineDiscard(payload: unknown): Promise<PipelineDiscardResult>
   pipelineMerge(payload: unknown): Promise<PipelineMergeResult>
   pipelinePr(payload: unknown): Promise<PipelinePrResult>
+  pipelineBranch(payload: unknown): Promise<PipelineBranchResult>
   openUrl(payload: unknown): Promise<boolean>
   pipelineLog(payload: unknown): Promise<PipelineLogResult>
   mcpList(): Promise<McpListResult>
@@ -569,6 +572,21 @@ export function createHandlers(deps: HandlerDeps): Handlers {
       } catch (err) {
         console.error('pipeline:pr failed:', errName(err))
         return { ok: false, error: 'pr-failed' }
+      }
+    },
+
+    async pipelineBranch(payload) {
+      const req = pipelineBranchRequestSchema.safeParse(payload)
+      if (!req.success) {
+        const named = typeof payload === 'object' && payload !== null && 'branch' in payload
+        return named ? { ok: false, error: 'invalid-branch', message: 'That is not a valid branch name.' } : { ok: false, error: 'not-found' }
+      }
+      if (!pipeline) return { ok: false, error: 'git-failed' }
+      try {
+        return await pipeline.saveBranch(req.data.projectId, req.data.runId, req.data.branch)
+      } catch (err) {
+        console.error('pipeline:branch failed:', errName(err))
+        return { ok: false, error: 'git-failed' }
       }
     },
 
