@@ -26,6 +26,24 @@ export interface ConfigDeps {
 
 const defaultIsDirectory = (p: string): boolean => existsSync(p) && statSync(p).isDirectory()
 
+/** The toolkit folder chosen in Settings; it wins over CLAUDE_TOOLKIT_PATH. Set at startup and when the user picks one. */
+let toolkitOverride: string | null = null
+
+export function setToolkitPathOverride(folder: string | null): void {
+  toolkitOverride = folder === null || folder.trim() === '' ? null : folder
+}
+
+/** The environment the toolkit is read from: the process env, with the folder chosen in Settings on top. */
+export function toolkitEnv(): Record<string, string | undefined> {
+  return toolkitOverride === null ? process.env : { ...process.env, CLAUDE_TOOLKIT_PATH: toolkitOverride }
+}
+
+/** Where the toolkit path comes from (shown in Settings). */
+export function toolkitSource(): 'settings' | 'environment' | 'unset' {
+  if (toolkitOverride !== null) return 'settings'
+  return process.env['CLAUDE_TOOLKIT_PATH']?.trim() ? 'environment' : 'unset'
+}
+
 /** Only these keys are taken from `.env`; anything else in the file is ignored (for example an API key would change billing). */
 export const ENV_FILE_KEYS = ['CLAUDE_TOOLKIT_PATH'] as const
 
@@ -79,7 +97,7 @@ export interface ToolkitInfoDeps {
  * from the manifest is a short version string. Reads at most MAX_MANIFEST_BYTES + 1 bytes.
  */
 export function readToolkitInfo(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = toolkitEnv(),
   deps: ToolkitInfoDeps = {}
 ): AppInfo['toolkit'] {
   const raw = env['CLAUDE_TOOLKIT_PATH']?.trim()
@@ -121,7 +139,7 @@ export function readToolkitInfo(
 
 /** Reads CLAUDE_TOOLKIT_PATH. Error messages never include the env value. */
 export function loadConfig(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = toolkitEnv(),
   deps: ConfigDeps = {}
 ): ConfigResult {
   const isDirectory = deps.isDirectory ?? defaultIsDirectory
@@ -131,7 +149,7 @@ export function loadConfig(
       ok: false,
       error: new ConfigError(
         'toolkit-path-unset',
-        'CLAUDE_TOOLKIT_PATH is not set. Point it at your claude-toolkit clone.'
+        'No toolkit is set. Choose your claude-toolkit folder in Settings, under App.'
       )
     }
   }
@@ -141,7 +159,7 @@ export function loadConfig(
       ok: false,
       error: new ConfigError(
         'toolkit-path-missing',
-        'CLAUDE_TOOLKIT_PATH does not point to an existing folder.'
+        'The toolkit folder does not exist. Choose it again in Settings, under App.'
       )
     }
   }

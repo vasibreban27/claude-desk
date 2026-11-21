@@ -8,7 +8,7 @@ import { limitsFromSettings, validateLimits } from './LimitsEditor'
 
 const P1 = '11111111-1111-4111-8111-111111111111'
 
-let api: { settingsGet: ReturnType<typeof vi.fn>; settingsSet: ReturnType<typeof vi.fn>; appInfo: ReturnType<typeof vi.fn> }
+let api: { settingsGet: ReturnType<typeof vi.fn>; settingsSet: ReturnType<typeof vi.fn>; appInfo: ReturnType<typeof vi.fn>; toolkitStatus?: ReturnType<typeof vi.fn> }
 
 function load(settings: ProjectSettings) {
   api.settingsGet.mockResolvedValue({ ok: true, settings, notice: null })
@@ -22,6 +22,7 @@ beforeEach(() => {
       settings,
       sessionReset: false
     })),
+    toolkitStatus: vi.fn(async () => ({ ...(await (api.appInfo as unknown as () => Promise<{ toolkit: object }>)()).toolkit, source: 'environment', git: null })),
     appInfo: vi.fn().mockResolvedValue({ toolkit: { status: 'unset', path: null, version: null } })
   }
   window.api = api as unknown as DeskApi
@@ -119,8 +120,8 @@ describe('limits fields', () => {
     render(<SettingsPanel projectId={P1} />)
     await screen.findByLabelText(W)
     expect(screen.getByLabelText(W)).toHaveAccessibleDescription(/cost and machine load grow.*next run/)
-    expect(screen.getByText(/Use the app default, or choose a different model for Chat/)).toBeInTheDocument()
-    expect(screen.getByText(/unless a project or plan task chooses another model/)).toBeInTheDocument()
+    expect(screen.getByText(/Used by Chat, and by pipeline tasks when neither the plan task nor its agent picks a model/)).toBeInTheDocument()
+    expect(screen.getByText(/unless a project, agent or plan task chooses another model/)).toBeInTheDocument()
   })
 })
 

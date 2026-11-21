@@ -42,3 +42,31 @@ export type ToolkitSkill = z.infer<typeof toolkitSkillSchema>
 export type ToolkitHook = z.infer<typeof toolkitHookSchema>
 
 export type ToolkitListResult = { ok: true; listing: ToolkitListing } | { ok: false; error: 'unset' | 'unreadable' }
+
+/** The toolkit's git state, shown in Settings. */
+export interface ToolkitGit {
+  /** null on a detached HEAD. */
+  branch: string | null
+  commit: string
+  /** YYYY-MM-DD of the last commit. */
+  date: string
+  subject: string
+  dirty: boolean
+}
+
+export interface ToolkitStatus {
+  status: 'unset' | 'invalid' | 'valid'
+  path: string | null
+  version: string | null
+  /** Where the path comes from: chosen in Settings, CLAUDE_TOOLKIT_PATH, or nowhere. */
+  source: 'settings' | 'environment' | 'unset'
+  git: ToolkitGit | null
+}
+
+export type ToolkitPickResult =
+  | { ok: true; status: ToolkitStatus }
+  | { ok: false; error: 'cancelled' | 'not-a-toolkit' | 'unavailable'; message?: string }
+
+export type ToolkitUpdateResult =
+  | { ok: true; updated: boolean; from: string; to: string }
+  | { ok: false; error: 'not-set' | 'not-a-repo' | 'dirty' | 'failed'; message?: string }

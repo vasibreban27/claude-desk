@@ -216,7 +216,7 @@ export function ChecksEditor({ rows, errors, onChange }: Props) {
         disabled={rows.length >= CHECKS_MAX_COUNT}
         onClick={() => onChange([...rows, newRow()])}
       >
-        Add check
+        Add custom check
       </button>
     </section>
   )

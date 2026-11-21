@@ -1,6 +1,9 @@
 import { speechTranscribeRequestSchema, type SpeechTranscribeResult } from '../../shared/speech'
 import type { Transcriber } from '../speech/transcriber'
 import { createAgentHandlers, type AgentHandlerDeps, type AgentHandlers } from './agentHandlers'
+import { setToolkitPathOverride, toolkitSource } from '../config'
+import { findToolkitPlugin, readToolkitGit, updateToolkit } from '../toolkit/folder'
+import type { ToolkitGit, ToolkitPickResult, ToolkitStatus, ToolkitUpdateResult } from '../../shared/toolkit'
 import {
   activityHistoryRequestSchema,
   traceRunsRequestSchema,
@@ -95,6 +98,10 @@ export interface HandlerDeps {
   /** Created in unavailable mode when the database could not be opened. */
   settingsStore?: SettingsStore
   readToolkitInfo?: () => AppInfoResult['toolkit']
+  /** The toolkit's git state (default: git in the toolkit folder). */
+  toolkitGit?: (folder: string) => Promise<ToolkitGit | null>
+  /** Fast-forwards the toolkit (default: git pull --ff-only). */
+  toolkitUpdate?: (folder: string) => Promise<ToolkitUpdateResult>
   scanToolkit?: (folder: string) => Promise<unknown>
   appSettings?: AppSettings
   /** Moves a folder to the Recycle Bin / Trash (Electron shell.trashItem). Absent: folders are never deleted. */
@@ -142,6 +149,9 @@ export interface Handlers extends AgentHandlers {
   appModelGet(): Promise<{ model: ModelChoice }>
   appModelSet(payload: unknown): Promise<AppModelSetResult>
   toolkitList(): Promise<ToolkitListResult>
+  toolkitStatus(): Promise<ToolkitStatus>
+  toolkitPick(): Promise<ToolkitPickResult>
+  toolkitUpdate(): Promise<ToolkitUpdateResult>
   createProject(payload: unknown): Promise<ProjectsCreateResult>
   projectsRootGet(): Promise<ProjectsRootResult>
   projectsRootPick(): Promise<ProjectsRootResult>
@@ -179,6 +189,12 @@ function requestedDays(payload: unknown): number {
 export function createHandlers(deps: HandlerDeps): Handlers {
   const settingsStore = deps.settingsStore ?? createSettingsStore(null)
   const readToolkitInfo = deps.readToolkitInfo ?? (() => ({ status: 'unset' as const, path: null, version: null }))
+  /** The toolkit for Settings: folder, version, where the path comes from, and its git state. */
+  const toolkitStatusNow = async (git: HandlerDeps['toolkitGit']): Promise<ToolkitStatus> => {
+    const info = readToolkitInfo()
+    const repo = info.status === 'valid' && info.path !== null ? await (git ?? readToolkitGit)(info.path).catch(() => null) : null
+    return { ...info, source: toolkitSource(), git: repo }
+  }
   const pipeline = deps.pipeline
   const agentHandlers = createAgentHandlers({
     projects: deps.store,
@@ -426,6 +442,43 @@ export function createHandlers(deps: HandlerDeps): Handlers {
         return { root: (await deps.appSettings?.getProjectsRoot()) ?? null }
       } catch {
         return { root: null }
+      }
+    },
+
+    async toolkitStatus() {
+      return toolkitStatusNow(deps.toolkitGit)
+    },
+
+    async toolkitPick() {
+      if (!deps.appSettings) return { ok: false, error: 'unavailable' }
+      try {
+        const picked = await deps.pickFolder()
+        if (picked === undefined) return { ok: false, error: 'cancelled' }
+        const plugin = findToolkitPlugin(picked)
+        if (plugin === null) {
+          return {
+            ok: false,
+            error: 'not-a-toolkit',
+            message: 'That folder has no toolkit plugin (.claude-plugin/plugin.json, directly or under plugins/). Pick your claude-toolkit clone.'
+          }
+        }
+        await deps.appSettings.setToolkitPath(plugin)
+        setToolkitPathOverride(plugin)
+        return { ok: true, status: await toolkitStatusNow(deps.toolkitGit) }
+      } catch (err) {
+        console.error('toolkit:pick failed:', errName(err))
+        return { ok: false, error: 'unavailable' }
+      }
+    },
+
+    async toolkitUpdate() {
+      try {
+        const info = readToolkitInfo()
+        if (info.status !== 'valid' || info.path === null) return { ok: false, error: 'not-set' }
+        return await (deps.toolkitUpdate ?? updateToolkit)(info.path)
+      } catch (err) {
+        console.error('toolkit:update failed:', errName(err))
+        return { ok: false, error: 'failed' }
       }
     },
 

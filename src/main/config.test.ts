@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { loadConfig, loadEnvFile, MAX_MANIFEST_BYTES, readToolkitInfo } from './config'
+import { loadConfig, loadEnvFile, MAX_MANIFEST_BYTES, readToolkitInfo, setToolkitPathOverride, toolkitEnv, toolkitSource } from './config'
 
 describe('loadEnvFile', () => {
   const reading = (text: string) => ({ readText: () => text })
@@ -178,5 +178,33 @@ describe('readToolkitInfo', () => {
     expect(readToolkitInfo(env()).version).toBeNull()
     writeFileSync(path.join(dir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'flow', version: 'v'.repeat(65) }))
     expect(readToolkitInfo(env())).toMatchObject({ status: 'valid', version: null })
+  })
+})
+
+describe('toolkit folder chosen in Settings', () => {
+  afterEach(() => setToolkitPathOverride(null))
+
+  it('wins over CLAUDE_TOOLKIT_PATH and says where the path comes from', () => {
+    const before = process.env['CLAUDE_TOOLKIT_PATH']
+    process.env['CLAUDE_TOOLKIT_PATH'] = '/from/env'
+    try {
+      expect(toolkitSource()).toBe('environment')
+      expect(toolkitEnv()['CLAUDE_TOOLKIT_PATH']).toBe('/from/env')
+      setToolkitPathOverride('/from/settings')
+      expect(toolkitSource()).toBe('settings')
+      expect(toolkitEnv()['CLAUDE_TOOLKIT_PATH']).toBe('/from/settings')
+      setToolkitPathOverride('  ')
+      expect(toolkitSource()).toBe('environment')
+      delete process.env['CLAUDE_TOOLKIT_PATH']
+      expect(toolkitSource()).toBe('unset')
+    } finally {
+      if (before === undefined) delete process.env['CLAUDE_TOOLKIT_PATH']
+      else process.env['CLAUDE_TOOLKIT_PATH'] = before
+    }
+  })
+
+  it('points the error at Settings when nothing is set', () => {
+    const r = loadConfig({}, { isDirectory: () => true })
+    expect(!r.ok && r.error.message).toMatch(/Choose your claude-toolkit folder in Settings/)
   })
 })

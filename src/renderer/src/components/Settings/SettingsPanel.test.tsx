@@ -14,7 +14,7 @@ const INFO: AppInfo = { toolkit: { status: 'valid', path: '/tk/flow', version: '
 let api: {
   settingsGet: ReturnType<typeof vi.fn>
   settingsSet: ReturnType<typeof vi.fn>
-  appInfo: ReturnType<typeof vi.fn>
+  appInfo: ReturnType<typeof vi.fn>; toolkitStatus?: ReturnType<typeof vi.fn>
   appModelGet: ReturnType<typeof vi.fn>
   appModelSet: ReturnType<typeof vi.fn>
   projectsRootGet: ReturnType<typeof vi.fn>
@@ -29,6 +29,7 @@ beforeEach(() => {
       settings,
       sessionReset: false
     })),
+    toolkitStatus: vi.fn(async () => ({ ...(await (api.appInfo as unknown as () => Promise<{ toolkit: object }>)()).toolkit, source: 'environment', git: null })),
     appInfo: vi.fn().mockResolvedValue(INFO),
     appModelGet: vi.fn().mockResolvedValue({ model: 'auto' }),
     appModelSet: vi.fn().mockImplementation(async ({ model }) => ({ ok: true, model })),
@@ -45,12 +46,12 @@ afterEach(() => {
 })
 
 describe('SettingsPanel', () => {
-  it('saves the app default model separately from the project model', async () => {
+  it('saves the app default model as soon as it changes, separately from the project', async () => {
     render(<SettingsPanel projectId={P1} />)
     const app = await screen.findByRole('region', { name: 'App' })
     fireEvent.change(within(app).getByLabelText('Default model'), { target: { value: 'sonnet' } })
-    fireEvent.click(within(app).getByRole('button', { name: 'Save default model' }))
     await waitFor(() => expect(api.appModelSet).toHaveBeenCalledWith({ model: 'sonnet' }))
+    expect(await within(app).findByText('Saved.')).toBeInTheDocument()
     expect(api.settingsSet).not.toHaveBeenCalled()
   })
 
