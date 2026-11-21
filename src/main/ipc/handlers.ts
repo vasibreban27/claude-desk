@@ -1,3 +1,5 @@
+import { speechTranscribeRequestSchema, type SpeechTranscribeResult } from '../../shared/speech'
+import type { Transcriber } from '../speech/transcriber'
 import {
   activityHistoryRequestSchema,
   usageSummaryRequestSchema,
@@ -108,6 +110,8 @@ export interface HandlerDeps {
   }
   /** Reads the plan limits (Claude Code `/usage`). Absent: usage:plan reports failed. */
   planUsage?: PlanUsageReader
+  /** Local speech-to-text. Absent: speech:transcribe reports failed. */
+  speech?: Transcriber
 }
 
 export interface Handlers {
@@ -143,6 +147,7 @@ export interface Handlers {
   mcpSave(payload: unknown): Promise<McpSaveResult>
   mcpDelete(payload: unknown): Promise<McpDeleteResult>
   mcpTest(payload: unknown): Promise<McpTestResult>
+  speechTranscribe(payload: unknown): Promise<SpeechTranscribeResult>
   /**
    * `route` runs before the turn starts (events may be emitted synchronously) and returns
    * an undo function that is called when the send is rejected.
@@ -527,6 +532,18 @@ export function createHandlers(deps: HandlerDeps): Handlers {
         // Never echo the error text: it could contain a header or env value.
         console.error('mcp:test failed:', errName(err))
         return { ok: false, error: 'test-failed' }
+      }
+    },
+
+    async speechTranscribe(payload) {
+      const req = speechTranscribeRequestSchema.safeParse(payload)
+      if (!req.success) return { ok: false, error: 'invalid', message: req.error.issues[0]?.message ?? 'invalid recording' }
+      if (!deps.speech) return { ok: false, error: 'failed' }
+      try {
+        return await deps.speech.transcribe(req.data.samples, req.data.language)
+      } catch (err) {
+        console.error('speech:transcribe failed:', errName(err))
+        return { ok: false, error: 'failed' }
       }
     },
 

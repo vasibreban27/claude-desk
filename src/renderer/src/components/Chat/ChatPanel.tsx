@@ -9,11 +9,12 @@ import {
   type KeyboardEvent,
   type ReactNode
 } from 'react'
-import { CHAT_TEXT_MAX, type AttachmentRef } from '@shared/ipc'
+import { CHAT_TEXT_MAX, SPEECH_LANGUAGES, SPEECH_LANGUAGE_NAMES, type AttachmentRef, type SpeechLanguage } from '@shared/ipc'
 import type { UseChat } from '../../hooks/useChat'
 import { Markdown } from '../Markdown'
 import { formatSize, readAttachments, type DraftAttachment } from './attachDraft'
 import { isNearBottom } from './stickToBottom'
+import { useDictation, type DictationDeps } from './useDictation'
 import './chat.css'
 
 export interface ChatPanelProps extends UseChat {
@@ -24,9 +25,22 @@ export interface ChatPanelProps extends UseChat {
   emptyText?: string
   /** Shown just above the message box (e.g. the plan-ready card), so it stays in view. */
   aboveInput?: ReactNode
+  /** Tests only: replaces the browser microphone. */
+  dictationDeps?: DictationDeps
 }
 
-export function ChatPanel({ hasProject, messages, loading, busy, error, send, placeholder, emptyText, aboveInput }: ChatPanelProps) {
+export function ChatPanel({
+  hasProject,
+  messages,
+  loading,
+  busy,
+  error,
+  send,
+  placeholder,
+  emptyText,
+  aboveInput,
+  dictationDeps
+}: ChatPanelProps) {
   const [draft, setDraft] = useState('')
   const [files, setFiles] = useState<DraftAttachment[]>([])
   const [reading, setReading] = useState(false)
@@ -38,7 +52,13 @@ export function ChatPanel({ hasProject, messages, loading, busy, error, send, pl
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pinnedRef = useRef(true)
   const disabled = !hasProject || busy
-  const canSend = !disabled && !reading && (draft.trim().length > 0 || files.length > 0)
+  // Dictated text is added to the message box; the user still reviews it and presses Send.
+  const dictation = useDictation((text) => {
+    setDraft((d) => (d.trim() === '' ? text : `${d.trimEnd()} ${text}`))
+    inputRef.current?.focus()
+  }, dictationDeps)
+  const recording = dictation.state === 'recording'
+  const canSend = !disabled && !reading && !recording && dictation.state !== 'transcribing' && (draft.trim().length > 0 || files.length > 0)
 
   // A replaced message set (project switch) finishes loading: start pinned at the bottom again.
   const [prevLoading, setPrevLoading] = useState(loading)
@@ -231,6 +251,14 @@ export function ChatPanel({ hasProject, messages, loading, busy, error, send, pl
             ))}
           </ul>
         )}
+        {(dictation.state === 'transcribing' || dictation.error) && (
+          <p role="status" className={dictation.error ? 'chat__attach-error' : 'chat__dictation-status'}>
+            {dictation.error ??
+              (dictation.downloadPercent !== null
+                ? `Downloading the speech model (first time only, about 80 MB)… ${dictation.downloadPercent}%`
+                : 'Transcribing…')}
+          </p>
+        )}
         {attachError && (
           <p role="status" className="chat__attach-error">
             {attachError}
@@ -246,6 +274,34 @@ export function ChatPanel({ hasProject, messages, loading, busy, error, send, pl
         >
           📎
         </button>
+        {dictation.supported && (
+          <>
+            <button
+              type="button"
+              className={`chat__mic${recording ? ' chat__mic--on' : ''}`}
+              aria-label={recording ? 'Stop recording' : 'Dictate'}
+              aria-pressed={recording}
+              title={recording ? 'Stop and transcribe' : 'Dictate with the microphone (transcribed on this PC)'}
+              disabled={disabled || dictation.state === 'starting' || dictation.state === 'transcribing'}
+              onClick={dictation.toggle}
+            >
+              {recording ? `■ ${Math.floor(dictation.seconds / 60)}:${String(dictation.seconds % 60).padStart(2, '0')}` : '🎤'}
+            </button>
+            <select
+              className="chat__mic-lang"
+              aria-label="Dictation language"
+              value={dictation.language}
+              disabled={recording || dictation.state === 'transcribing'}
+              onChange={(ev) => dictation.setLanguage(ev.target.value as SpeechLanguage)}
+            >
+              {SPEECH_LANGUAGES.map((l) => (
+                <option key={l} value={l} title={SPEECH_LANGUAGE_NAMES[l]}>
+                  {l.toUpperCase()}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         <input
           ref={fileInputRef}
           type="file"
@@ -291,3 +347,4 @@ function SentAttachments({ refs }: { refs: AttachmentRef[] }) {
     </ul>
   )
 }
+

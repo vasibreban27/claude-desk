@@ -218,6 +218,22 @@
   color: var(--color-danger-text);
   font-size: var(--font-size-xs);
 }
+.chat__mic--on {
+  border-color: var(--color-danger);
+  color: var(--color-danger-text);
+  font-variant-numeric: tabular-nums;
+}
+.chat__mic-lang {
+  align-self: flex-end;
+  padding: var(--space-1);
+  font-size: var(--font-size-xs);
+}
+.chat__dictation-status {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
 .chat__sent-attachments {
   display: flex;
   flex-wrap: wrap;

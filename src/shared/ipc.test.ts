@@ -90,6 +90,8 @@ describe('IPC channels', () => {
         'mcp:save',
         'mcp:delete',
         'mcp:test',
+        'speech:transcribe',
+        'speech:progress',
         'pipeline:log',
         'pipeline:log-event',
         'pipeline:event'

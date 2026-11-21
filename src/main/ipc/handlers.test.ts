@@ -563,3 +563,34 @@ describe('chat:send attachments', () => {
     expect(deps.chat.send).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('speech:transcribe', () => {
+  it('validates the recording and language before transcribing', async () => {
+    const speech = { transcribe: vi.fn(async () => ({ ok: true as const, text: 'hi' })) }
+    const { h } = setup({ speech })
+    const samples = new Float32Array(16000)
+    expect(await h.speechTranscribe({ samples, language: 'ro' })).toEqual({ ok: true, text: 'hi' })
+    expect(speech.transcribe).toHaveBeenCalledWith(samples, 'ro')
+    for (const bad of [
+      { samples, language: 'xx' },
+      { samples: [0, 1], language: 'en' },
+      { samples: new Float32Array(100), language: 'en' },
+      { samples: new Float32Array(16000 * 121), language: 'en' },
+      { samples, language: 'en', extra: 1 },
+      null
+    ]) {
+      expect(await h.speechTranscribe(bad)).toMatchObject({ ok: false, error: 'invalid' })
+    }
+    expect(speech.transcribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports failed without a transcriber or when it throws', async () => {
+    expect(await setup().h.speechTranscribe({ samples: new Float32Array(16000), language: 'en' })).toEqual({ ok: false, error: 'failed' })
+    const speech = {
+      transcribe: vi.fn(async () => {
+        throw new Error('x')
+      })
+    }
+    expect(await setup({ speech }).h.speechTranscribe({ samples: new Float32Array(16000), language: 'en' })).toEqual({ ok: false, error: 'failed' })
+  })
+})

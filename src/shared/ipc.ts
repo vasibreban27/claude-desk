@@ -7,6 +7,7 @@ import type { PipelineLogEntry, PipelineLogRequest, PipelineLogResult } from './
 import type { McpDeleteResult, McpIdRequest, McpListResult, McpSaveRequest, McpSaveResult, McpTestResult } from './mcp'
 import type { PlanUsageRequest, PlanUsageResult } from './usage'
 import { ATTACHMENTS_MAX, attachmentRefSchema, attachmentSchema } from './attachments'
+import type { SpeechProgress, SpeechTranscribeRequest, SpeechTranscribeResult } from './speech'
 
 export * from './settings'
 export * from './review'
@@ -15,6 +16,7 @@ export * from './pipelineLog'
 export * from './mcp'
 export * from './usage'
 export * from './attachments'
+export * from './speech'
 
 /** Single definition of every IPC channel, payload and event. Shared by main, preload and renderer. */
 
@@ -57,6 +59,8 @@ export const IPC = {
   mcpSave: 'mcp:save',
   mcpDelete: 'mcp:delete',
   mcpTest: 'mcp:test',
+  speechTranscribe: 'speech:transcribe',
+  speechProgress: 'speech:progress',
   pipelineEvent: 'pipeline:event',
   pipelineLog: 'pipeline:log',
   pipelineLogEvent: 'pipeline:log-event'
@@ -506,4 +510,8 @@ export interface DeskApi {
   onPipelineLog(listener: (entry: PipelineLogEntry) => void): () => void
   /** Subscribe to activity events; returns an unsubscribe function. */
   onActivityEvent(listener: (event: ActivityEvent) => void): () => void
+  /** Local speech-to-text (Whisper on this PC); the model is downloaded on first use. */
+  speechTranscribe(req: SpeechTranscribeRequest): Promise<SpeechTranscribeResult>
+  /** Subscribe to model download / load progress; returns an unsubscribe function. */
+  onSpeechProgress(listener: (progress: SpeechProgress) => void): () => void
 }
