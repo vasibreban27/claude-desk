@@ -5,7 +5,8 @@
  * Windows from section 5 (system `node` plus npm's JS entry, never `cmd.exe`, never `process.execPath`).
  */
 import { execFile as nodeExecFile } from 'node:child_process'
-import { existsSync, readdirSync, realpathSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, realpathSync } from 'node:fs'
+import { mkdir, readdir, rename, rmdir, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
@@ -14,13 +15,15 @@ import type { CheckConfig } from '../../shared/settings'
 import { ownsCovers } from './planParser'
 
 export const WORK_SERVER_NAME = 'work'
-export const WORK_TOOL_NAMES = ['run_check', 'git_commit', 'report_blocked', 'run_command'] as const
+export const WORK_TOOL_NAMES = ['run_check', 'git_commit', 'report_blocked', 'run_command', 'move_files', 'delete_files'] as const
 export const WORK_ALLOWED_TOOLS: readonly string[] = WORK_TOOL_NAMES.map((n) => `mcp__${WORK_SERVER_NAME}__${n}`)
 
 export const GIT_COMMIT_TIMEOUT_MS = 30_000
 export const CHECK_OUTPUT_BUFFER = 1024 * 1024
 export const CHECK_REPLY_CAP = 4000
-export const MAX_COMMIT_PATHS = 50
+/** A move of N files commits 2N paths (old and new), so a refactor needs room. */
+export const MAX_COMMIT_PATHS = 300
+export const MAX_FILE_OPS = 150
 export const MAX_MESSAGE_LENGTH = 1000
 export const MAX_BLOCKED_REASON = 500
 const GIT_MAX_BUFFER = 1024 * 1024
@@ -248,6 +251,11 @@ export interface WorkerToolsDeps {
   env?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
   fileExists?: (p: string) => boolean
+  /**
+   * The worker guard's write check (worktree, links, .git, Owns, protected paths) for one relative path; returns the
+   * reason when the path may not be changed. Absent: move_files and delete_files refuse everything.
+   */
+  checkPath?: (tool: string, relPath: string) => string | null
 }
 
 export interface WorkerHandlers {
@@ -255,6 +263,8 @@ export interface WorkerHandlers {
   git_commit: (input: unknown) => Promise<TextResult>
   report_blocked: (input: unknown) => Promise<TextResult>
   run_command: (input: unknown) => Promise<TextResult>
+  move_files: (input: unknown) => Promise<TextResult>
+  delete_files: (input: unknown) => Promise<TextResult>
 }
 
 export interface WorkerTools {
@@ -271,6 +281,10 @@ const commitInput = z.object({
   message: z.string()
 })
 const blockedInput = z.object({ reason: z.string() })
+const moveInput = z.object({
+  moves: z.array(z.object({ from: z.string(), to: z.string() })).min(1).max(MAX_FILE_OPS)
+})
+const deleteInput = z.object({ paths: z.array(z.string()).min(1).max(MAX_FILE_OPS) })
 
 interface ExecErr {
   code?: unknown
@@ -549,6 +563,100 @@ ${out}` : ''}`)
     }
   }
 
+  /** A relative path as forward slashes without a leading "./". */
+  const norm = (p: string): string => p.replace(/\\/g, '/').replace(/^(\.\/)+/, '')
+
+  /** Why a path may not be changed by move/delete, or null. */
+  function pathProblem(tool: string, raw: string): string | null {
+    const bad = badRelativePath(raw)
+    if (bad !== null) return `path "${raw.slice(0, 80)}" rejected: ${bad}`
+    if (!deps.checkPath) return 'moving and deleting files is not available'
+    return deps.checkPath(tool, raw)
+  }
+
+  /** The existing regular file at `rel`, or a reason. */
+  function existingFile(rel: string): string | null {
+    try {
+      const st = lstatSync(path.join(worktreeReal(), ...rel.split('/')))
+      return st.isFile() ? null : `"${rel}" is not a regular file`
+    } catch {
+      return `"${rel}" does not exist`
+    }
+  }
+
+  /** Removes folders emptied by a move or delete, up to (not including) the worktree root. */
+  async function pruneEmpty(rel: string): Promise<void> {
+    const root = worktreeReal()
+    let dir = path.dirname(path.join(root, ...rel.split('/')))
+    while (dir !== root && dir.startsWith(root)) {
+      try {
+        if ((await readdir(dir)).length > 0) return
+        await rmdir(dir)
+      } catch {
+        return
+      }
+      dir = path.dirname(dir)
+    }
+  }
+
+  async function move_files(input: unknown): Promise<TextResult> {
+    try {
+      const parsed = moveInput.safeParse(input)
+      if (!parsed.success) return fail(`invalid input: moves (1..${MAX_FILE_OPS} items of { from, to }) are required`)
+      const moves = parsed.data.moves.map((m) => ({ from: norm(m.from), to: norm(m.to) }))
+      const root = worktreeReal()
+      // Check everything first: either every move is allowed, or nothing is moved.
+      const targets = new Set<string>()
+      for (const m of moves) {
+        const problem =
+          pathProblem('move_files', m.from) ??
+          pathProblem('move_files', m.to) ??
+          existingFile(m.from) ??
+          (m.from === m.to ? `"${m.from}" is moved onto itself` : null)
+        if (problem !== null) return fail(`nothing was moved: ${problem}`)
+        const key = sameCase(m.to)
+        if (targets.has(key)) return fail(`nothing was moved: two moves go to "${m.to}"`)
+        targets.add(key)
+        // A case-only rename on a case-insensitive disk finds its own source here; that is allowed.
+        if (existsSync(path.join(root, ...m.to.split('/'))) && sameCase(m.from) !== key) {
+          return fail(`nothing was moved: "${m.to}" already exists`)
+        }
+      }
+      const done: string[] = []
+      for (const m of moves) {
+        const to = path.join(root, ...m.to.split('/'))
+        await mkdir(path.dirname(to), { recursive: true })
+        await rename(path.join(root, ...m.from.split('/')), to)
+        done.push(`${m.from} -> ${m.to}`)
+      }
+      for (const m of moves) await pruneEmpty(m.from)
+      const list = done.slice(0, 40).join('\n') + (done.length > 40 ? `\n... ${done.length - 40} more` : '')
+      return ok(
+        `moved ${done.length} ${done.length === 1 ? 'file' : 'files'}. Update package and import lines with Edit, then commit both the old and the new paths with git_commit.\n${list}`
+      )
+    } catch (e) {
+      return fail(`move_files failed: ${e instanceof Error ? e.message.slice(0, 200) : 'unknown error'}`)
+    }
+  }
+
+  async function delete_files(input: unknown): Promise<TextResult> {
+    try {
+      const parsed = deleteInput.safeParse(input)
+      if (!parsed.success) return fail(`invalid input: paths (1..${MAX_FILE_OPS} strings) are required`)
+      const paths = parsed.data.paths.map(norm)
+      for (const p of paths) {
+        const problem = pathProblem('delete_files', p) ?? existingFile(p)
+        if (problem !== null) return fail(`nothing was deleted: ${problem}`)
+      }
+      const root = worktreeReal()
+      for (const p of paths) await unlink(path.join(root, ...p.split('/')))
+      for (const p of paths) await pruneEmpty(p)
+      return ok(`deleted ${paths.length} ${paths.length === 1 ? 'file' : 'files'}. Commit the deleted paths with git_commit.`)
+    } catch (e) {
+      return fail(`delete_files failed: ${e instanceof Error ? e.message.slice(0, 200) : 'unknown error'}`)
+    }
+  }
+
   /** Wraps a handler so each call adds one outcome line to the live log (never the full output). */
   const logged =
     (name: keyof WorkerHandlers, fn: (input: unknown) => Promise<TextResult>) =>
@@ -574,7 +682,9 @@ ${out}` : ''}`)
     run_check: logged('run_check', run_check),
     git_commit: logged('git_commit', git_commit),
     report_blocked: logged('report_blocked', report_blocked),
-    run_command: logged('run_command', run_command)
+    run_command: logged('run_command', run_command),
+    move_files: logged('move_files', move_files),
+    delete_files: logged('delete_files', delete_files)
   }
 
   return {
@@ -601,6 +711,18 @@ ${out}` : ''}`)
             `Run an allow-listed command in the worktree (no shell): ${ALLOWED_COMMANDS.join(', ')}. Example: command "npm", args ["install", "express"]. Commit the files you want with git_commit afterwards.`,
             { command: z.string(), args: z.array(z.string()).optional() },
             (a) => handlers.run_command(a)
+          ),
+          tool(
+            'move_files',
+            'Move or rename files inside your Owns (both the old and the new path must be in Owns). All moves are checked first; nothing moves if one is refused. Emptied folders are removed. Then fix package and import lines with Edit and commit the old and new paths with git_commit.',
+            { moves: z.array(z.object({ from: z.string(), to: z.string() })) },
+            (a) => handlers.move_files(a)
+          ),
+          tool(
+            'delete_files',
+            'Delete files inside your Owns (regular files only). Emptied folders are removed. Commit the deleted paths with git_commit.',
+            { paths: z.array(z.string()) },
+            (a) => handlers.delete_files(a)
           ),
           tool(
             'report_blocked',

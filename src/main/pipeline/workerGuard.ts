@@ -76,6 +76,15 @@ function checkWrite(name: string, rawInput: unknown, ctx: WorkerGuardContext): s
   }
   const filePath = args['file_path']
   if (typeof filePath !== 'string') return 'Malformed tool request.'
+  return checkWritablePath(name, filePath, ctx)
+}
+
+/**
+ * Whether a worker may create, change or remove `filePath`: inside the worktree, no link or junction on the way, not
+ * .git, a regular single-link file when it exists, in canonical form, covered by Owns and not protected. Returns the
+ * reason when not; null when it may. Shared by Write/Edit and the move_files / delete_files tools.
+ */
+export function checkWritablePath(name: string, filePath: string, ctx: WorkerGuardContext): string | null {
   const lexical = lexicalDenial(filePath)
   if (lexical !== null) return `Tool "${name}": ${lexical}.`
 

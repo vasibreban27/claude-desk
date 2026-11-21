@@ -45,5 +45,8 @@ export const BUILD_IN_APP_NOTE = [
   'with ToolSearch first. The app runs the workers, checks and reviewers on its own run branch and shows progress in its',
   'Pipeline tab. The base branch is never changed during a run, so being on main is fine: do not ask the user to switch',
   'branches. Report the tool result in one line and stop. To change the plan you wrote, use Edit or Write on its',
-  'docs/plans file.'
+  'docs/plans file.',
+  'Code changes always go through a plan and this pipeline: never ask a subagent to edit, move or delete files from here.',
+  'Workers can move, rename and delete files with their own tools, but only inside their Owns: for a task that moves or',
+  'renames files (a refactor), list both the old and the new paths or folders in Owns.'
 ].join(' ')
