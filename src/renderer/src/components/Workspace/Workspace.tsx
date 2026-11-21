@@ -156,7 +156,7 @@ export function Workspace({ projectId, projectNames }: WorkspaceProps) {
         ) : tab === 'toolkit' ? (
           <ToolkitPanel projectId={projectId} />
         ) : (
-          <SettingsPanel projectId={projectId} />
+          <SettingsPanel projectId={projectId} onOpenToolkit={() => select('toolkit', true)} />
         )}
       </div>
     </div>

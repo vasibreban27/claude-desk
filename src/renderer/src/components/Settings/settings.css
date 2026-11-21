@@ -126,3 +126,120 @@
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
 }
+
+/* Project settings grouped into collapsible cards, with a sticky save bar. */
+.settings__project {
+  gap: var(--space-3);
+}
+.settings__card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.settings__card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  list-style-position: inside;
+}
+.settings__card-title {
+  font-weight: 600;
+}
+.settings__card-summary {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+.settings__card[open] > .settings__card-head {
+  border-bottom: 1px solid var(--color-border);
+}
+.settings__card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+.settings__subheading {
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+.settings__warning {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-warning);
+  border-left-width: 4px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+}
+.settings__preset,
+.settings__inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.settings__inline select {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+.settings__effective {
+  margin: 0;
+  font-weight: 600;
+}
+.settings__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.settings__facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+}
+.settings__facts dt {
+  color: var(--color-text-muted);
+}
+.settings__facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.settings__bar {
+  position: sticky;
+  bottom: calc(-1 * var(--space-4));
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 calc(-1 * var(--space-2));
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+}
+.settings__bar--dirty {
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow-md);
+}
+.settings__bar--error {
+  border-color: var(--color-danger);
+}
+.settings__bar-text {
+  flex: 1;
+  min-width: 0;
+}
+.settings__bar .settings__save {
+  align-self: center;
+}
+.settings__bar--dirty .settings__save:not(:disabled) {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+}

@@ -30,3 +30,16 @@ describe('appSettings', () => {
     expect(await s.getDefaultModel()).toBe('sonnet')
   })
 })
+
+describe('appSettings toolkit folder', () => {
+  it('stores the toolkit folder next to the other values and clears it', async () => {
+    const s = openAppSettings(dir)
+    expect(await s.getToolkitPath()).toBeNull()
+    await s.setDefaultModel('opus')
+    await s.setToolkitPath(dir)
+    expect(await s.getToolkitPath()).toBe(path.resolve(dir))
+    expect(await s.getDefaultModel()).toBe('opus')
+    await s.setToolkitPath(null)
+    expect(await s.getToolkitPath()).toBeNull()
+  })
+})

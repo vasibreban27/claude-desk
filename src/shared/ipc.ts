@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { MODEL_CHOICES, projectSettingsSchema, type CheckConfig, type DeliveryChoice, type ModelChoice, type ProjectSettings } from './settings'
 
 import type { PipelineStage, TaskFindingsView } from './review'
-import type { ToolkitListResult } from './toolkit'
+import type { ToolkitListResult, ToolkitPickResult, ToolkitStatus, ToolkitUpdateResult } from './toolkit'
 import type { PipelineLogEntry, PipelineLogRequest, PipelineLogResult } from './pipelineLog'
 import type { McpDeleteResult, McpIdRequest, McpListResult, McpSaveRequest, McpSaveResult, McpTestResult } from './mcp'
 import type { PlanUsageRequest, PlanUsageResult } from './usage'
@@ -61,6 +61,9 @@ export const IPC = {
   projectsRootPick: 'projects:root-pick',
   projectsRemove: 'projects:remove',
   toolkitList: 'toolkit:list',
+  toolkitStatus: 'toolkit:status',
+  toolkitPick: 'toolkit:pick',
+  toolkitUpdate: 'toolkit:update',
   pipelinePlans: 'pipeline:plans',
   pipelineStart: 'pipeline:start',
   pipelineStatus: 'pipeline:status',
@@ -552,6 +555,12 @@ export interface DeskApi {
   appModelGet(): Promise<{ model: ModelChoice }>
   appModelSet(req: AppModelSetRequest): Promise<AppModelSetResult>
   toolkitList(): Promise<ToolkitListResult>
+  /** The toolkit folder, where it comes from, and its git state. */
+  toolkitStatus(): Promise<ToolkitStatus>
+  /** Opens a folder picker; a claude-toolkit clone or its plugin folder is accepted and saved. */
+  toolkitPick(): Promise<ToolkitPickResult>
+  /** Fast-forwards the toolkit from its remote (git pull --ff-only). */
+  toolkitUpdate(): Promise<ToolkitUpdateResult>
   createProject(req: ProjectsCreateRequest): Promise<ProjectsCreateResult>
   projectsRootGet(): Promise<ProjectsRootResult>
   projectsRootPick(): Promise<ProjectsRootResult>

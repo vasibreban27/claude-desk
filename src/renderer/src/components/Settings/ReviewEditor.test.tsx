@@ -8,7 +8,7 @@ import { validateReview } from './ReviewEditor'
 
 const P1 = '11111111-1111-4111-8111-111111111111'
 
-let api: { settingsGet: ReturnType<typeof vi.fn>; settingsSet: ReturnType<typeof vi.fn>; appInfo: ReturnType<typeof vi.fn> }
+let api: { settingsGet: ReturnType<typeof vi.fn>; settingsSet: ReturnType<typeof vi.fn>; appInfo: ReturnType<typeof vi.fn>; toolkitStatus?: ReturnType<typeof vi.fn> }
 
 beforeEach(() => {
   api = {
@@ -18,6 +18,7 @@ beforeEach(() => {
       settings,
       sessionReset: false
     })),
+    toolkitStatus: vi.fn(async () => ({ ...(await (api.appInfo as unknown as () => Promise<{ toolkit: object }>)()).toolkit, source: 'environment', git: null })),
     appInfo: vi.fn().mockResolvedValue({ toolkit: { status: 'unset', path: null, version: null } })
   }
   window.api = api as unknown as DeskApi

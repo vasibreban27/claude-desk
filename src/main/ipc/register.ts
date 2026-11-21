@@ -97,7 +97,11 @@ function buildPipeline(
         settings,
         ...(appSettings ? { loadDefaultModel: () => appSettings.getDefaultModel() } : {}),
         runner,
-        pluginPath: toolkit.path,
+        // Read at each run, so a toolkit folder chosen in Settings applies without a restart.
+        get pluginPath() {
+          const now = readToolkitInfo()
+          return now.status === 'valid' && now.path !== null ? now.path : (toolkit.path as string)
+        },
         log: (m) => console.error(m),
         onLog: (projectId, line) => {
           pipelineLog.add(projectId, line)
@@ -289,6 +293,9 @@ export function registerIpc(
   ipcMain.handle(IPC.appModelGet, (event) => make(event).appModelGet())
   ipcMain.handle(IPC.appModelSet, (event, payload: unknown) => make(event).appModelSet(payload))
   ipcMain.handle(IPC.toolkitList, (event) => make(event).toolkitList())
+  ipcMain.handle(IPC.toolkitStatus, (event) => make(event).toolkitStatus())
+  ipcMain.handle(IPC.toolkitPick, (event) => make(event).toolkitPick())
+  ipcMain.handle(IPC.toolkitUpdate, (event) => make(event).toolkitUpdate())
   ipcMain.handle(IPC.projectsCreate, (event, payload: unknown) => make(event).createProject(payload))
   ipcMain.handle(IPC.projectsRootGet, (event) => make(event).projectsRootGet())
   ipcMain.handle(IPC.projectsRootPick, (event) => make(event).projectsRootPick())
@@ -342,7 +349,7 @@ export function registerIpc(
   })
 
   return () => {
-    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.activityRuns, IPC.activityEvents, IPC.usageSummary, IPC.usagePlan, IPC.settingsGet, IPC.settingsSet, IPC.settingsSuggestions, IPC.appInfo, IPC.appModelGet, IPC.appModelSet, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick, IPC.projectsRemove,
+    for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.activityRuns, IPC.activityEvents, IPC.usageSummary, IPC.usagePlan, IPC.settingsGet, IPC.settingsSet, IPC.settingsSuggestions, IPC.appInfo, IPC.appModelGet, IPC.appModelSet, IPC.toolkitList, IPC.toolkitStatus, IPC.toolkitPick, IPC.toolkitUpdate, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick, IPC.projectsRemove,
       IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineResume, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.pipelineBranch, IPC.openUrl, IPC.mcpList, IPC.mcpSave, IPC.mcpDelete, IPC.mcpTest, IPC.speechTranscribe, IPC.agentsView, IPC.agentsSave, IPC.agentsRules, IPC.agentsPreview]) {
       ipcMain.removeHandler(channel)
     }

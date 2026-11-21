@@ -323,7 +323,7 @@ describe('settings and app info', () => {
   })
 
   it('projects:create validates the payload, uses the stored root and never takes a path', async () => {
-    const appSettings = { getProjectsRoot: async () => null, setProjectsRoot: async () => undefined, getDefaultModel: async () => 'auto' as const, setDefaultModel: async () => undefined }
+    const appSettings = { getProjectsRoot: async () => null, setProjectsRoot: async () => undefined, getDefaultModel: async () => 'auto' as const, setDefaultModel: async () => undefined, getToolkitPath: async () => null, setToolkitPath: async () => undefined }
     const h = setup({ appSettings }).h
     expect(await h.createProject({ name: '../x' })).toEqual({ ok: false, error: 'invalid-name' })
     expect(await h.createProject({ name: 'ok-name', path: '/etc' })).toEqual({ ok: false, error: 'invalid-name' })
@@ -341,7 +341,7 @@ describe('settings and app info', () => {
       const set = vi.fn(() => ({ ok: true as const, settings: {} as never }))
       const h = setup({
         store,
-        appSettings: { getProjectsRoot: async () => root, setProjectsRoot: async () => undefined, getDefaultModel: async () => 'auto' as const, setDefaultModel: async () => undefined },
+        appSettings: { getProjectsRoot: async () => root, setProjectsRoot: async () => undefined, getDefaultModel: async () => 'auto' as const, setDefaultModel: async () => undefined, getToolkitPath: async () => null, setToolkitPath: async () => undefined },
         gitRun: async () => undefined,
         settingsStore: { get: () => ({ settings: {} as never, notice: null }), set } as never
       }).h
@@ -378,7 +378,7 @@ describe('settings and app info', () => {
 
   it('projects:root-pick stores the picked folder', async () => {
     let root: string | null = null
-    const appSettings = { getProjectsRoot: async () => root, setProjectsRoot: async (r: string) => { root = r }, getDefaultModel: async () => 'auto' as const, setDefaultModel: async () => undefined }
+    const appSettings = { getProjectsRoot: async () => root, setProjectsRoot: async (r: string) => { root = r }, getDefaultModel: async () => 'auto' as const, setDefaultModel: async () => undefined, getToolkitPath: async () => null, setToolkitPath: async () => undefined }
     const h = setup({ appSettings, pickFolder: async () => '/projects' }).h
     expect(await h.projectsRootPick()).toEqual({ root: '/projects' })
     expect(await h.projectsRootGet()).toEqual({ root: '/projects' })
@@ -630,5 +630,56 @@ describe('speech:transcribe', () => {
       })
     }
     expect(await setup({ speech }).h.speechTranscribe({ samples: new Float32Array(16000), language: 'en' })).toEqual({ ok: false, error: 'failed' })
+  })
+})
+
+describe('toolkit:status, toolkit:pick and toolkit:update', () => {
+  const valid = { status: 'valid' as const, path: '/tk/flow', version: '1.0.0' }
+  const git = { branch: 'main', commit: 'abc1234', date: '2026-11-20', subject: 's', dirty: false }
+
+  it('reports the toolkit with its git state', async () => {
+    const { h } = setup({ readToolkitInfo: () => valid, toolkitGit: async () => git })
+    expect(await h.toolkitStatus()).toMatchObject({ ...valid, git })
+    const unset = setup({ toolkitGit: vi.fn() })
+    expect(await unset.h.toolkitStatus()).toMatchObject({ status: 'unset', git: null })
+    expect(unset.deps.toolkitGit).not.toHaveBeenCalled()
+  })
+
+  it('saves a picked toolkit folder, and refuses one without a plugin or when cancelled', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const path = await import('node:path')
+    const { setToolkitPathOverride, toolkitSource } = await import('../config')
+    const root = mkdtempSync(path.join(tmpdir(), 'tkpick-'))
+    try {
+      const appSettings = {
+        getProjectsRoot: async () => null,
+        setProjectsRoot: async () => undefined,
+        getDefaultModel: async () => 'auto' as const,
+        setDefaultModel: async () => undefined,
+        getToolkitPath: async () => null,
+        setToolkitPath: vi.fn(async () => undefined)
+      }
+      let picked: string | undefined = root
+      const { h } = setup({ appSettings, pickFolder: async () => picked, readToolkitInfo: () => valid, toolkitGit: async () => null })
+      expect(await h.toolkitPick()).toMatchObject({ ok: false, error: 'not-a-toolkit' })
+      mkdirSync(path.join(root, 'plugins', 'flow', '.claude-plugin'), { recursive: true })
+      writeFileSync(path.join(root, 'plugins', 'flow', '.claude-plugin', 'plugin.json'), '{"name":"flow"}')
+      expect(await h.toolkitPick()).toMatchObject({ ok: true, status: { source: 'settings' } })
+      expect(appSettings.setToolkitPath).toHaveBeenCalledWith(path.join(path.resolve(root), 'plugins', 'flow'))
+      expect(toolkitSource()).toBe('settings')
+      picked = undefined
+      expect(await h.toolkitPick()).toEqual({ ok: false, error: 'cancelled' })
+    } finally {
+      setToolkitPathOverride(null)
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('updates only a valid toolkit', async () => {
+    const toolkitUpdate = vi.fn(async () => ({ ok: true as const, updated: false, from: 'a', to: 'a' }))
+    expect(await setup({ readToolkitInfo: () => valid, toolkitUpdate }).h.toolkitUpdate()).toEqual({ ok: true, updated: false, from: 'a', to: 'a' })
+    expect(toolkitUpdate).toHaveBeenCalledWith('/tk/flow')
+    expect(await setup({ toolkitUpdate }).h.toolkitUpdate()).toEqual({ ok: false, error: 'not-set' })
   })
 })

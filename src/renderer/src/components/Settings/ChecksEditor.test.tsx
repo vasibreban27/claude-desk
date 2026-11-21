@@ -11,7 +11,7 @@ const INFO: AppInfo = { toolkit: { status: 'valid', path: '/tk/flow', version: '
 let api: {
   settingsGet: ReturnType<typeof vi.fn>
   settingsSet: ReturnType<typeof vi.fn>
-  appInfo: ReturnType<typeof vi.fn>
+  appInfo: ReturnType<typeof vi.fn>; toolkitStatus?: ReturnType<typeof vi.fn>
 }
 
 function load(settings: ProjectSettings): void {
@@ -26,6 +26,7 @@ beforeEach(() => {
       settings,
       sessionReset: false
     })),
+    toolkitStatus: vi.fn(async () => ({ ...(await (api.appInfo as unknown as () => Promise<{ toolkit: object }>)()).toolkit, source: 'environment', git: null })),
     appInfo: vi.fn().mockResolvedValue(INFO)
   }
   window.api = api as unknown as DeskApi
@@ -51,7 +52,7 @@ const clickSave = (): void => {
 }
 
 async function addValid(n: number, name: string): Promise<void> {
-  fireEvent.click(screen.getByRole('button', { name: 'Add check' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Add custom check' }))
   const g = group(n)
   fireEvent.change(within(g).getByLabelText('Name'), { target: { value: name } })
   fireEvent.change(within(g).getByLabelText('Executable'), { target: { value: 'node' } })
@@ -64,8 +65,8 @@ describe('ChecksEditor in the settings form', () => {
     load(noChecks as ProjectSettings)
     render(<SettingsPanel projectId={P1} />)
     await screen.findByLabelText('Model')
-    expect(screen.queryAllByRole('group')).toHaveLength(0)
-    expect(screen.getByRole('button', { name: 'Add check' })).toBeEnabled()
+    expect(within(screen.getByRole('region', { name: 'Checks' })).queryAllByRole('group')).toHaveLength(0)
+    expect(screen.getByRole('button', { name: 'Add custom check' })).toBeEnabled()
   })
 
   it('shows each saved check with its fields', async () => {
@@ -84,12 +85,12 @@ describe('ChecksEditor in the settings form', () => {
   it('adds rows up to 8, disables Add at 8, and removes a row', async () => {
     render(<SettingsPanel projectId={P1} />)
     await screen.findByLabelText('Model')
-    const add = screen.getByRole('button', { name: 'Add check' })
+    const add = screen.getByRole('button', { name: 'Add custom check' })
     for (let i = 0; i < 8; i++) fireEvent.click(add)
-    expect(screen.getAllByRole('group')).toHaveLength(8)
+    expect(within(screen.getByRole('region', { name: 'Checks' })).getAllByRole('group')).toHaveLength(8)
     expect(add).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Remove check 3' }))
-    expect(screen.getAllByRole('group')).toHaveLength(7)
+    expect(within(screen.getByRole('region', { name: 'Checks' })).getAllByRole('group')).toHaveLength(7)
     expect(add).toBeEnabled()
   })
 

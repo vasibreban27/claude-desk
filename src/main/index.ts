@@ -8,7 +8,7 @@ import { createTraceStore, type TraceStore } from './db/traceStore'
 import { createAgentProfileStore, type AgentProfileStore } from './db/agentProfileStore'
 import { openJsonProjectStore } from './projects/store'
 import { openAppSettings } from './projects/appSettings'
-import { loadEnvFile } from './config'
+import { loadEnvFile, setToolkitPathOverride } from './config'
 
 const DB_FILE_NAME = 'claude-desk.db'
 
@@ -134,7 +134,10 @@ app
     const store = await openJsonProjectStore(dataDir)
     const stores = bootstrapStores(dataDir)
     database = stores.db
-    disposeIpc = registerIpc(store, stores.runStore, stores.settingsStore, stores.pipelineStore, openAppSettings(dataDir), stores.traceStore, stores.agentStore)
+    const appSettings = openAppSettings(dataDir)
+    // A toolkit folder chosen in Settings wins over CLAUDE_TOOLKIT_PATH.
+    setToolkitPathOverride(await appSettings.getToolkitPath().catch(() => null))
+    disposeIpc = registerIpc(store, stores.runStore, stores.settingsStore, stores.pipelineStore, appSettings, stores.traceStore, stores.agentStore)
     createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

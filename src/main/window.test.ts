@@ -25,7 +25,8 @@ vi.mock('electron', () => ({
 vi.mock('./ipc/register', () => ({ registerIpc: vi.fn(() => () => undefined) }))
 vi.mock('./projects/store', () => ({ openJsonProjectStore: vi.fn(async () => ({})) }))
 
-const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+/** Startup reads the app settings before it creates the window: wait until the window exists. */
+const tick = (): Promise<void> => vi.waitFor(() => expect(created.length).toBeGreaterThan(0))
 
 describe('createWindow (F1 regression)', () => {
   beforeEach(() => {

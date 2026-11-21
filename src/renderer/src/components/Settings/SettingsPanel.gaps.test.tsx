@@ -13,7 +13,7 @@ const INFO: AppInfo = { toolkit: { status: 'valid', path: '/tk/flow', version: '
 let api: {
   settingsGet: ReturnType<typeof vi.fn>
   settingsSet: ReturnType<typeof vi.fn>
-  appInfo: ReturnType<typeof vi.fn>
+  appInfo: ReturnType<typeof vi.fn>; toolkitStatus?: ReturnType<typeof vi.fn>
 }
 
 beforeEach(() => {
@@ -24,6 +24,7 @@ beforeEach(() => {
       settings,
       sessionReset: false
     })),
+    toolkitStatus: vi.fn(async () => ({ ...(await (api.appInfo as unknown as () => Promise<{ toolkit: object }>)()).toolkit, source: 'environment', git: null })),
     appInfo: vi.fn().mockResolvedValue(INFO)
   }
   window.api = api as unknown as DeskApi

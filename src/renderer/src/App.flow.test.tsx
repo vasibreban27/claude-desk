@@ -35,6 +35,7 @@ beforeEach(() => {
     activityHistory: vi.fn().mockResolvedValue([]),
     usageSummary: vi.fn().mockReturnValue(new Promise(() => undefined)),
     appInfo: vi.fn().mockResolvedValue({ toolkit: { status: 'unset', path: null, version: null } }),
+    toolkitStatus: vi.fn().mockResolvedValue({ status: 'unset', path: null, version: null, source: 'unset', git: null }),
     onActivityEvent: vi.fn().mockReturnValue(() => undefined),
     pipelineStatus: vi.fn().mockReturnValue(new Promise(() => undefined)),
     pipelinePlans: vi.fn().mockResolvedValue({ ok: true, plans: [] }),
