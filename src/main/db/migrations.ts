@@ -92,6 +92,24 @@ export const MIGRATIONS: readonly string[] = [
   `,
   `
   ALTER TABLE runs ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat' CHECK (kind IN ('chat', 'plan', 'worker', 'reviewer'));
+  `,
+  `
+  CREATE TABLE trace_runs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('chat', 'plan', 'pipeline')),
+    title TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    status TEXT NOT NULL CHECK (status IN ('running', 'ok', 'error', 'cancelled'))
+  );
+  CREATE INDEX idx_trace_runs_project_started ON trace_runs (project_id, started_at);
+  CREATE TABLE trace_events (
+    run_id TEXT NOT NULL REFERENCES trace_runs (id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (run_id, seq)
+  );
   `
 ]
 

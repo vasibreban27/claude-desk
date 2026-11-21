@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { PipelineLogEntry, PipelineRunView, PipelineTaskView, PlanEntry } from '@shared/ipc'
 import type { UsePipeline } from '../../hooks/usePipeline'
-import { MergedBanner, RunFinished, type MergedInfo } from './RunFinished'
+import { DoneBanner, RunFinished, type DoneInfo } from './RunFinished'
 import './pipeline.css'
 
 export type PipelinePanelProps = Omit<UsePipeline, 'projectId' | 'reloadPlans' | 'resume'> & {
@@ -305,7 +305,7 @@ function RunView({
 export function PipelinePanel(p: PipelinePanelProps) {
   const busy = p.starting || (p.run?.active ?? false)
   const plansHeading = useRef<HTMLHeadingElement>(null)
-  const [merged, setMerged] = useState<(MergedInfo & { baseBranch: string; projectId: string }) | null>(null)
+  const [merged, setMerged] = useState<(DoneInfo & { projectId: string }) | null>(null)
   const shownMerged = merged !== null && merged.projectId === p.projectId ? merged : null
   const run = p.run && shownMerged?.runId === p.run.runId ? null : p.run
   const onDiscard = async (): Promise<void> => {
@@ -325,7 +325,7 @@ export function PipelinePanel(p: PipelinePanelProps) {
         </p>
       )}
       {p.runLoading && !p.run && <p className="pipeline__muted">Loading run…</p>}
-      {shownMerged && <MergedBanner info={shownMerged} baseBranch={shownMerged.baseBranch} onClose={() => setMerged(null)} />}
+      {shownMerged && <DoneBanner info={shownMerged} onClose={() => setMerged(null)} />}
       {run && (
         <RunView
           run={run}
@@ -335,7 +335,7 @@ export function PipelinePanel(p: PipelinePanelProps) {
               <RunFinished
                 projectId={p.projectId}
                 run={run}
-                onMerged={(info) => {
+                onDone={(info) => {
                   if (p.projectId) setMerged({ ...info, projectId: p.projectId })
                   p.reloadPlans?.()
                 }}

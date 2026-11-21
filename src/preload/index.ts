@@ -5,7 +5,8 @@ import {
   type ChatEvent,
   type DeskApi,
   type PipelineEvent,
-  type PipelineLogEntry
+  type PipelineLogEntry,
+  type TracePush
 } from '../shared/ipc'
 
 /** Minimal typed bridge: each method maps to exactly one contract channel. ipcRenderer is never exposed. */
@@ -16,6 +17,15 @@ const api: DeskApi = {
   chatHistory: (req) => ipcRenderer.invoke(IPC.chatHistory, req),
   chatSend: (req) => ipcRenderer.invoke(IPC.chatSend, req),
   activityHistory: (req) => ipcRenderer.invoke(IPC.activityHistory, req),
+  activityRuns: (req) => ipcRenderer.invoke(IPC.activityRuns, req),
+  activityEvents: (req) => ipcRenderer.invoke(IPC.activityEvents, req),
+  onActivityTrace: (listener) => {
+    const wrapped = (_e: IpcRendererEvent, push: TracePush): void => listener(push)
+    ipcRenderer.on(IPC.activityTrace, wrapped)
+    return () => {
+      ipcRenderer.removeListener(IPC.activityTrace, wrapped)
+    }
+  },
   usageSummary: (req) => ipcRenderer.invoke(IPC.usageSummary, req),
   usagePlan: (req) => ipcRenderer.invoke(IPC.usagePlan, req),
   settingsGet: (req) => ipcRenderer.invoke(IPC.settingsGet, req),
@@ -37,6 +47,7 @@ const api: DeskApi = {
   pipelineDiscard: (req) => ipcRenderer.invoke(IPC.pipelineDiscard, req),
   pipelineMerge: (req) => ipcRenderer.invoke(IPC.pipelineMerge, req),
   pipelinePr: (req) => ipcRenderer.invoke(IPC.pipelinePr, req),
+  pipelineBranch: (req) => ipcRenderer.invoke(IPC.pipelineBranch, req),
   openUrl: (req) => ipcRenderer.invoke(IPC.openUrl, req),
   mcpList: () => ipcRenderer.invoke(IPC.mcpList),
   mcpSave: (req) => ipcRenderer.invoke(IPC.mcpSave, req),

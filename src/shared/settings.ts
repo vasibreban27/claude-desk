@@ -21,7 +21,8 @@ export const PROTECTED_PATH_MAX_LENGTH = 200
 export const PROTECTED_PATHS_MAX_COUNT = 100
 
 export const MODEL_CHOICES = ['auto', 'haiku', 'sonnet', 'opus'] as const
-export const DELIVERY_CHOICES = ['manual', 'open-pr', 'merge-local'] as const
+/** `save-branch`: keep the result as a feature branch; `merge-local` needs `allowBaseMerge`. */
+export const DELIVERY_CHOICES = ['manual', 'save-branch', 'open-pr', 'merge-local'] as const
 export type DeliveryChoice = (typeof DELIVERY_CHOICES)[number]
 
 const protectedPathSchema = z
@@ -87,6 +88,8 @@ export const projectSettingsSchema = z.object({
   allowCommands: z.boolean().optional(),
   /** What the app does after a successful pipeline run. */
   delivery: z.enum(DELIVERY_CHOICES).optional(),
+  /** The app may fast-forward the base branch (e.g. main) to a run. Off by default: work lands on a feature branch. */
+  allowBaseMerge: z.boolean().optional(),
   reviewers: z
     .array(z.enum(REVIEWER_NAMES))
     .max(REVIEWERS_MAX_COUNT)
@@ -112,6 +115,7 @@ export function defaultSettings(): ProjectSettings {
     autoFixRounds: AUTO_FIX_ROUNDS_RANGE.default,
     allowCommands: false,
     delivery: 'manual',
+    allowBaseMerge: false,
     reviewers: [...DEFAULT_REVIEWERS]
   }
 }
@@ -163,6 +167,8 @@ export function parseSettingsOrDefaults(raw: string | undefined): SettingsParseR
       autoFixRounds: parsed.data.autoFixRounds ?? AUTO_FIX_ROUNDS_RANGE.default,
       allowCommands: parsed.data.allowCommands ?? false,
       delivery: parsed.data.delivery ?? 'manual',
+      // Older settings that chose automatic local merges keep that permission.
+      allowBaseMerge: parsed.data.allowBaseMerge ?? parsed.data.delivery === 'merge-local',
       reviewers: parsed.data.reviewers ?? [...DEFAULT_REVIEWERS]
     },
     case: 'ok'

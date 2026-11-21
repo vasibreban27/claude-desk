@@ -267,7 +267,7 @@ describe('pipeline service', () => {
     it('merges locally after success and does not deliver a failed run', async () => {
       const mergeRun = vi.fn(async () => ({ ok: true as const, head: 'abc123', planCommitted: true }))
       service = build({
-        settings: { get: () => ({ settings: { ...defaultSettings(), delivery: 'merge-local' }, notice: null }) },
+        settings: { get: () => ({ settings: { ...defaultSettings(), delivery: 'merge-local', allowBaseMerge: true }, notice: null }) },
         mergeRun
       })
       const failed = started('r1')
@@ -283,6 +283,86 @@ describe('pipeline service', () => {
       done.finish()
       await vi.waitFor(() => expect(mergeRun).toHaveBeenCalledTimes(1))
       await vi.waitFor(() => expect(store.getRun('r2').ok).toBe(false))
+    })
+  })
+
+  describe('saving a run as a branch', () => {
+    const saveBranch = vi.fn(async (a: { branch: string }) => ({ ok: true as const, branch: a.branch, head: 'abc1234', created: true }))
+    beforeEach(() => {
+      saveBranch.mockClear()
+    })
+
+    it('saves a finished run as the named branch and removes the run', async () => {
+      service = build({ saveBranch })
+      seedRun('r1')
+      store.setRunStatus('r1', 'done', 1)
+      expect(await service.saveBranch(PID, 'r1', 'feature/api-contracts')).toEqual({
+        ok: true,
+        branch: 'feature/api-contracts',
+        head: 'abc1234',
+        created: true,
+        cleanedUp: true
+      })
+      expect(saveBranch).toHaveBeenCalledWith({ projectPath: project, runBranch: 'run/r1', branch: 'feature/api-contracts' })
+      expect(removeRun).toHaveBeenCalled()
+      expect(store.getRun('r1').ok).toBe(false)
+    })
+
+    it('refuses bad, reserved and base names, other projects and unfinished runs', async () => {
+      service = build({ saveBranch, settings: { get: () => ({ settings: { ...defaultSettings(), allowBaseMerge: true }, notice: null }) } })
+      seedRun('r1')
+      expect(await service.saveBranch(PID, 'r1', 'feature/x')).toEqual({ ok: false, error: 'not-finished' })
+      store.setRunStatus('r1', 'done', 1)
+      expect(await service.saveBranch(PID, 'r1', 'a..b')).toMatchObject({ ok: false, error: 'invalid-branch' })
+      expect(await service.saveBranch(PID, 'r1', 'task/r1-t1')).toMatchObject({ ok: false, error: 'reserved-branch' })
+      expect(await service.saveBranch(PID, 'r1', 'main')).toMatchObject({ ok: false, error: 'base-protected', message: expect.stringContaining('Merge into main') })
+      expect(await service.saveBranch('22222222-2222-4222-8222-222222222222', 'r1', 'feature/x')).toEqual({ ok: false, error: 'not-found' })
+      expect(saveBranch).not.toHaveBeenCalled()
+    })
+
+    it('keeps the run when git refuses', async () => {
+      const refusing = vi.fn(async () => ({ ok: false as const, error: 'not-fast-forward' as const, message: 'has commits' }))
+      service = build({ saveBranch: refusing })
+      seedRun('r1')
+      store.setRunStatus('r1', 'done', 1)
+      expect(await service.saveBranch(PID, 'r1', 'feature/x')).toEqual({ ok: false, error: 'not-fast-forward', message: 'has commits' })
+      expect(removeRun).not.toHaveBeenCalled()
+      expect(store.getRun('r1').ok).toBe(true)
+    })
+
+    it('refuses to merge into the base branch unless the project allows it, and says so in status', async () => {
+      const mergeRun = vi.fn(async () => ({ ok: true as const, head: 'abc', planCommitted: false }))
+      const allow = { value: false }
+      service = build({ mergeRun, settings: { get: () => ({ settings: { ...defaultSettings(), allowBaseMerge: allow.value }, notice: null }) } })
+      seedRun('r1')
+      store.setRunStatus('r1', 'done', 1)
+      expect(await service.merge(PID, 'r1')).toMatchObject({ ok: false, error: 'base-protected' })
+      expect(mergeRun).not.toHaveBeenCalled()
+      const st = await service.status(PID)
+      expect(st.ok && st.run?.allowBaseMerge).toBe(false)
+      allow.value = true
+      expect(await service.merge(PID, 'r1')).toMatchObject({ ok: true })
+    })
+
+    it('saves automatically as feature/<plan>, falling back to a run-specific name when that branch has other work', async () => {
+      writeFileSync(path.join(plans, 'a.md'), FLOW)
+      const auto = vi.fn(async (a: { branch: string }) =>
+        a.branch === 'feature/a'
+          ? { ok: false as const, error: 'not-fast-forward' as const, message: 'has commits' }
+          : { ok: true as const, branch: a.branch, head: 'abc1234', created: true }
+      )
+      const onDelivery = vi.fn()
+      service = build({ saveBranch: auto, onDelivery, settings: { get: () => ({ settings: { ...defaultSettings(), delivery: 'save-branch' }, notice: null }) } })
+      const s = started('run12345xyz')
+      startRun.mockImplementationOnce(async () => {
+        seedRun('run12345xyz')
+        return s.result
+      })
+      await service.start(PID, 'a.md')
+      store.setRunStatus('run12345xyz', 'done', 1)
+      s.finish()
+      await vi.waitFor(() => expect(onDelivery).toHaveBeenCalledWith(PID, 'run12345xyz', expect.stringContaining('saved as branch feature/a-run12345'), 'ok'))
+      expect(auto.mock.calls.map((c) => c[0].branch)).toEqual(['feature/a', 'feature/a-run12345'])
     })
   })
 

@@ -69,10 +69,29 @@ describe('SettingsPanel', () => {
   it('saves the chosen automatic delivery policy', async () => {
     render(<SettingsPanel projectId={P1} />)
     await screen.findByLabelText('Model')
-    fireEvent.change(screen.getByLabelText('After a successful run'), { target: { value: 'merge-local' } })
+    fireEvent.change(screen.getByLabelText('After a successful run'), { target: { value: 'save-branch' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(api.settingsSet).toHaveBeenCalledWith(expect.objectContaining({
-      settings: expect.objectContaining({ delivery: 'merge-local' })
+      settings: expect.objectContaining({ delivery: 'save-branch', allowBaseMerge: false })
+    })))
+  })
+
+  it('offers merging into the base branch only once it is allowed', async () => {
+    render(<SettingsPanel projectId={P1} />)
+    await screen.findByLabelText('Model')
+    const mergeOption = screen.getByRole('option', { name: 'Merge into the base branch' })
+    expect(mergeOption).toBeDisabled()
+    const allow = screen.getByRole('checkbox', { name: 'Allow merging runs into the base branch' })
+    expect(allow).not.toBeChecked()
+    fireEvent.click(allow)
+    expect(mergeOption).toBeEnabled()
+    fireEvent.change(screen.getByLabelText('After a successful run'), { target: { value: 'merge-local' } })
+    fireEvent.click(allow)
+    expect(screen.getByLabelText('After a successful run')).toHaveValue('manual')
+    fireEvent.click(allow)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(api.settingsSet).toHaveBeenCalledWith(expect.objectContaining({
+      settings: expect.objectContaining({ allowBaseMerge: true, delivery: 'manual' })
     })))
   })
 

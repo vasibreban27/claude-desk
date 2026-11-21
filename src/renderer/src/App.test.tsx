@@ -9,6 +9,7 @@ import {
   type ChatMessage,
   type DeskApi,
   type Project,
+  type TracePush,
   type UsageSummary
 } from '@shared/ipc'
 import { App } from './App'
@@ -25,6 +26,7 @@ const P2: Project = { ...P1, id: '22222222-2222-4222-8222-222222222222', path: '
 
 let emit: (e: ChatEvent) => void
 let emitActivity: (e: ActivityEvent) => void
+let emitTrace: (p: TracePush) => void
 const SUMMARY: UsageSummary = {
   days: 30,
   estimated: true,
@@ -56,6 +58,12 @@ beforeEach(() => {
       return () => undefined
     }),
     activityHistory: vi.fn().mockResolvedValue([] as ActivityEvent[]),
+    activityRuns: vi.fn().mockResolvedValue([]),
+    activityEvents: vi.fn().mockResolvedValue([]),
+    onActivityTrace: vi.fn().mockImplementation((l: (p: TracePush) => void) => {
+      emitTrace = l
+      return () => undefined
+    }),
     usageSummary: vi.fn().mockResolvedValue(SUMMARY),
     mcpList: vi.fn().mockResolvedValue({ ok: true, connections: [], secretsAvailable: true }),
     mcpSave: vi.fn(),
@@ -79,6 +87,7 @@ beforeEach(() => {
     pipelineDiscard: vi.fn(),
     pipelineMerge: vi.fn(),
     pipelinePr: vi.fn(),
+    pipelineBranch: vi.fn(),
     openUrl: vi.fn(),
     pipelineLog: vi.fn().mockResolvedValue([]),
     onPipelineLog: vi.fn().mockReturnValue(() => undefined),
@@ -280,21 +289,42 @@ describe('workspace', () => {
     expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true')
   })
 
-  it('shows a live activity event in the feed', async () => {
+  it('shows a live run and its tool call in the Activity tab', async () => {
     await selectAlpha()
-    await waitFor(() => expect(api.activityHistory).toHaveBeenCalledWith({ projectId: P1.id }))
+    await waitFor(() => expect(api.activityRuns).toHaveBeenCalledWith({ projectId: P1.id }))
     act(() =>
-      emitActivity({
-        projectId: P1.id,
-        runId: 'r1',
-        seq: 0,
-        at: '2026-01-01T10:00:00.000+00:00',
-        agent: 'main',
-        agentId: null,
-        type: 'run-started'
+      emitTrace({
+        type: 'run',
+        run: { runId: 'r1', projectId: P1.id, source: 'chat', title: 'fix the bug', startedAt: 1, endedAt: null, status: 'running', events: 0 }
       })
     )
-    expect(await screen.findByText('Run started')).toBeInTheDocument()
+    await waitFor(() => expect(api.activityEvents).toHaveBeenCalledWith({ projectId: P1.id, runId: 'r1' }))
+    act(() =>
+      emitTrace({
+        type: 'event',
+        event: {
+          projectId: P1.id,
+          runId: 'r1',
+          seq: 0,
+          at: '2026-01-01T10:00:00.000Z',
+          taskId: null,
+          role: 'chat',
+          session: 'chat',
+          agent: 'main',
+          parentId: null,
+          kind: 'tool',
+          toolUseId: 'tu1',
+          tool: 'Read',
+          summary: 'src/app.ts',
+          input: 'file_path: src/app.ts',
+          diff: null,
+          added: 0,
+          removed: 0
+        }
+      })
+    )
+    expect(await screen.findByText('src/app.ts')).toBeInTheDocument()
+    expect(screen.getByText('Live')).toBeInTheDocument()
   })
 
   const finishedEvent = (seq: number, runId = 'r1'): ActivityEvent => ({
@@ -312,7 +342,7 @@ describe('workspace', () => {
 
   it('refetches usage once per live run-finished, not on repeats or re-renders', async () => {
     await selectAlpha()
-    await screen.findByText(/No activity yet/)
+    await screen.findByText(/Nothing in the last 2 days/)
     await waitFor(() => expect(api.usageSummary).toHaveBeenCalled())
     const before = api.usageSummary.mock.calls.length
     act(() => emitActivity(finishedEvent(1)))
@@ -330,7 +360,7 @@ describe('workspace', () => {
   it('does not refetch usage for a finished run loaded from history', async () => {
     api.activityHistory.mockResolvedValue([finishedEvent(1)])
     await selectAlpha()
-    await screen.findByText('Run finished')
+    await waitFor(() => expect(api.activityHistory).toHaveBeenCalled())
     await waitFor(() => expect(api.usageSummary).toHaveBeenCalled())
     await new Promise((r) => setTimeout(r, 20))
     expect(api.usageSummary).toHaveBeenCalledTimes(1)
