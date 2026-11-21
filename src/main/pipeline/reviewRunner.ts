@@ -9,6 +9,7 @@ import { withAgent } from './prompts'
 import { reportUsage, type QueryFn, type QueryLike } from './workerRunner'
 import type { RunUsage } from '../chat/activity'
 import { REVIEW_ALLOWED_TOOLS, REVIEW_SERVER_NAME, createReviewTools } from './reviewTools'
+import { withClaudeExecutable } from '../sdk'
 
 /**
  * Runs one read-only reviewer session (docs/notes/phase-5a-spike.md sections 2 to 4): no `options.agent`,
@@ -175,7 +176,7 @@ const LIMIT_TEXT = /maximum number of turns/i
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 export function createReviewRunner(deps: ReviewRunnerDeps = {}): ReviewRunner {
-  const queryFn: QueryFn = deps.queryFn ?? ((p) => query(p))
+  const queryFn: QueryFn = deps.queryFn ?? ((p) => query(withClaudeExecutable(p)))
 
   return async (args) => {
     const timeCap = deps.timeCapMs ?? Math.min(effectiveLimits(args.settings).timeCapMs, REVIEW_TIME_CAP_MS)

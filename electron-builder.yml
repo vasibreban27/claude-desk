@@ -1,0 +1,53 @@
+# Packaging (npm run dist): a Windows installer in release/, plus release/win-unpacked/ to run without installing.
+appId: app.claude-desk
+productName: claude-desk
+copyright: Copyright © 2026 Sergiu Breban
+
+directories:
+  output: release
+  buildResources: build
+
+# electron-vite's output and the production dependencies (devDependencies are never packaged).
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+  # onnxruntime-node ships every platform; keep only the one being built.
+  - '!node_modules/onnxruntime-node/bin/napi-v*/darwin/**'
+  - '!node_modules/onnxruntime-node/bin/napi-v*/linux/**'
+  - '!node_modules/onnxruntime-node/bin/napi-v*/win32/arm64/**'
+  # better-sqlite3's C sources (the prebuilt binary is what runs).
+  - '!node_modules/better-sqlite3/deps/**'
+  - '!node_modules/better-sqlite3/src/**'
+  - '!node_modules/onnxruntime-web/**'
+
+# The app's UI is English: keep only that Chromium locale.
+electronLanguages: [en-US]
+
+asar: true
+# Programs and native modules cannot run from inside app.asar: keep them next to it.
+# src/main/sdk.ts points the SDK at the unpacked Claude Code binary.
+asarUnpack:
+  - node_modules/@anthropic-ai/claude-agent-sdk-*/**
+  - node_modules/better-sqlite3/**
+  - node_modules/onnxruntime-node/**
+  - node_modules/sharp/**
+  - node_modules/@img/**
+
+# better-sqlite3 ships prebuilt binaries for Electron (docs/notes/sqlite-spike.md): no native rebuild.
+npmRebuild: false
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: claude-desk
+  artifactName: ${productName}-Setup-${version}.${ext}

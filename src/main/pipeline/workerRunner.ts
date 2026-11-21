@@ -8,6 +8,7 @@ import { WORK_ALLOWED_TOOLS, WORK_SERVER_NAME, createWorkerTools, type CheckResu
 import { buildFixPrompt, buildWorkerPrompt, buildWorkerSystemPrompt, type FixInput } from './prompts'
 import type { PlanTask } from './planParser'
 import { parseResultMessage, type RunUsage } from '../chat/activity'
+import { withClaudeExecutable } from '../sdk'
 
 /**
  * Runs one worker session (Agent SDK `query()`), following docs/notes/phase-4a-spike.md:
@@ -157,7 +158,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const LIMIT_TEXT = /maximum number of turns/i
 
 export function createWorkerRunner(deps: WorkerRunnerDeps = {}): WorkerRunner {
-  const queryFn: QueryFn = deps.queryFn ?? ((p) => query(p))
+  const queryFn: QueryFn = deps.queryFn ?? ((p) => query(withClaudeExecutable(p)))
 
   /** One session; `resumeId` resumes a previous worker session. */
   const runOnce = async (args: WorkerRunArgs, resumeId: string | null): Promise<WorkerOutcome> => {

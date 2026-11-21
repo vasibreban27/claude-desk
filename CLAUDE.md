@@ -37,6 +37,7 @@ Workers and `verify` run these, so keep them accurate.
 - Install: `npm install`
 - Dev (Electron with HMR): `npm run dev` (`--watch`: main and preload changes rebuild and restart Electron; the renderer hot-reloads)
 - Build: `npm run build` (electron-vite, output in `out/`)
+- Package (Windows): `npm run dist` (electron-builder: installer in `release/`, runnable app in `release/win-unpacked/`; config in `electron-builder.yml`, icon from `build/icon.svg` via `npm run icon`). Native modules and the SDK binary are kept out of app.asar (`asarUnpack`); `src/main/sdk.ts` points the SDK at the unpacked `claude.exe`.
 - Typecheck: `npm run typecheck` (`tsc --noEmit` for `tsconfig.node.json` and `tsconfig.web.json`)
 - Lint: `npm run lint`
 - Test: `npm test` (Vitest, fast suite ~30 s: excludes real-git, flow and live tests listed in `vitest.slow.ts`). `npm run test:slow` runs only those; `npm run test:changed` runs tests related to changes vs `main`; `npm run test:all` = fast + slow (run before a PR)
