@@ -4,6 +4,7 @@ export const SLOW_TESTS = [
   'tests/phase-4b-checks.test.ts',
   'tests/live/**',
   'src/main/pipeline/worktrees.test.ts',
+  'src/main/pipeline/workerTools.moveCommit.test.ts',
   'src/main/pipeline/mergeRun.test.ts',
   'src/main/chat/gitTools*.test.ts'
 ]

@@ -77,7 +77,9 @@ describe('buildWorkerOptions', () => {
       'mcp__work__run_check',
       'mcp__work__git_commit',
       'mcp__work__report_blocked',
-      'mcp__work__run_command'
+      'mcp__work__run_command',
+      'mcp__work__move_files',
+      'mcp__work__delete_files'
     ])
     expect(Object.keys(options.mcpServers ?? {})).toEqual(['work'])
     expect(options).not.toHaveProperty('agent')

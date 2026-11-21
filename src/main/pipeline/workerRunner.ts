@@ -3,7 +3,7 @@ import { logToolUse, type LogSink } from './pipelineLog'
 import { reportDenied, type TraceSink } from '../trace/recorder'
 import { isDenied } from '../chat/tools'
 import { effectiveLimits, type ProjectSettings } from '../../shared/settings'
-import { guardWorkerToolUse } from './workerGuard'
+import { checkWritablePath, guardWorkerToolUse } from './workerGuard'
 import { WORK_ALLOWED_TOOLS, WORK_SERVER_NAME, createWorkerTools, type CheckResult } from './workerTools'
 import { buildFixPrompt, buildWorkerPrompt, buildWorkerSystemPrompt, type FixInput } from './prompts'
 import type { PlanTask } from './planParser'
@@ -94,6 +94,9 @@ export function buildWorkerOptions(
     checks: args.settings.checks ?? [],
     allowCommands: args.settings.allowCommands === true,
     ...(args.onLog ? { onLog: args.onLog } : {}),
+    // move_files and delete_files pass every path through the same check as Write and Edit.
+    checkPath: (tool, relPath) =>
+      checkWritablePath(tool, relPath, { worktree: args.worktree, owns: args.task.owns, protectedPatterns: args.settings.protectedPaths }),
     onBlocked: (reason) => {
       blocked = reason
     }
