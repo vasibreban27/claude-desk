@@ -74,6 +74,8 @@ export interface PipelineServiceDeps {
   log?: (message: string) => void
   mergeRun?: (args: MergeRunArgs) => Promise<MergeRunResult>
   saveBranch?: (args: SaveBranchArgs) => Promise<SaveBranchResult>
+  /** Workers the project turned off in the Toolkit tab; a plan that uses one is refused. */
+  disabledWorkers?: (projectId: string) => string[]
   openPullRequest?: (args: OpenPrArgs) => Promise<OpenPrResult>
 }
 
@@ -327,6 +329,16 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
         }
         const parsed = parsePlan(text)
         if (!parsed.ok) return { ok: false, error: 'invalid-plan', message: firstError(parsed.errors) }
+        const off = new Set(deps.disabledWorkers?.(projectId) ?? [])
+        const blocked = parsed.plan.waves.flatMap((w) => w.tasks).filter((t) => off.has(t.worker))
+        if (blocked.length > 0) {
+          const t = blocked[0]!
+          return {
+            ok: false,
+            error: 'invalid-plan',
+            message: `task ${t.id} uses ${t.worker}, which is turned off for this project in the Toolkit tab`
+          }
+        }
 
         // No await between this check and the reservation: two starts cannot both pass.
         if (activeRuns.has(projectId) || delivering.has(projectId)) return { ok: false, error: 'busy' }

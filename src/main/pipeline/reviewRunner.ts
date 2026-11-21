@@ -5,6 +5,7 @@ import { FINDINGS_MAX_COUNT, type Finding, type ReviewerName } from '../../share
 import { effectiveLimits, type ProjectSettings } from '../../shared/settings'
 import { guardPreToolUse, isDenied, type GuardOutput } from '../chat/tools'
 import type { PlanTask } from './planParser'
+import { withAgent } from './prompts'
 import { reportUsage, type QueryFn, type QueryLike } from './workerRunner'
 import type { RunUsage } from '../chat/activity'
 import { REVIEW_ALLOWED_TOOLS, REVIEW_SERVER_NAME, createReviewTools } from './reviewTools'
@@ -46,6 +47,8 @@ export interface ReviewRunArgs {
   onUsage?: (usage: RunUsage) => void
   /** Detailed Activity: every SDK message and the guard's denials. */
   trace?: TraceSink
+  /** The resolved toolkit agent for this project: its instructions and model (default: sonnet). */
+  agent?: { text: string; model: 'haiku' | 'sonnet' | 'opus' | null }
 }
 
 export type ReviewRunner = (args: ReviewRunArgs) => Promise<ReviewOutcome>
@@ -68,8 +71,13 @@ const ROLE: Record<ReviewerName, string> = {
     'You are a security auditor. Look for injection, path traversal, unsafe process execution, secrets in code or logs, missing input validation at boundaries and unsafe use of untrusted data.'
 }
 
-/** Appended to the Claude Code system prompt of a reviewer session. */
-export function buildReviewerSystemPrompt(reviewer: ReviewerName): string {
+/** Appended to the Claude Code system prompt of a reviewer session; `agentText` is the resolved toolkit agent. */
+export function buildReviewerSystemPrompt(reviewer: ReviewerName, agentText?: string): string {
+  return withAgent(agentText, reviewerRules(reviewer))
+}
+
+/** The app rules of a reviewer session (also shown in the Toolkit preview). */
+export function reviewerRules(reviewer: ReviewerName): string {
   return [
     ROLE[reviewer],
     'You are read-only: you have Read, Grep and Glob, plus review_diff (the task diff) and report_findings. You have no shell and cannot change files.',
@@ -146,13 +154,13 @@ export function buildReviewerOptions(
   const options: Options = {
     cwd: args.worktree,
     settingSources: [],
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: buildReviewerSystemPrompt(args.reviewer) },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: buildReviewerSystemPrompt(args.reviewer, args.agent?.text) },
     plugins: [{ type: 'local', path: args.pluginPath }],
     tools: [...REVIEWER_BUILTIN_TOOLS],
     allowedTools: [...REVIEWER_BUILTIN_TOOLS, ...REVIEW_ALLOWED_TOOLS],
     permissionMode: 'default',
     maxTurns,
-    model: REVIEWER_MODEL,
+    model: args.agent?.model ?? REVIEWER_MODEL,
     mcpServers: { [REVIEW_SERVER_NAME]: tools.createServer() },
     hooks: { PreToolUse: [{ hooks: [guard], onFailure: 'block' }] },
     abortController

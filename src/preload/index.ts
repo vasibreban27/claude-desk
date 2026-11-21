@@ -55,6 +55,10 @@ const api: DeskApi = {
   mcpDelete: (req) => ipcRenderer.invoke(IPC.mcpDelete, req),
   mcpTest: (req) => ipcRenderer.invoke(IPC.mcpTest, req),
   speechTranscribe: (req) => ipcRenderer.invoke(IPC.speechTranscribe, req),
+  agentsView: (req) => ipcRenderer.invoke(IPC.agentsView, req),
+  agentsSave: (req) => ipcRenderer.invoke(IPC.agentsSave, req),
+  agentsRules: (req) => ipcRenderer.invoke(IPC.agentsRules, req),
+  agentsPreview: (req) => ipcRenderer.invoke(IPC.agentsPreview, req),
   onSpeechProgress: (listener) => {
     const wrapped = (_e: IpcRendererEvent, progress: SpeechProgress): void => listener(progress)
     ipcRenderer.on(IPC.speechProgress, wrapped)

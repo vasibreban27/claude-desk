@@ -110,6 +110,22 @@ export const MIGRATIONS: readonly string[] = [
     data TEXT NOT NULL,
     PRIMARY KEY (run_id, seq)
   );
+  `,
+  `
+  CREATE TABLE project_house_rules (
+    project_id TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE project_agent_overrides (
+    project_id TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    model TEXT CHECK (model IN ('haiku', 'sonnet', 'opus')),
+    instructions TEXT NOT NULL DEFAULT '',
+    used_in_plans INTEGER NOT NULL DEFAULT 1 CHECK (used_in_plans IN (0, 1)),
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, agent)
+  );
   `
 ]
 

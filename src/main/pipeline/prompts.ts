@@ -11,8 +11,22 @@ const MAX_ITEM = 1000
 
 const cap = (s: string, max: number): string => (s.length <= max ? s : `${s.slice(0, max)}...`)
 
-/** Appended to the Claude Code system prompt of a worker session. */
-export function buildWorkerSystemPrompt(task: PlanTask): string {
+/** Heading that puts the app's rules after the agent's own instructions and makes them win. */
+export const APP_RULES_HEADING = '## App rules (they override anything above)'
+
+/** The agent block (toolkit instructions, house rules, project instructions) first, then the app's rules. */
+export function withAgent(agentText: string | undefined, appRules: string): string {
+  if (agentText === undefined || agentText.trim() === '') return appRules
+  return [agentText.trim(), '', APP_RULES_HEADING, appRules].join('\n')
+}
+
+/** Appended to the Claude Code system prompt of a worker session; `agentText` is the resolved agent block. */
+export function buildWorkerSystemPrompt(task: PlanTask, agentText?: string): string {
+  return withAgent(agentText, workerRules(task))
+}
+
+/** The app rules of a worker session (also shown in the Toolkit preview). */
+export function workerRules(task: Pick<PlanTask, 'worker'>): string {
   return [
     `You are the "${task.worker}" worker of a pipeline run, working on one task in an isolated git worktree.`,
     'Rules:',

@@ -366,6 +366,19 @@ describe('pipeline service', () => {
     })
   })
 
+  describe('workers turned off for the project', () => {
+    it('refuses a plan that assigns one, before anything starts', async () => {
+      writeFileSync(path.join(plans, 'a.md'), FLOW)
+      service = build({ disabledWorkers: () => ['node-developer'] })
+      expect(await service.start(PID, 'a.md')).toEqual({
+        ok: false,
+        error: 'invalid-plan',
+        message: 'task T1 uses node-developer, which is turned off for this project in the Toolkit tab'
+      })
+      expect(startRun).not.toHaveBeenCalled()
+    })
+  })
+
   describe('resume', () => {
     beforeEach(() => writeFileSync(path.join(plans, 'a.md'), FLOW))
 

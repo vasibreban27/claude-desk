@@ -53,6 +53,8 @@ export interface WorkerRunArgs {
   onUsage?: (usage: RunUsage) => void
   /** Detailed Activity: every SDK message and the guard's denials. */
   trace?: TraceSink
+  /** The resolved toolkit agent for this project: its instructions and agent-level model. */
+  agent?: { text: string; model: 'haiku' | 'sonnet' | 'opus' | null }
 }
 
 export type WorkerRunner = (args: WorkerRunArgs) => Promise<WorkerOutcome>
@@ -110,7 +112,7 @@ export function buildWorkerOptions(
     cwd: args.worktree,
     // Never load project/user settings: a worktree's .claude/settings.json is untrusted (see chat runner).
     settingSources: [],
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: buildWorkerSystemPrompt(args.task) },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: buildWorkerSystemPrompt(args.task, args.agent?.text) },
     plugins: [{ type: 'local', path: args.pluginPath }],
     tools: [...WORKER_BUILTIN_TOOLS],
     allowedTools: [...WORKER_BUILTIN_TOOLS, ...WORK_ALLOWED_TOOLS],
@@ -139,10 +141,11 @@ export function buildWorkerOptions(
 
 const MODELS: readonly string[] = ['haiku', 'sonnet', 'opus']
 
-/** The task Model wins over the project model; `auto` (or an unknown value) means the SDK default. */
+/** The task Model wins, then the agent's model for this project, then the project model; `auto` means the SDK default. */
 function modelOption(args: WorkerRunArgs): { model?: string } {
   const taskModel: unknown = args.task.model
   if (typeof taskModel === 'string' && MODELS.includes(taskModel)) return { model: taskModel }
+  if (args.agent?.model) return { model: args.agent.model }
   const project = args.settings.model
   return project !== 'auto' ? { model: project } : {}
 }

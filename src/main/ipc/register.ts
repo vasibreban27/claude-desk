@@ -23,6 +23,8 @@ import { readToolkitInfo } from '../config'
 import type { ProjectStore } from '../projects/store'
 import { createHandlers } from './handlers'
 import { createTranscriber } from '../speech/transcriber'
+import { createAgentResolver, disabledWorkers, planNote, type AgentResolver } from '../toolkit/agents'
+import type { AgentProfileStore } from '../db/agentProfileStore'
 import { createTraceHub, type TraceHub } from '../trace/hub'
 import type { TraceStore } from '../db/traceStore'
 import type { McpStore } from '../mcp/store'
@@ -73,7 +75,8 @@ function buildPipeline(
   pipelineLog: PipelineLog,
   runStore?: RunStore,
   appSettings?: AppSettings,
-  trace?: TraceHub
+  trace?: TraceHub,
+  agents?: AgentResolver
 ): PipelineService {
   // 4a crash recovery: runs left `running` by a killed app are failed at registration, not on first start.
   try {
@@ -102,6 +105,8 @@ function buildPipeline(
           if (line.role === 'pipeline') trace?.note({ projectId, runId: line.runId, taskId: line.taskId, text: line.text, ...(line.tone ? { tone: line.tone } : {}) })
         },
         ...(trace ? { traceSession: trace.session } : {}),
+        // Workers and reviewers get their toolkit agent plus the project's house rules and instructions.
+        ...(agents ? { resolveAgent: (projectId: string, name: string) => agents.resolve(projectId, name) } : {}),
         ...(runStore ? { recordUsage: pipelineUsageRecorder(runStore) } : {})
       })
     }
@@ -129,6 +134,7 @@ function buildPipeline(
       broadcastPipelineEvent({ projectId, runId })
     },
     getToolkit: readToolkitInfo,
+    ...(agents ? { disabledWorkers: (projectId: string) => disabledWorkers(agents.profile(projectId)) } : {}),
     log: (m) => console.error(m)
   })
 }
@@ -143,7 +149,8 @@ export function registerIpc(
   settingsStore: SettingsStore = createSettingsStore(null),
   pipelineStore?: PipelineStore,
   appSettings?: AppSettings,
-  traceStore?: TraceStore
+  traceStore?: TraceStore,
+  agentStore?: AgentProfileStore
 ): () => void {
   const targets = new Map<string, EventTarget>()
 
@@ -170,8 +177,18 @@ export function registerIpc(
     log: (m) => console.error(m)
   })
 
+  // Per-project agents: the toolkit's agents plus what each project adds (Toolkit tab).
+  const agents = createAgentResolver({
+    toolkitPath: () => {
+      const info = readToolkitInfo()
+      return info.status === 'valid' ? info.path : null
+    },
+    ...(agentStore ? { store: agentStore } : {})
+  })
+
   const chat = new ChatService({
     trace,
+    planNote: (projectId: string) => planNote(agents.profile(projectId)),
     // Chat and Plan turns get the user's enabled MCP connections (only the tools they allowed).
     loadMcp: () => loadChatMcp(mcpStore),
     resolveProjectPath: (id) => knownPaths.get(id),
@@ -227,7 +244,7 @@ export function registerIpc(
   })
 
   const pipelineLog = createPipelineLog(broadcastPipelineLog)
-  const pipeline = pipelineStore ? buildPipeline(pipelineStore, settingsStore, store, pipelineLog, runStore, appSettings, trace) : undefined
+  const pipeline = pipelineStore ? buildPipeline(pipelineStore, settingsStore, store, pipelineLog, runStore, appSettings, trace, agents) : undefined
 
   const make = (event: IpcMainInvokeEvent) =>
     createHandlers({ store, readGitStatus, pickFolder: () => pickFolder(event), chat,
@@ -243,6 +260,7 @@ export function registerIpc(
       ...(runStore ? { runStore } : {}),
       mcp,
       planUsage,
+      agents: { resolver: agents, ...(agentStore ? { store: agentStore } : {}) },
       speech,
       trace
     })
@@ -276,7 +294,15 @@ export function registerIpc(
   ipcMain.handle(IPC.projectsRootPick, (event) => make(event).projectsRootPick())
   ipcMain.handle(IPC.projectsRemove, async (event, payload: unknown) => {
     const result = await make(event).removeProject(payload)
-    if (result.ok && typeof payload === 'object' && payload !== null) knownPaths.delete(String((payload as { id?: unknown }).id))
+    if (result.ok && typeof payload === 'object' && payload !== null) {
+      const id = String((payload as { id?: unknown }).id)
+      knownPaths.delete(id)
+      try {
+        agentStore?.removeProject(id)
+      } catch {
+        console.error('removing the project agent settings failed')
+      }
+    }
     return result
   })
   ipcMain.handle(IPC.pipelinePlans, (event, payload: unknown) => make(event).pipelinePlans(payload))
@@ -295,6 +321,10 @@ export function registerIpc(
   ipcMain.handle(IPC.mcpDelete, (event, payload: unknown) => make(event).mcpDelete(payload))
   ipcMain.handle(IPC.mcpTest, (event, payload: unknown) => make(event).mcpTest(payload))
   ipcMain.handle(IPC.speechTranscribe, (event, payload: unknown) => make(event).speechTranscribe(payload))
+  ipcMain.handle(IPC.agentsView, (event, payload: unknown) => make(event).agentsView(payload))
+  ipcMain.handle(IPC.agentsSave, (event, payload: unknown) => make(event).agentsSave(payload))
+  ipcMain.handle(IPC.agentsRules, (event, payload: unknown) => make(event).agentsRules(payload))
+  ipcMain.handle(IPC.agentsPreview, (event, payload: unknown) => make(event).agentsPreview(payload))
   ipcMain.handle(IPC.chatSend, async (event, payload: unknown) => {
     try {
       await refreshPaths()
@@ -313,7 +343,7 @@ export function registerIpc(
 
   return () => {
     for (const channel of [IPC.projectsList, IPC.projectsPickAndAdd, IPC.projectsRefresh, IPC.chatHistory, IPC.chatSend, IPC.activityHistory, IPC.activityRuns, IPC.activityEvents, IPC.usageSummary, IPC.usagePlan, IPC.settingsGet, IPC.settingsSet, IPC.settingsSuggestions, IPC.appInfo, IPC.appModelGet, IPC.appModelSet, IPC.toolkitList, IPC.projectsCreate, IPC.projectsRootGet, IPC.projectsRootPick, IPC.projectsRemove,
-      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineResume, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.pipelineBranch, IPC.openUrl, IPC.mcpList, IPC.mcpSave, IPC.mcpDelete, IPC.mcpTest, IPC.speechTranscribe]) {
+      IPC.pipelinePlans, IPC.pipelineStart, IPC.pipelineStatus, IPC.pipelineCancel, IPC.pipelineResume, IPC.pipelineDiscard, IPC.pipelineMerge, IPC.pipelineLog, IPC.pipelinePr, IPC.pipelineBranch, IPC.openUrl, IPC.mcpList, IPC.mcpSave, IPC.mcpDelete, IPC.mcpTest, IPC.speechTranscribe, IPC.agentsView, IPC.agentsSave, IPC.agentsRules, IPC.agentsPreview]) {
       ipcMain.removeHandler(channel)
     }
     targets.clear()

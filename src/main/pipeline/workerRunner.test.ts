@@ -318,3 +318,27 @@ describe('worker detailed activity', () => {
     expect(trace.denied).toHaveBeenCalledWith('tu9', expect.any(String))
   })
 })
+
+describe('worker toolkit agent', () => {
+  it('puts the agent instructions before the app rules, which win', () => {
+    const { options } = buildWorkerOptions({ ...baseArgs(), agent: { text: '## Agent instructions\nUse records.', model: null } }, new AbortController())
+    const append = (options.systemPrompt as { append: string }).append
+    expect(append.startsWith('## Agent instructions\nUse records.\n\n## App rules (they override anything above)\nYou are the "node-developer" worker')).toBe(true)
+  })
+
+  it('keeps the old prompt without an agent', () => {
+    const { options } = buildWorkerOptions(baseArgs(), new AbortController())
+    expect((options.systemPrompt as { append: string }).append.startsWith('You are the "node-developer" worker')).toBe(true)
+  })
+
+  it('picks the model: task, then the agent, then the project', () => {
+    const build = (taskModel: unknown, agentModel: 'haiku' | 'opus' | null, project: ProjectSettings['model']) =>
+      buildWorkerOptions(
+        { ...baseArgs({ ...defaultSettings(), model: project }), task: { ...task, model: taskModel as 'haiku' }, agent: { text: '', model: agentModel } },
+        new AbortController()
+      ).options.model
+    expect(build('sonnet', 'opus', 'haiku')).toBe('sonnet')
+    expect(build(undefined, 'opus', 'haiku')).toBe('opus')
+    expect(build(undefined, null, 'haiku')).toBe('haiku')
+  })
+})
