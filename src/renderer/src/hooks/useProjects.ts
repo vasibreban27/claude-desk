@@ -9,9 +9,9 @@ export const ADD_ERROR_MESSAGES: Record<Exclude<PickAndAddError, 'cancelled'>, s
 
 export const BRIDGE_UNAVAILABLE = 'The desktop bridge is unavailable.'
 
-const RESTART_NEEDED = 'The app is running older background code than its window: restart claude-desk and try again.'
+const RESTART_NEEDED = 'The app is running older background code than its window: restart Odyssey and try again.'
 const REMOVE_ERRORS: Record<string, string> = {
-  'not-found': 'The project is no longer registered: restart claude-desk to refresh the list.',
+  'not-found': 'The project is no longer registered: restart Odyssey to refresh the list.',
   busy: 'A pipeline run is active: cancel it first.',
   unreadable: 'Could not remove the project: the project list could not be saved.',
   'trash-failed': 'Could not move the folder to the Recycle Bin.',

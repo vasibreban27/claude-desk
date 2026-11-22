@@ -1,6 +1,6 @@
 # Packaging (npm run dist): a Windows installer in release/, plus release/win-unpacked/ to run without installing.
 appId: app.claude-desk
-productName: claude-desk
+productName: Odyssey
 copyright: Copyright © 2026 Sergiu Breban
 
 directories:
@@ -49,5 +49,5 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: claude-desk
+  shortcutName: Odyssey
   artifactName: ${productName}-Setup-${version}.${ext}

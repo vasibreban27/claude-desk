@@ -42,7 +42,7 @@ describe('useProjects.remove', () => {
     await act(async () => {
       err = await r.result.current.remove(P.id, false)
     })
-    expect(err).toMatch(/restart claude-desk/)
+    expect(err).toMatch(/restart Odyssey/)
     expect(r.result.current.projects).toHaveLength(1)
   })
 
@@ -52,7 +52,7 @@ describe('useProjects.remove', () => {
     await act(async () => {
       err = await r.result.current.remove(P.id, false)
     })
-    expect(err).toMatch(/restart claude-desk/)
+    expect(err).toMatch(/restart Odyssey/)
   })
 
   it('maps error codes to readable text', async () => {

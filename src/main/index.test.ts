@@ -1,10 +1,21 @@
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('electron', () => ({
-  // isPackaged: true keeps the module-level loadDevEnv from reading this machine's project .env during tests.
-  app: { whenReady: () => new Promise(() => undefined), on: vi.fn(), quit: vi.fn(), isPackaged: true, getAppPath: () => '/app' },
-  BrowserWindow: class {}
-}))
+/** Start-up calls, kept in a plain list: the module runs them once at import, before mock histories are cleared. */
+const { appMock, appCalls } = vi.hoisted(() => {
+  const appCalls: unknown[][] = []
+  return { appCalls, appMock: {
+    whenReady: () => new Promise(() => undefined),
+    on: vi.fn(),
+    quit: vi.fn(),
+    // isPackaged: true keeps the module-level loadDevEnv from reading this machine's project .env during tests.
+    isPackaged: true,
+    getAppPath: () => '/app',
+    getPath: (name: string) => (name === 'appData' ? '/appdata' : '/userdata'),
+    setName: (...a: unknown[]) => void appCalls.push(['setName', ...a]),
+    setPath: (...a: unknown[]) => void appCalls.push(['setPath', ...a])
+  } }
+})
+vi.mock('electron', () => ({ app: appMock, BrowserWindow: class {} }))
 const { loadEnvFile } = vi.hoisted(() => ({ loadEnvFile: vi.fn() }))
 vi.mock('./config', () => ({ loadEnvFile }))
 vi.mock('./ipc/register', () => ({ registerIpc: vi.fn(() => () => undefined) }))
@@ -137,5 +148,14 @@ describe('openRunStore', () => {
     expect(JSON.stringify(spy.mock.calls)).not.toContain('someone')
     expect(spy.mock.calls[0]![1]).toBe('RangeError')
     spy.mockRestore()
+  })
+})
+
+describe('app name', () => {
+  it('shows Odyssey but keeps the original data folder', async () => {
+    const path = await import('node:path')
+    expect(appMock).toBeDefined()
+    expect(appCalls).toContainEqual(['setName', 'Odyssey'])
+    expect(appCalls).toContainEqual(['setPath', 'userData', path.join('/appdata', 'claude-desk')])
   })
 })

@@ -37,10 +37,10 @@ export function RemoveProjectDialog({ project, onRemove, onClose }: RemoveProjec
     >
       <h3 id="remove-project-title">Remove {project.name}?</h3>
       {project.missing ? (
-        <p>The folder no longer exists. The project is removed from claude-desk.</p>
+        <p>The folder no longer exists. The project is removed from Odyssey.</p>
       ) : (
         <>
-          <p>The project is removed from claude-desk. Its folder stays on disk unless you tick the box.</p>
+          <p>The project is removed from Odyssey. Its folder stays on disk unless you tick the box.</p>
           <label className="projects__confirm-check">
             <input type="checkbox" checked={deleteFolder} onChange={(e) => setDeleteFolder(e.target.checked)} disabled={working} />{' '}
             Also move the folder to the Recycle Bin
