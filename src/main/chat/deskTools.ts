@@ -15,7 +15,7 @@ export function createDeskServer(startPipeline: StartPipeline): ReturnType<typeo
     tools: [
       tool(
         'start_pipeline',
-        'Start the claude-desk pipeline for a plan in docs/plans (pass the file name, for example "greet-cli.md"). ' +
+        'Start the Odyssey pipeline for a plan in docs/plans (pass the file name, for example "greet-cli.md"). ' +
           'Use it when the user asks to build, run or start the plan. Workers build each task on its own branch, then checks ' +
           'and reviewers run; the user merges from the Pipeline tab.',
         { planFile: z.string().max(100) },
@@ -38,7 +38,7 @@ export function createDeskServer(startPipeline: StartPipeline): ReturnType<typeo
 }
 
 export const BUILD_IN_APP_NOTE = [
-  'Building in claude-desk: never run /flow:build, Bash or worker agents from this chat (they are blocked here), and never',
+  'Building in Odyssey: never run /flow:build, Bash or worker agents from this chat (they are blocked here), and never',
   'tell the user to run /flow:build. When you ask for approval of a plan, ask "Start the pipeline now?" instead.',
   'When the user approves the plan you just wrote or asks to build, run or start it (for example "yes", "ok", "approve",',
   '"go", "build it"), call the start_pipeline tool with the plan file name at once; if the tool is not loaded yet, load it',

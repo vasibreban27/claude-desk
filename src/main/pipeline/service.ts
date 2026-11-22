@@ -488,7 +488,7 @@ export function createPipelineService(deps: PipelineServiceDeps): PipelineServic
         const tasks = deps.store.listTasks(runId)
         const rows = tasks.ok ? tasks.value : []
         const body = [
-          `Built by the claude-desk pipeline from docs/plans/${planFile}.`,
+          `Built by the Odyssey pipeline from docs/plans/${planFile}.`,
           '',
           ...rows.map((t) => `- ${t.taskId}: ${t.title} (${t.status}${t.commitSha ? `, ${t.commitSha.slice(0, 7)}` : ''})`),
           '',

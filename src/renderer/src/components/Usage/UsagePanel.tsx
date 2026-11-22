@@ -297,7 +297,7 @@ export function UsagePanel({
       <section className="usage__card" aria-labelledby="usage-app-title">
         <div className="usage__card-head">
           <div>
-            <h3 id="usage-app-title">In claude-desk</h3>
+            <h3 id="usage-app-title">In Odyssey</h3>
             <p className="usage__hint">Work this app ran for you: chats, the planner and pipeline runs.</p>
           </div>
         </div>

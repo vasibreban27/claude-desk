@@ -103,7 +103,7 @@ describe('UsagePanel: plan card', () => {
 describe('UsagePanel: app usage', () => {
   it('shows plain totals, the API-price note and where the tokens went', () => {
     render(<UsagePanel {...props()} />)
-    const app = screen.getByRole('region', { name: 'In claude-desk' })
+    const app = screen.getByRole('region', { name: 'In Odyssey' })
     expect(within(app).getByText('8.6K')).toBeInTheDocument()
     expect(within(app).getByText('$0.01')).toBeInTheDocument()
     expect(within(app).getByText(/Not charged on a Pro\/Max plan/)).toBeInTheDocument()

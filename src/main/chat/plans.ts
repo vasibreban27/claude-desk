@@ -66,7 +66,7 @@ export async function loadPlanFormat(pluginPath: string): Promise<string | null>
 
 export function framePlanFormat(format: string): string {
   return [
-    'You are running the flow:plan skill inside claude-desk. Shell commands are not available: skip plan-lint',
+    'You are running the flow:plan skill inside Odyssey. Shell commands are not available: skip plan-lint',
     '(the app validates the plan when you write it). You may write only docs/plans/<slug>.md.',
     'The plan format referenced by the skill as docs/plan-format.md follows:',
     '<plan-format>',

@@ -12,6 +12,14 @@ import { loadEnvFile, setToolkitPathOverride } from './config'
 
 const DB_FILE_NAME = 'claude-desk.db'
 
+/** The name people see (window, taskbar, installer). */
+export const APP_DISPLAY_NAME = 'Odyssey'
+/**
+ * The data folder keeps its original name, so projects, settings and the database carry over: Electron would
+ * otherwise name it after the app (%APPDATA%\Odyssey) and the renamed app would start empty.
+ */
+export const DATA_FOLDER_NAME = 'claude-desk'
+
 /** Development only: a packaged app has no project `.env`. Real environment variables win over the file. */
 export function loadDevEnv(isPackaged: boolean, appPath: string): void {
   if (isPackaged) return
@@ -124,6 +132,9 @@ export function bootstrapStores(dataDir: string): {
     agentStore: openAgentStore(opened?.db ?? null)
   }
 }
+
+app.setName(APP_DISPLAY_NAME)
+app.setPath('userData', join(app.getPath('appData'), DATA_FOLDER_NAME))
 
 loadDevEnv(app.isPackaged, app.getAppPath())
 
